@@ -4,3 +4,6 @@
 [submodule "agentscope"]
 	path = agentscope
 	url = git@github.com:IPADS-SAI/agentscope.git
+[submodule "MobiAgent"]
+	path = MobiAgent
+	url = git@github.com:IPADS-SAI/MobiAgent.git
