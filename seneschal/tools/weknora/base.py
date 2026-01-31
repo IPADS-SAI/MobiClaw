@@ -105,6 +105,7 @@ def parse_sse_response(response: requests.Response) -> dict[str, Any]:
     """
     response.raise_for_status()
     answer_parts: list[str] = []
+    thinking_parts: list[str] = []
     references: list = []
     events: list[dict[str, Any]] = []
 
@@ -129,9 +130,12 @@ def parse_sse_response(response: requests.Response) -> dict[str, Any]:
             references.extend(payload.get("knowledge_references") or [])
         elif response_type == "answer":
             answer_parts.append(payload.get("content", ""))
+        elif response_type == "thinking":
+            thinking_parts.append(payload.get("content", ""))
 
     return {
         "answer": "".join(answer_parts).strip(),
+        "thinking": "".join(thinking_parts).strip(),
         "references": references,
         "events": events,
     }

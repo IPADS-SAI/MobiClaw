@@ -7,6 +7,9 @@ from typing import Any
 
 from .base import request_json, parse_json_response
 
+import logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 def create_knowledge_from_file(
     kb_id: str,
@@ -74,6 +77,8 @@ def create_knowledge_manual(
     title: str,
     content: str,
     metadata: dict[str, Any] | None = None,
+    status: str | None = None,
+    tag_id: str | None = None,
 ) -> dict[str, Any]:
     """创建手工 Markdown 知识。
 
@@ -89,6 +94,10 @@ def create_knowledge_manual(
     payload: dict[str, Any] = {"title": title, "content": content}
     if metadata is not None:
         payload["metadata"] = metadata
+    if status is not None:
+        payload["status"] = status
+    if tag_id is not None:
+        payload["tag_id"] = tag_id
     response = request_json(
         "POST",
         f"/knowledge-bases/{kb_id}/knowledge/manual",
@@ -232,18 +241,20 @@ def update_image_chunk(knowledge_id: str, chunk_id: str, payload: dict[str, Any]
     return parse_json_response(response)
 
 
-def update_knowledge_tags(knowledge_ids: list[str], tag_ids: list[str]) -> dict[str, Any]:
+def update_knowledge_tags(updates: dict[str, str | None]) -> dict[str, Any]:
     """批量更新知识标签。
 
     Args:
-        knowledge_ids: 知识 ID 列表。
-        tag_ids: 标签 ID 列表。
+        updates: {knowledge_id: tag_id} 映射，tag_id 可为 None/空表示清空标签。
 
     Returns:
         更新结果 JSON。
     """
-    payload = {"knowledge_ids": knowledge_ids, "tag_ids": tag_ids}
+    logger.debug("update_knowledge_tags: %s", updates)
+
+    payload = {"updates": updates}
     response = request_json("PUT", "/knowledge/tags", json_body=payload)
+    logger.debug("update_knowledge_tags response: %s", response)
     return parse_json_response(response)
 
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 from agentscope.message import Msg
 
 from .agents import create_steward_agent, create_user_agent
+from .dailytasks.runner import run_daily_tasks
 
 
 async def run_demo_conversation() -> None:
@@ -26,7 +27,7 @@ async def run_demo_conversation() -> None:
     print("-" * 70)
     print()
 
-    preset_message = "开始今日的数据整理和分析"
+    preset_message = "开始今日的数据整理和分析，给出最近活动的总结和待办事项。"
     print(f"[User]: {preset_message}")
     print()
 
@@ -100,9 +101,36 @@ async def run_interactive_mode() -> None:
 
 async def main() -> None:
     """主入口函数。"""
-    import sys
+    import argparse
 
-    if len(sys.argv) > 1 and sys.argv[1] == "--interactive":
+    parser = argparse.ArgumentParser(description="Seneschal workflow entrypoint")
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Run interactive chat mode",
+    )
+    parser.add_argument(
+        "--daily",
+        action="store_true",
+        help="Run daily collection workflow",
+    )
+    parser.add_argument(
+        "--daily-trigger",
+        default="daily",
+        help="Trigger name used to filter daily tasks",
+    )
+    args = parser.parse_args()
+
+    if args.daily:
+        print("=" * 70)
+        print("Seneschal Daily Loop")
+        print("=" * 70)
+        result = await run_daily_tasks(args.daily_trigger)
+        print("-" * 70)
+        print(f"Run ID: {result['run_id']}")
+        print(f"Tasks executed: {result['task_count']}")
+        print("-" * 70)
+    elif args.interactive:
         await run_interactive_mode()
     else:
         await run_demo_conversation()

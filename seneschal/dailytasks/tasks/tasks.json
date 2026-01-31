@@ -1,0 +1,35 @@
+{
+  "version": "v1",
+  "agent": "MobiAgent",
+  "description": "用于采集用户每日手机活动信息的任务注册表",
+  "tasks": [
+    {
+      "task_id": "taobao_historical_orders_check",
+      "category": "ecommerce",
+      "app": "淘宝",
+      "priority": "medium",
+      "triggers": ["daily", "evening"],
+      "description": "查看淘宝中最近一段时间的历史订单信息",
+      "preconditions": {
+        "app_installed": true,
+        "user_logged_in": true
+      },
+      "steps": "打开淘宝 App，进入“我的淘宝”页面，点击“历史订单”入口，依次浏览当前页面中可见的所有历史订单，读取每个订单的商品名称、物流状态、预计送达时间以及是否存在异常提示信息。",
+      "constraints": {
+        "read_only": true,
+        "no_purchase": true,
+        "no_payment": true
+      },
+      "output_schema": {
+        "orders": [
+          {
+            "item": "string",
+            "status": "string",
+            "eta": "string|null",
+            "risk": "boolean"
+          }
+        ]
+      }
+    }
+  ]
+}
