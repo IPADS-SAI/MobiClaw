@@ -16,7 +16,15 @@ git submodule update --init --recursive
 
 ## 2. 启动并部署 WeKnora（快速开发模式）
 
-方式 1：使用 Make 命令（[推荐](https://github.com/Tencent/WeKnora/blob/main/README_CN.md)）
+进入WeKnora目录，设置`.env`环境，可以
+
+```bash
+cd WeKnora
+cp .env.example .env
+```
+
+
+方式 1：首次启动，使用 Make 命令（[推荐](https://github.com/Tencent/WeKnora/blob/main/README_CN.md)），并且提前安装了GO.
 
 ```bash
 make dev-start      # 启动基础设施
@@ -74,7 +82,7 @@ Import completed. models=... knowledge_bases=... custom_agents=...
 uv sync
 ```
 
-确保 `.env` 已填写（支持自动加载）：
+确保根目录下的 `.env` 已填写（支持uv自动加载）：
 
 ```bash
 # LLM (用于分析与VL抽取)
