@@ -128,7 +128,7 @@ export OPENAI_MODEL="google/gemini-2.5-flash"
 # WeKnora (已运行在本机 8080)
 export WEKNORA_BASE_URL="http://localhost:8080"
 # 结合 WeKnora 配置查看填写
-export WEKNORA_API_KEY="sk-Q-ziU0BDP99DYjRluKGovL6XRFSEOH7YQALvVzPUpSru1QLJ"
+export WEKNORA_API_KEY="sk-Q-xxx"
 export WEKNORA_SESSION_ID="seneschal-session"
 
 # MobiAgent Gateway
