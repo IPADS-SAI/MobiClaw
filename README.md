@@ -16,7 +16,7 @@ git submodule update --init --recursive
 
 ## 2. 启动并部署 WeKnora（快速开发模式）
 
-进入WeKnora目录，设置`.env`环境，可以
+进入WeKnora目录，设置`.env`环境，可以开启MINIO和NEO4J
 
 ```bash
 cd WeKnora
