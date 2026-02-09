@@ -4,11 +4,45 @@
 
 ---
 
+## 项目简化架构图（1页版）
+
+```mermaid
+flowchart LR
+    U[用户 / 定时触发] --> S[Seneschal<br/>app.py + workflows]
+    S --> A[AgentScope ReActAgent<br/>Steward]
+
+    A -->|Collect / Action| G[mobiagent_server 网关]
+    G --> M[MobiAgent 执行层<br/>mock / proxy / task_queue / cli]
+
+    A -->|Store / Analyze| W[WeKnora API]
+    W --> P[(PostgreSQL / ParadeDB)]
+    W --> R[(Redis)]
+    W --> D[DocReader gRPC]
+    W --> V[Retriever<br/>Postgres / ES / Qdrant]
+    W --> O[对象存储<br/>MinIO / COS / Local]
+
+    D --> O
+```
+
+核心闭环：`Collect -> Store -> Analyze -> Execute`
+
+- `Collect`：Seneschal 通过网关调用 MobiAgent 采集手机侧数据  
+- `Store`：将采集结果写入 WeKnora 知识库  
+- `Analyze`：基于 WeKnora 的 RAG/Agent 能力生成总结与决策  
+- `Execute`：按分析结果回调 MobiAgent 执行动作  
+
+更多细节可查看：
+
+- `docs/Seneschal-简化架构图.md`（1页版说明）
+- `docs/Seneschal-项目架构说明.md`（详细版）
+
+---
+
 ## 1. 下载仓库并拉取子仓库
 
 ```bash
 git clone <repo-url>
-cd /home/zhaoxi/ipads/llm-agent/Seneschal
+cd ./Seneschal
 git submodule update --init --recursive
 ```
 
@@ -19,6 +53,7 @@ git submodule update --init --recursive
 方式 1：使用 Make 命令（[推荐](https://github.com/Tencent/WeKnora/blob/main/README_CN.md)）
 
 ```bash
+cd WeKnora
 make dev-start      # 启动基础设施
 make dev-app        # 启动后端（新终端）
 make dev-frontend   # 启动前端（新终端）
