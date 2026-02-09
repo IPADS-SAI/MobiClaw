@@ -50,7 +50,7 @@ export MOBIAGENT_GATEWAY_PORT=8081
 
 ```bash
 export OPENAI_BASE_URL=https://openrouter.ai/api/v1/
-export OPENAI_API_KEY=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
+export OPENAI_API_KEY=sk-xxxxxxxxxxxxz
 export OPENAI_MODEL=google/gemini-2.5-flash
 export WEKNORA_BASE_URL=http://localhost:8080
 export WEKNORA_API_KEY=sk-xxx
