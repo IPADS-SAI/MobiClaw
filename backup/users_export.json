@@ -1,0 +1,14 @@
+[
+    {
+        "id": "cfa3559a-a616-46d5-9079-53e7bf456e0a",
+        "email": "fly0307@sjtu.edu.cn",
+        "avatar": "",
+        "username": "zhaoxi",
+        "is_active": true,
+        "tenant_id": 10000,
+        "created_at": "2026-01-29T08:54:39.235866+00:00",
+        "updated_at": "2026-01-29T08:54:39.235866+00:00",
+        "password_hash": "$2a$10$d7l2mOQSFUQ9TyntobTPS.rdR2NXJNRL4iw2JsMt6DRprghQJvFCW",
+        "can_access_all_tenants": false
+    }
+]

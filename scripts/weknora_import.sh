@@ -7,6 +7,8 @@ DB_USER="${DB_USER:-postgres}"
 MODELS_JSON="${MODELS_JSON:-./models_export.json}"
 KB_JSON="${KB_JSON:-./knowledge_bases_export.json}"
 AGENTS_JSON="${AGENTS_JSON:-./custom_agents_export.json}"
+TENANTS_JSON="${TENANTS_JSON:-./tenants_export.json}"
+USERS_JSON="${USERS_JSON:-./users_export.json}"
 
 if [[ ! -f "$MODELS_JSON" ]]; then
   echo "Models file not found: $MODELS_JSON" >&2
@@ -18,6 +20,14 @@ if [[ ! -f "$KB_JSON" ]]; then
 fi
 if [[ ! -f "$AGENTS_JSON" ]]; then
   echo "Custom agents file not found: $AGENTS_JSON" >&2
+  exit 1
+fi
+if [[ ! -f "$TENANTS_JSON" ]]; then
+  echo "Tenants file not found: $TENANTS_JSON" >&2
+  exit 1
+fi
+if [[ ! -f "$USERS_JSON" ]]; then
+  echo "Users file not found: $USERS_JSON" >&2
   exit 1
 fi
 
@@ -34,11 +44,97 @@ def compact(src, dst):
 compact(os.environ["MODELS_JSON"], os.environ["MODELS_JSON"] + ".compact")
 compact(os.environ["KB_JSON"], os.environ["KB_JSON"] + ".compact")
 compact(os.environ["AGENTS_JSON"], os.environ["AGENTS_JSON"] + ".compact")
+compact(os.environ["TENANTS_JSON"], os.environ["TENANTS_JSON"] + ".compact")
+compact(os.environ["USERS_JSON"], os.environ["USERS_JSON"] + ".compact")
 PY
 
 docker cp "${MODELS_JSON}.compact" "$CONTAINER_NAME:/tmp/models_export.compact.json"
 docker cp "${KB_JSON}.compact" "$CONTAINER_NAME:/tmp/knowledge_bases_export.compact.json"
 docker cp "${AGENTS_JSON}.compact" "$CONTAINER_NAME:/tmp/custom_agents_export.compact.json"
+docker cp "${TENANTS_JSON}.compact" "$CONTAINER_NAME:/tmp/tenants_export.compact.json"
+docker cp "${USERS_JSON}.compact" "$CONTAINER_NAME:/tmp/users_export.compact.json"
+
+docker exec -i "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" <<'SQL'
+BEGIN;
+CREATE TEMP TABLE import_tenants(data jsonb);
+\copy import_tenants FROM PROGRAM 'cat /tmp/tenants_export.compact.json' WITH (FORMAT csv, DELIMITER E'\x1f', QUOTE E'\b', ESCAPE E'\b');
+
+INSERT INTO tenants (
+  id, name, description, api_key, retriever_engines, status, business,
+  storage_quota, storage_used, agent_config, context_config, conversation_config,
+  web_search_config, created_at, updated_at, deleted_at
+)
+SELECT
+  (t->>'id')::int,
+  t->>'name',
+  t->>'description',
+  t->>'api_key',
+  COALESCE(t->'retriever_engines', '[]'::jsonb),
+  COALESCE(t->>'status', 'active'),
+  COALESCE(t->>'business', ''),
+  COALESCE((t->>'storage_quota')::bigint, 10737418240),
+  COALESCE((t->>'storage_used')::bigint, 0),
+  t->'agent_config',
+  t->'context_config',
+  t->'conversation_config',
+  t->'web_search_config',
+  NULLIF(t->>'created_at', '')::timestamptz,
+  NULLIF(t->>'updated_at', '')::timestamptz,
+  NULL
+FROM jsonb_array_elements((SELECT data FROM import_tenants)) AS t
+ON CONFLICT (id) DO UPDATE SET
+  name=EXCLUDED.name,
+  description=EXCLUDED.description,
+  api_key=EXCLUDED.api_key,
+  retriever_engines=EXCLUDED.retriever_engines,
+  status=EXCLUDED.status,
+  business=EXCLUDED.business,
+  storage_quota=EXCLUDED.storage_quota,
+  storage_used=EXCLUDED.storage_used,
+  agent_config=EXCLUDED.agent_config,
+  context_config=EXCLUDED.context_config,
+  conversation_config=EXCLUDED.conversation_config,
+  web_search_config=EXCLUDED.web_search_config,
+  updated_at=EXCLUDED.updated_at,
+  deleted_at=NULL;
+
+COMMIT;
+SQL
+
+docker exec -i "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" <<'SQL'
+BEGIN;
+CREATE TEMP TABLE import_users(data jsonb);
+\copy import_users FROM PROGRAM 'cat /tmp/users_export.compact.json' WITH (FORMAT csv, DELIMITER E'\x1f', QUOTE E'\b', ESCAPE E'\b');
+
+INSERT INTO users (
+  id, username, email, password_hash, avatar, tenant_id, is_active,
+  can_access_all_tenants, created_at, updated_at, deleted_at
+)
+SELECT
+  u->>'id',
+  u->>'username',
+  u->>'email',
+  u->>'password_hash',
+  COALESCE(u->>'avatar', ''),
+  (u->>'tenant_id')::int,
+  COALESCE((u->>'is_active')::boolean, true),
+  COALESCE((u->>'can_access_all_tenants')::boolean, false),
+  NULLIF(u->>'created_at', '')::timestamptz,
+  NULLIF(u->>'updated_at', '')::timestamptz,
+  NULL
+FROM jsonb_array_elements((SELECT data FROM import_users)) AS u
+ON CONFLICT (email) DO UPDATE SET
+  username=EXCLUDED.username,
+  password_hash=EXCLUDED.password_hash,
+  avatar=EXCLUDED.avatar,
+  tenant_id=EXCLUDED.tenant_id,
+  is_active=EXCLUDED.is_active,
+  can_access_all_tenants=EXCLUDED.can_access_all_tenants,
+  updated_at=EXCLUDED.updated_at,
+  deleted_at=NULL;
+
+COMMIT;
+SQL
 
 docker exec -i "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" <<'SQL'
 BEGIN;
@@ -170,4 +266,6 @@ SQL
 models_count=$(docker exec -i "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" -At -c "SELECT COUNT(*) FROM models WHERE deleted_at IS NULL;")
 kb_count=$(docker exec -i "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" -At -c "SELECT COUNT(*) FROM knowledge_bases WHERE deleted_at IS NULL;")
 agents_count=$(docker exec -i "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" -At -c "SELECT COUNT(*) FROM custom_agents WHERE deleted_at IS NULL;")
-echo "Import completed. models=$models_count knowledge_bases=$kb_count custom_agents=$agents_count"
+tenants_count=$(docker exec -i "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" -At -c "SELECT COUNT(*) FROM tenants WHERE deleted_at IS NULL;")
+users_count=$(docker exec -i "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" -At -c "SELECT COUNT(*) FROM users WHERE deleted_at IS NULL;")
+echo "Import completed. tenants=$tenants_count users=$users_count models=$models_count knowledge_bases=$kb_count custom_agents=$agents_count"
