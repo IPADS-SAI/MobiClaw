@@ -120,7 +120,7 @@ Import completed. models=... knowledge_bases=... custom_agents=...
 
 可登录前端页面：
 默认用户
-- 用户名：flyboy
+- 用户名：flyboy@outlook.com
 - 密码：flyboy123456
 
 记录WeKnora的 **API Key**，后续配置需要使用。
