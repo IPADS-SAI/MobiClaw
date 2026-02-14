@@ -1,3 +1,7 @@
+backup/
+tmp/
+**/*.pyc
+**/*.compact
+*.log
 .env
 env.md
-**/*.pyc
