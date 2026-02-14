@@ -56,9 +56,9 @@ def load_config() -> GatewayConfig:
         cli_cmd_template=os.environ.get("MOBIAGENT_CLI_CMD"),
         cli_task_dir=Path(os.environ.get("MOBIAGENT_TASK_DIR", "mobiagent_server/tasks")),
         cli_data_dir=Path(os.environ.get("MOBIAGENT_DATA_DIR", "mobiagent_server/data")),
-        vl_base_url=os.environ.get("OPENAI_BASE_URL"),
-        vl_api_key=os.environ.get("OPENAI_API_KEY"),
-        vl_model=os.environ.get("OPENAI_MODEL", "google/gemini-2.5-flash"),
+        vl_base_url=os.environ.get("OPENROUTER_BASE_URL", os.environ.get("OPENAI_BASE_URL")),
+        vl_api_key=os.environ.get("OPENROUTER_API_KEY", os.environ.get("OPENAI_API_KEY")),
+        vl_model=os.environ.get("OPENROUTER_MODEL", os.environ.get("OPENAI_MODEL", "google/gemini-2.5-flash")),
         timeout_s=float(os.environ.get("MOBIAGENT_TIMEOUT", "30")),
     )
 
@@ -379,7 +379,8 @@ async def collect(request: CollectRequest, authorization: Optional[str] = Header
         data={
             "ocr_text": mock_text,
             "screenshot_path": "",
-            "raw": {"task": request.task},
+            "mock_collect_result": mock_text,
+            "raw": {"task": request.task, "source": "mock"},
         },
     )
 
@@ -438,7 +439,8 @@ async def action(request: ActionRequest, authorization: Optional[str] = Header(d
 
 @app.get("/")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "service": "mobiagent_gateway"}
+    cfg = load_config()
+    return {"status": "ok", "service": "mobiagent_gateway", "mode": cfg.mode}
 
 
 @app.get("/api/v1/jobs/{job_id}", response_model=JobStatus)

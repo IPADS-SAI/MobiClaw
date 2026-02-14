@@ -299,6 +299,7 @@ sequenceDiagram
 
 - LLM：`OPENAI_BASE_URL` `OPENAI_API_KEY` `OPENAI_MODEL`
 - WeKnora：`WEKNORA_BASE_URL` `WEKNORA_API_KEY` `WEKNORA_KB_NAME` `WEKNORA_AGENT_NAME` `WEKNORA_SESSION_ID`
+  - 其中 `WEKNORA_API_KEY` 会作为后续访问 WeKnora API 的认证密钥，请求头为 `X-API-Key`
 - MobiAgent：`MOBI_AGENT_BASE_URL` `MOBI_AGENT_API_KEY`
 
 ## 9.2 网关关键环境变量
@@ -340,4 +341,3 @@ sequenceDiagram
 - “多模式容错”：Mobi 网关支持 mock/proxy/queue/cli；Seneschal 工具失败时也可 mock 回退。
 - “事件流驱动”：WeKnora 问答流程以 EventBus + SSE + StreamManager 进行流式输出与可恢复续传。
 - “配置驱动优先”：模型、知识库、Agent、检索策略主要由配置与 API 数据决定，而非硬编码。
-

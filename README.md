@@ -83,6 +83,20 @@ make dev-frontend   # 启动前端（新终端）
 
 ---
 
+## 2.1 部署并启动 Rerank 模型服务
+
+在 `WeKnora` 目录执行：
+
+```bash
+cd WeKnora
+modelscope download --model BAAI/bge-reranker-v2-m3 --local_dir bge-reranker-v2-m3
+python rerank_server_bge-reranker-v2-m3.py
+```
+
+默认监听端口：`8001`
+
+---
+
 ## 3. 修改并导入 WeKnora 配置
 
 根据注册用户名（或租户）修改 `backup/` 目录下的配置文件（租户信息默认 `tenant_id=10000`）：
@@ -94,16 +108,20 @@ make dev-frontend   # 启动前端（新终端）
 修改完成后执行一键导入：
 
 ```bash
-MODELS_JSON=./backup/models_export.json \
-KB_JSON=./backup/knowledge_bases_export.json \
-AGENTS_JSON=./backup/custom_agents_export.json \
-./scripts/weknora_import.sh
+ENV_FILE=./.env \
+CONFIG_DIR=./configs \
+bash ./scripts/weknora_import.sh
 ```
 
 导入完成会输出校验结果：
 ```
 Import completed. models=... knowledge_bases=... custom_agents=...
 ```
+
+可登录前端页面：
+默认用户
+- 用户名：flyboy
+- 密码：flyboy123456
 
 记录WeKnora的 **API Key**，后续配置需要使用。
 
@@ -117,17 +135,29 @@ Import completed. models=... knowledge_bases=... custom_agents=...
 uv sync
 ```
 
+可先使用模板文件初始化环境变量：
+
+```bash
+cp .env-example .env
+```
+
+然后按注释填写 `.env` 中的必填项（尤其是以下字段）：
+- `OPENROUTER_API_KEY`
+- `WEKNORA_API_KEY`（首次初始化可自行填写；该值会导入租户配置，并作为后续访问 WeKnora API 的认证密钥，HTTP 头为 `X-API-Key`）
+- `WEKNORA_MODEL_EMBEDDING_API_KEY`
+- `MOBIAGENT_CLI_CMD` 中的 `service_ip` / 端口参数（按你的设备环境修改）
+
 确保根目录下的 `.env` 已填写（支持uv自动加载）：
 
 ```bash
-# LLM (用于分析与VL抽取)
-export OPENAI_BASE_URL="https://openrouter.ai/api/v1"
-export OPENAI_API_KEY="<your-key>"
-export OPENAI_MODEL="google/gemini-2.5-flash"
+# OpenRouter (用于分析与VL抽取)
+export OPENROUTER_BASE_URL="https://openrouter.ai/api/v1"
+export OPENROUTER_API_KEY="<your-key>"
+export OPENROUTER_MODEL="google/gemini-2.5-flash"
 
 # WeKnora (已运行在本机 8080)
 export WEKNORA_BASE_URL="http://localhost:8080"
-# 结合 WeKnora 配置查看填写
+# 自行填写 key 值；该值会导入数据库并作为后续 WeKnora API 访问的认证令牌（X-API-Key）
 export WEKNORA_API_KEY="sk-Q-xxx"
 export WEKNORA_SESSION_ID="seneschal-session"
 
@@ -140,7 +170,7 @@ export MOBIAGENT_DATA_DIR="mobiagent_server/data"
 ```
 
 说明：
-- `OPENAI_*` 用于 `mobiagent_server` 解析 output_schema（VL 抽取）。
+- `OPENROUTER_*` 用于 `mobiagent_server` 解析 output_schema（VL 抽取）。
 - `WEKNORA_*` 用于知识库写入与 RAG 分析。
 - `MOBIAGENT_*` 用于网关联通端侧 MobiAgent CLI。
 
@@ -159,6 +189,47 @@ python -m mobiagent_server.server
 ---
 
 ## 6. 运行示例程序
+
+### 6.0 一键拉取/部署/启动（含 WeKnora + Demo）
+
+```bash
+bash ./scripts/bootstrap_one_click.sh
+```
+
+该脚本会自动执行以下步骤：
+- `git pull` + `git submodule update`
+- 启动 WeKnora 基础设施 / 后端 / 前端（可选）
+- 下载并启动 `BAAI/bge-reranker-v2-m3` 服务（默认端口 `8001`）
+- 导入 `backup/` 下 WeKnora 配置（可选）
+- 启动 `mobiagent_server`
+- 运行 `app.py` demo
+
+启动前会检查端口占用，若任一必需端口被占用会直接退出并提示。
+
+默认检查端口（按当前脚本）：
+- WeKnora: `5432` `6379` `50051` `8080` `5173`
+- Rerank: `8001`
+- MobiAgent Gateway: `8081`
+- WeKnora full profile 依赖: `9000` `9001` `6333` `6334` `7474` `7687` `16686` `4317`
+
+可选环境变量：
+- `SKIP_PULL=1`：跳过 `git pull`
+- `SKIP_IMPORT=1`：跳过 WeKnora 配置导入
+- `SKIP_FRONTEND=1`：跳过 WeKnora 前端启动
+- `SKIP_RERANK=1`：跳过 Rerank 模型下载和启动
+- `RERANK_PORT=xxxx`：指定 Rerank 端口（默认 `8001`）
+
+### 6.0.1 一键关闭全部服务
+
+```bash
+bash ./scripts/stop_all.sh
+```
+
+该脚本会尝试停止：
+- WeKnora（`dev.sh stop` 基础设施）
+- `mobiagent_server`（如有）
+- `rerank_server_bge-reranker-v2-m3`（如有）
+- WeKnora 本地 app/frontend（如有）
 
 ### 6.1 运行 Demo 对话
 
@@ -222,7 +293,7 @@ curl -X POST http://localhost:8081/api/v1/action \
 ## 8. 常见问题
 
 **Q1: WeKnora 已启动，还需要做什么？**  
-A: 修改填写对应的模型、API配置后，一键导入[修改并导入 WeKnora 配置](#3-修改并导入-weknora-配置)；确保 `WEKNORA_BASE_URL` / `WEKNORA_API_KEY` / `WEKNORA_KB_NAME` 有效，后续 Seneschal 会通过API接口直接写入知识库与查询。
+A: 修改填写对应的模型、API配置后，一键导入[修改并导入 WeKnora 配置](#3-修改并导入-weknora-配置)；确保 `WEKNORA_BASE_URL` / `WEKNORA_API_KEY` / `WEKNORA_KB_NAME` 已经填写、有效，后续 Seneschal 会通过API接口直接写入知识库与查询。
 
 **Q2: MobiAgent CLI 运行很慢、指令执行错误怎么办？**  
 A: 可先把 `MOBIAGENT_SERVER_MODE=mock`，等模型与设备调试就绪后再切回 `cli`。
@@ -263,10 +334,9 @@ OUT_DIR=./backup ./scripts/weknora_export.sh
 使用脚本一键导入（自动压缩 JSON、拷贝到容器、导入并校验数量）：
 
 ```bash
-MODELS_JSON=./backup/models_export.json \
-KB_JSON=./backup/knowledge_bases_export.json \
-AGENTS_JSON=./backup/custom_agents_export.json \
-./scripts/weknora_import.sh
+ENV_FILE=./.env \
+CONFIG_DIR=./configs \
+bash ./scripts/weknora_import.sh
 ```
 
 脚本导入完成后会输出校验结果：

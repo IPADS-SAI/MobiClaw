@@ -7,9 +7,9 @@ import os
 
 # LLM 模型配置 - 优先从环境变量读取，否则使用默认值
 MODEL_CONFIG = {
-    "model_name": os.environ.get("OPENAI_MODEL", "google/gemini-2.5-flash"),
-    "api_key": os.environ.get("OPENAI_API_KEY", "sk-or-v1-xxx"),
-    "api_base": os.environ.get("OPENAI_BASE_URL", "https://openrouter.ai/api/v1"),
+    "model_name": os.environ.get("OPENROUTER_MODEL", os.environ.get("OPENAI_MODEL", "google/gemini-2.5-flash")),
+    "api_key": os.environ.get("OPENROUTER_API_KEY", os.environ.get("OPENAI_API_KEY", "sk-or-v1-xxx")),
+    "api_base": os.environ.get("OPENROUTER_BASE_URL", os.environ.get("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")),
     "temperature": 0.5,
 }
 
@@ -24,7 +24,7 @@ WEKNORA_CONFIG = {
     "base_url": os.environ.get("WEKNORA_BASE_URL", "http://localhost:8080"),
     "api_key": os.environ.get(
         "WEKNORA_API_KEY",
-        "sk-Q-xxxxxx",
+        "sk-Q-xxx",
     ),
     "knowledge_base_name": os.environ.get("WEKNORA_KB_NAME", ""),
     "agent_name": os.environ.get("WEKNORA_AGENT_NAME", ""),
