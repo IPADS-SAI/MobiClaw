@@ -141,10 +141,10 @@ uv sync
 cp .env-example .env
 ```
 
-然后按注释填写 `.env` 中的必填项（尤其是以下字段）：
-- `OPENROUTER_API_KEY`
+ `.env-example` 中的Key字段，需要提前在终端中export：
+- `OPENROUTER_API_KEY`，以sk-or-v1-开头
 - `WEKNORA_API_KEY`（首次初始化可自行填写；该值会导入租户配置，并作为后续访问 WeKnora API 的认证密钥，HTTP 头为 `X-API-Key`）
-- `WEKNORA_MODEL_EMBEDDING_API_KEY`
+- `WEKNORA_MODEL_EMBEDDING_API_KEY`，当前使用openrouter提供的服务，因此无需额外指定
 - `MOBIAGENT_CLI_CMD` 中的 `service_ip` / 端口参数（按你的设备环境修改）
 
 确保根目录下的 `.env` 已填写（支持uv自动加载）：
@@ -193,6 +193,7 @@ python -m mobiagent_server.server
 ### 6.0 一键拉取/部署/启动（含 WeKnora + Demo）
 
 ```bash
+# 在env-example或者终端中export WEKNORA_API_KEY和OPENROUTER_API_KEY后执行下面的脚本
 bash ./scripts/bootstrap_one_click.sh
 ```
 
@@ -203,6 +204,8 @@ bash ./scripts/bootstrap_one_click.sh
 - 导入 `backup/` 下 WeKnora 配置（可选）
 - 启动 `mobiagent_server`
 - 运行 `app.py` demo
+- 根据.env-example创建.env文件
+- 同步uv的环境
 
 启动前会检查端口占用，若任一必需端口被占用会直接退出并提示。
 
