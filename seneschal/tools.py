@@ -13,6 +13,7 @@ if __spec__ is not None:
 mobi = importlib.import_module("seneschal.tools.mobi")
 weknora = importlib.import_module("seneschal.tools.weknora")
 shell = importlib.import_module("seneschal.tools.shell")
+file_tools = importlib.import_module("seneschal.tools.file")
 web = importlib.import_module("seneschal.tools.web")
 
 call_mobi_action = mobi.call_mobi_action
@@ -22,7 +23,10 @@ weknora_knowledge_search = weknora.weknora_knowledge_search
 weknora_list_knowledge_bases = weknora.weknora_list_knowledge_bases
 weknora_rag_chat = weknora.weknora_rag_chat
 run_shell_command = shell.run_shell_command
+write_text_file = file_tools.write_text_file
 fetch_url_text = web.fetch_url_text
+fetch_url_readable_text = web.fetch_url_readable_text
+fetch_url_links = web.fetch_url_links
 
 __all__ = [
     "call_mobi_action",
@@ -32,5 +36,8 @@ __all__ = [
     "weknora_list_knowledge_bases",
     "weknora_rag_chat",
     "run_shell_command",
+    "write_text_file",
     "fetch_url_text",
+    "fetch_url_readable_text",
+    "fetch_url_links",
 ]

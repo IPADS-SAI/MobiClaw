@@ -14,7 +14,7 @@ from agentscope.tool import ToolResponse
 def _load_allowlist() -> set[str]:
     raw = os.environ.get(
         "SENESCHAL_SHELL_ALLOWLIST",
-        "ls,rg,grep,cat,head,tail,sed,awk,find,whoami,uname,date,pwd",
+        "ls,rg,grep,cat,head,tail,sed,awk,find,whoami,uname,date,pwd,mkdir",
     )
     return {item.strip() for item in raw.split(",") if item.strip()}
 

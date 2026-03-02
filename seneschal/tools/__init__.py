@@ -14,8 +14,9 @@ from agentscope.tool import ToolResponse
 import requests
 
 from .mobi import call_mobi_action, call_mobi_collect
+from .file import write_text_file
 from .shell import run_shell_command
-from .web import fetch_url_text
+from .web import fetch_url_links, fetch_url_readable_text, fetch_url_text
 from .weknora import (
     knowledge_chat,
     agent_chat,
@@ -464,6 +465,9 @@ __all__ = [
     "call_mobi_collect",
     "run_shell_command",
     "fetch_url_text",
+    "fetch_url_readable_text",
+    "fetch_url_links",
+    "write_text_file",
     "knowledge_chat",
     "agent_chat",
     "knowledge_search",

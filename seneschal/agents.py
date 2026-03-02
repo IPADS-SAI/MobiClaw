@@ -14,8 +14,11 @@ from .config import MODEL_CONFIG
 from .tools import (
     call_mobi_action,
     call_mobi_collect,
+    fetch_url_links,
+    fetch_url_readable_text,
     fetch_url_text,
     run_shell_command,
+    write_text_file,
     weknora_add_knowledge,
     weknora_knowledge_search,
     weknora_list_knowledge_bases,
@@ -44,7 +47,7 @@ def create_worker_agent() -> ReActAgent:
 
     toolkit.register_tool_function(
         run_shell_command,
-        func_description="运行受限的本地命令行工具（只读、白名单）。",
+        func_description="运行受限的本地命令行工具（白名单约束）。",
     )
 
     toolkit.register_tool_function(
@@ -53,15 +56,34 @@ def create_worker_agent() -> ReActAgent:
     )
 
     toolkit.register_tool_function(
+        fetch_url_readable_text,
+        func_description="抓取并提取网页可读文本，用于快速理解页面内容。",
+    )
+
+    toolkit.register_tool_function(
+        fetch_url_links,
+        func_description="抓取网页并提取链接，用于发现相关来源并继续检索。",
+    )
+
+    toolkit.register_tool_function(
+        write_text_file,
+        func_description="写入本地文本文件，用于保存结果或日志。",
+    )
+    toolkit.register_tool_function(
         weknora_knowledge_search,
         func_description="在 WeKnora 知识库中检索已有信息（不做 LLM 总结）。",
     )
 
-    sys_prompt = """你是 Seneschal 的 Worker Agent，负责快速完成单一子任务。
+    sys_prompt = """你是 Seneschal 的 Worker Agent，负责处理通用问题与单一子任务。
 
 工作准则：
 - 只聚焦当前任务，给出简明直接的结果。
-- 必要时使用工具检索或执行只读命令。
+- 必要时使用工具检索或执行本地命令。
+- 如果需要搜索互联网消息，优先通过百度搜索获取相关消息，或者相关网页的链接。
+- 如果任务中有今天，明天等相对日期的描述，你可以通过shell获取具体的日期。
+- 网页信息优先使用 fetch_url_readable_text；需要原始 HTML 时再使用 fetch_url_text。
+- 需要从网页中发现相关链接时使用 fetch_url_links，再逐条抓取与筛选。
+- 需要输出文件时，可用 write_text_file 落盘。
 - 不做多步长对话，输出最终结论或可执行结果。
 """
 
@@ -141,7 +163,7 @@ def create_steward_agent() -> ReActAgent:
 
     toolkit.register_tool_function(
         run_shell_command,
-        func_description="运行受限的本地命令行工具（只读、白名单）。",
+        func_description="运行受限的本地命令行工具（白名单约束）。",
     )
 
     async def delegate_to_worker(task: str) -> ToolResponse:
@@ -188,6 +210,7 @@ def create_steward_agent() -> ReActAgent:
 - 对外部页面查询可用 `fetch_url_text` 获取原始文本
 
 ### 补充：委派 (Delegate)
+- 可将通用检索、浏览器查询或本地命令任务交给 `delegate_to_worker`
 - 可将小任务交给 `delegate_to_worker`，减少主流程干扰
 
 ### 第四步：执行 (Execute)

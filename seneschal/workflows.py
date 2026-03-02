@@ -4,14 +4,9 @@
 from __future__ import annotations
 
 from agentscope.message import Msg
-import html
-import os
-import re
-from pathlib import Path
 
-from .agents import create_steward_agent, create_user_agent
+from .agents import create_steward_agent, create_user_agent, create_worker_agent
 from .dailytasks.runner import run_daily_tasks
-from .tools import fetch_url_text, run_shell_command
 
 
 async def run_demo_conversation() -> None:
@@ -104,72 +99,42 @@ async def run_interactive_mode() -> None:
             continue
 
 
-def _tool_response_to_text(response) -> str:
-    if response is None:
-        return ""
-    parts: list[str] = []
-    for block in response.content or []:
-        text = getattr(block, "text", "")
-        if text:
-            parts.append(text)
-    return "\n".join(parts)
-
-
-def _extract_weibo_top10(text: str) -> list[str]:
-    if not text:
-        return []
-    pattern = re.compile(r'<td class="td-02">\s*<a href="[^"]+"[^>]*>([^<]+)</a>')
-    items = [html.unescape(item).strip() for item in pattern.findall(text)]
-    cleaned = []
-    for item in items:
-        if not item or item == "微博热搜":
-            continue
-        cleaned.append(item)
-        if len(cleaned) >= 10:
-            break
-    return cleaned
-
-
-async def run_weibo_browser_terminal_workflow() -> None:
-    """验证浏览器与终端工具：抓取微博热搜并生成摘要文件。"""
+async def run_agent_task(task: str, output_path: str | None = None) -> None:
+    """运行通用 Agent 任务，具体策略由 Agent 决策。"""
     print("=" * 70)
-    print("Seneschal Weibo Browser + Terminal 验证")
+    print("Seneschal Agent Task")
     print("=" * 70)
     print()
 
-    url = "https://s.weibo.com/top/summary?cate=realtimehot"
-    print(f"[Web] 抓取: {url}")
-    response = await fetch_url_text(url)
-    text_content = _tool_response_to_text(response)
+    worker = create_worker_agent()
+    msg_content = task.strip() if task else ""
+    if output_path:
+        msg_content += (
+            "\n\n输出文件路径: "
+            + output_path
+            + "\n如需落盘，请自行选择合适工具完成。"
+        )
 
-    # Remove the tool prefix line if present.
-    if text_content.startswith("[Web]"):
-        split_idx = text_content.find("\n")
-        if split_idx != -1:
-            text_content = text_content[split_idx + 1 :]
+    msg = Msg(
+        name="User",
+        content=msg_content,
+        role="user",
+    )
 
-    top10 = _extract_weibo_top10(text_content)
-    if not top10:
-        top10 = ["未能解析微博热搜内容，请检查网络或页面结构是否变化。"]
+    print("[Worker 正在思考和执行...]")
+    print("-" * 70)
 
-    output_path = Path("weibo_top10_summary.md")
+    try:
+        response = await worker(msg)
+        print("-" * 70)
+        print("[Worker 回复]:")
+        print(response.get_text_content() if response else "（无回复）")
+        print("-" * 70)
+    except Exception as e:
+        print(f"[错误] Agent 执行出错: {e}")
+        import traceback
+        traceback.print_exc()
 
-    allowlist = os.environ.get("SENESCHAL_SHELL_ALLOWLIST", "")
-    if "touch" not in allowlist.split(","):
-        allowlist = ",".join(item for item in [allowlist.strip(","), "touch"] if item)
-        os.environ["SENESCHAL_SHELL_ALLOWLIST"] = allowlist
-
-    print("[Shell] 创建摘要文件...")
-    shell_result = await run_shell_command(f"touch {output_path.as_posix()}")
-    print(_tool_response_to_text(shell_result))
-
-    lines = ["# 微博热搜 Top 10", "", "数据来源: https://s.weibo.com/top/summary?cate=realtimehot", ""]
-    for idx, item in enumerate(top10, start=1):
-        lines.append(f"{idx}. {item}")
-    summary = "\n".join(lines) + "\n"
-    output_path.write_text(summary, encoding="utf-8")
-
-    print(f"已生成: {output_path.as_posix()}")
     print("=" * 70)
 
 
@@ -194,9 +159,12 @@ async def main() -> None:
         help="Trigger name used to filter daily tasks",
     )
     parser.add_argument(
-        "--weibo-hot",
-        action="store_true",
-        help="Verify browser/terminal tools by fetching Weibo top 10",
+        "--agent-task",
+        help="Run an agent task with tool usage",
+    )
+    parser.add_argument(
+        "--output",
+        help="Optional output path hint for agent tasks",
     )
     args = parser.parse_args()
 
@@ -211,7 +179,7 @@ async def main() -> None:
         print("-" * 70)
     elif args.interactive:
         await run_interactive_mode()
-    elif args.weibo_hot:
-        await run_weibo_browser_terminal_workflow()
+    elif args.agent_task:
+        await run_agent_task(args.agent_task, args.output)
     else:
         await run_demo_conversation()

@@ -255,22 +255,23 @@ python app.py --interactive
 python app.py --daily --daily-trigger daily
 ```
 
-### 6.3.1 验证 Weibo 热搜 + 本地 Shell 工具
+### 6.3.1 Agent 任务模式（浏览器 + 本地工具）
 
-该工作流会使用内置 Web 工具抓取微博热搜 Top 10，并通过本地 Shell 工具创建摘要文件。
+该工作流只接收任务描述并交给 Worker Agent 决策，是否调用浏览器/本地工具由 Agent 自行判断。
 实现见 [seneschal/workflows.py](seneschal/workflows.py)。
 
 ```bash
-python app.py --weibo-hot
+python app.py --agent-task "帮我获取并总结微博前十的热搜，并通过md文件的方式保存在本地"
 ```
 
-默认输出文件：`weibo_top10_summary.md`。
-
-如果你限制了 Shell 工具白名单，请确保包含 `touch`：
+如果需要指定输出路径，可提供 `--output`（Agent 会优先遵循）：
 
 ```bash
-export SENESCHAL_SHELL_ALLOWLIST="ls,rg,grep,cat,head,tail,sed,awk,find,whoami,uname,date,pwd,touch"
+python app.py --agent-task "帮我查看今天美伊战争的情况总结，并且生成对应的md总结" --output "outputs/summart.md"
 ```
+
+Shell 工具默认受白名单限制，若你设置了 `SENESCHAL_SHELL_ALLOWLIST`，请按需加入允许的命令。
+如需限制写文件路径，可设置 `SENESCHAL_FILE_WRITE_ROOT`。
 
 ### 6.4 启动 Seneschal Gateway（OpenClaw Core 入口）
 
