@@ -123,7 +123,10 @@ Import completed. models=... knowledge_bases=... custom_agents=...
 - 用户名：flyboy@outlook.com
 - 密码：flyboy123456
 
-记录WeKnora的 **API Key**，后续配置需要使用。
+记录WeKnora的 **API Key**，后续配置需要使用，API key如下图所示（登录5173端口的前端界面，并注册后获取）
+
+![WeKnora API Key](figs/Weknora_API_key.png)
+
 
 ---
 
@@ -252,6 +255,23 @@ python app.py --interactive
 python app.py --daily --daily-trigger daily
 ```
 
+### 6.3.1 验证 Weibo 热搜 + 本地 Shell 工具
+
+该工作流会使用内置 Web 工具抓取微博热搜 Top 10，并通过本地 Shell 工具创建摘要文件。
+实现见 [seneschal/workflows.py](seneschal/workflows.py)。
+
+```bash
+python app.py --weibo-hot
+```
+
+默认输出文件：`weibo_top10_summary.md`。
+
+如果你限制了 Shell 工具白名单，请确保包含 `touch`：
+
+```bash
+export SENESCHAL_SHELL_ALLOWLIST="ls,rg,grep,cat,head,tail,sed,awk,find,whoami,uname,date,pwd,touch"
+```
+
 ### 6.4 启动 Seneschal Gateway（OpenClaw Core 入口）
 
 网关用于接收任务并交给 Steward Agent 处理，支持同步和异步任务查询。
@@ -266,7 +286,7 @@ python -m seneschal.gateway_server
 - `SENESCHAL_GATEWAY_PORT`：自定义端口（默认 `8090`）
 - `SENESCHAL_GATEWAY_API_KEY`：网关鉴权（Bearer token）
 
-也可以直接运行示例脚本：
+也可以直接运行示例脚本（无需手动启动gateway_server服务）：
 
 ```bash
 bash ./scripts/run_gateway_demo.sh
@@ -276,7 +296,7 @@ bash ./scripts/run_gateway_demo.sh
 
 ## 7. 请求示例（网关）
 
-### 7.1 Collect
+### 7.1 MobiAgent Server：Collect
 
 为支持完整任务执行的场景。
 
@@ -287,7 +307,7 @@ curl -X POST http://localhost:8081/api/v1/collect \
   -d '{"task":"获取微信聊天列表前5条摘要"}'
 ```
 
-### 7.2 Action + output_schema
+### 7.2 MobiAgent Server：Action + output_schema
 
 为支持特定操作、单步操作场景预留接口和请求格式。
 ```bash
