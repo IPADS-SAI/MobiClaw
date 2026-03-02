@@ -14,6 +14,8 @@ from agentscope.tool import ToolResponse
 import requests
 
 from .mobi import call_mobi_action, call_mobi_collect
+from .shell import run_shell_command
+from .web import fetch_url_text
 from .weknora import (
     knowledge_chat,
     agent_chat,
@@ -452,14 +454,23 @@ def weknora_rag_chat(query: str, session_id: str | None = None, **kwargs: Any) -
         metadata={"result": result},
     )
 
+
+# Compatibility aliases for older imports
+weknora_knowledge_search = knowledge_search
+weknora_list_knowledge_bases = list_knowledge_bases
+
 __all__ = [
     "call_mobi_action",
     "call_mobi_collect",
+    "run_shell_command",
+    "fetch_url_text",
     "knowledge_chat",
     "agent_chat",
     "knowledge_search",
     "create_knowledge_manual",
     "list_knowledge_bases",
+    "weknora_knowledge_search",
+    "weknora_list_knowledge_bases",
     "weknora_add_knowledge",
     "weknora_rag_chat",
 ]

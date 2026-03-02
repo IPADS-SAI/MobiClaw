@@ -252,6 +252,26 @@ python app.py --interactive
 python app.py --daily --daily-trigger daily
 ```
 
+### 6.4 启动 Seneschal Gateway（OpenClaw Core 入口）
+
+网关用于接收任务并交给 Steward Agent 处理，支持同步和异步任务查询。
+
+```bash
+python -m seneschal.gateway_server
+```
+
+默认监听：`http://0.0.0.0:8090`
+
+可选环境变量：
+- `SENESCHAL_GATEWAY_PORT`：自定义端口（默认 `8090`）
+- `SENESCHAL_GATEWAY_API_KEY`：网关鉴权（Bearer token）
+
+也可以直接运行示例脚本：
+
+```bash
+bash ./scripts/run_gateway_demo.sh
+```
+
 ---
 
 ## 7. 请求示例（网关）
@@ -291,6 +311,35 @@ curl -X POST http://localhost:8081/api/v1/action \
   }'
 ```
 
+### 7.3 Seneschal Gateway Task
+
+用于触发 OpenClaw Core（Steward Agent）任务。
+
+```bash
+curl -X POST http://localhost:8090/api/v1/task \
+  -H "Content-Type: application/json" \
+  -d '{"task":"整理今日待办并给出简要总结","async_mode":false}'
+```
+
+异步任务：
+
+```bash
+curl -X POST http://localhost:8090/api/v1/task \
+  -H "Content-Type: application/json" \
+  -d '{"task":"检索近期会议安排并总结","async_mode":true}'
+
+curl http://localhost:8090/api/v1/jobs/<job_id>
+```
+
+如果启用鉴权：
+
+```bash
+curl -X POST http://localhost:8090/api/v1/task \
+  -H "Authorization: Bearer <SENESCHAL_GATEWAY_API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"task":"给出今天的提醒事项","async_mode":false}'
+```
+
 ---
 
 ## 8. 常见问题
@@ -300,6 +349,18 @@ A: 修改填写对应的模型、API配置后，一键导入[修改并导入 WeK
 
 **Q2: MobiAgent CLI 运行很慢、指令执行错误怎么办？**  
 A: 可先把 `MOBIAGENT_SERVER_MODE=mock`，等模型与设备调试就绪后再切回 `cli`。
+
+---
+
+## 模块说明（MobiClaw Core）
+
+- `seneschal/agents.py`：核心 Steward/Worker Agent，含任务编排、工具注册、A2A 委派。
+- `seneschal/tools/`：工具层封装（MobiAgent/WeKnora/Web/Shell）。
+- `seneschal/gateway_server.py`：OpenClaw Core 的常驻网关入口（HTTP 任务接收）。
+- `mobiagent_server/`：手机端操作网关（collect/action），支持 mock / proxy / cli。
+- `seneschal/workflows.py`：演示与交互式流程入口。
+- `app.py`：主入口（加载 .env，运行 workflows）。
+- `scripts/run_gateway_demo.sh`：网关示例脚本，快速验证任务链路。
 
 
 ---
