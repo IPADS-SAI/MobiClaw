@@ -12,6 +12,7 @@ from agentscope.tool import Toolkit, ToolResponse
 
 from .config import MODEL_CONFIG
 from .tools import (
+    brave_search,
     call_mobi_action,
     call_mobi_collect,
     fetch_url_links,
@@ -51,6 +52,11 @@ def create_worker_agent() -> ReActAgent:
     )
 
     toolkit.register_tool_function(
+        brave_search,
+        func_description="通过 Brave Search API 联网检索新闻与网页来源链接。",
+    )
+
+    toolkit.register_tool_function(
         fetch_url_text,
         func_description="抓取指定 URL 的文本内容用于快速检索。",
     )
@@ -79,9 +85,9 @@ def create_worker_agent() -> ReActAgent:
 工作准则：
 - 只聚焦当前任务，给出简明直接的结果。
 - 必要时使用工具检索或执行本地命令。
-- 如果需要搜索互联网消息，优先通过百度搜索获取相关消息，或者相关网页的链接。
-- 如果任务中有今天，明天等相对日期的描述，你可以通过shell获取具体的日期。
-- 网页信息优先使用 fetch_url_readable_text；需要原始 HTML 时再使用 fetch_url_text。
+- 如果需要联网搜索新闻或网页来源，优先使用 brave_search 获取候选链接与摘要。
+- 如果任务中有今天，明天等相对日期的描述，你可以通过shell中的date命令，获取具体的日期。
+- 拿到候选链接后，优先使用 fetch_url_readable_text 抓取正文；需要原始 HTML 时再使用 fetch_url_text。
 - 需要从网页中发现相关链接时使用 fetch_url_links，再逐条抓取与筛选。
 - 需要输出文件时，可用 write_text_file 落盘。
 - 不做多步长对话，输出最终结论或可执行结果。
@@ -212,6 +218,7 @@ def create_steward_agent() -> ReActAgent:
 ### 补充：委派 (Delegate)
 - 可将通用检索、浏览器查询或本地命令任务交给 `delegate_to_worker`
 - 可将小任务交给 `delegate_to_worker`，减少主流程干扰
+- 涉及联网新闻/网页检索时，优先委派 Worker 使用 `brave_search` 再抓取正文
 
 ### 第四步：执行 (Execute)
 - 如果分析发现需要执行的操作（如添加日程、设置提醒）

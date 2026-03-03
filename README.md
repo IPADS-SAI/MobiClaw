@@ -144,9 +144,10 @@ uv sync
 cp .env-example .env
 ```
 
- `.env-example` 中的Key字段，需要提前在终端中export：
+ `.env-example` 中的Key字段，需要提前在**终端中export，禁止写在env文件中**：
 - `OPENROUTER_API_KEY`，以sk-or-v1-开头
 - `WEKNORA_API_KEY`（首次初始化可自行填写；该值会导入租户配置，并作为后续访问 WeKnora API 的认证密钥，HTTP 头为 `X-API-Key`）
+- `BRAVE_API_KEY`（Worker 进行联网新闻/网页搜索时必需，需要挂**代理**）
 - `WEKNORA_MODEL_EMBEDDING_API_KEY`，当前使用openrouter提供的服务，因此无需额外指定
 - `MOBIAGENT_CLI_CMD` 中的 `service_ip` / 端口参数（按你的设备环境修改）
 
@@ -164,6 +165,12 @@ export WEKNORA_BASE_URL="http://localhost:8080"
 export WEKNORA_API_KEY="sk-Q-xxx"
 export WEKNORA_SESSION_ID="seneschal-session"
 
+# Brave Search (用于 Worker 联网检索)
+export BRAVE_API_KEY="<your-brave-api-key>"
+# 可选覆盖项
+export BRAVE_SEARCH_BASE_URL="https://api.search.brave.com/res/v1/web/search"
+export BRAVE_SEARCH_MAX_RESULTS="5"
+
 # MobiAgent Gateway
 export MOBIAGENT_GATEWAY_PORT="8081"
 export MOBIAGENT_SERVER_MODE="cli"
@@ -175,6 +182,7 @@ export MOBIAGENT_DATA_DIR="mobiagent_server/data"
 说明：
 - `OPENROUTER_*` 用于 `mobiagent_server` 解析 output_schema（VL 抽取）。
 - `WEKNORA_*` 用于知识库写入与 RAG 分析。
+- `BRAVE_*` 用于 Worker 的联网新闻与网页来源检索。
 - `MOBIAGENT_*` 用于网关联通端侧 MobiAgent CLI。
 
 ---
@@ -196,7 +204,7 @@ python -m mobiagent_server.server
 ### 6.0 一键拉取/部署/启动（含 WeKnora + Demo）
 
 ```bash
-# 在env-example或者终端中export WEKNORA_API_KEY和OPENROUTER_API_KEY后执行下面的脚本
+# 在env-example或者终端中export WEKNORA_API_KEY、OPENROUTER_API_KEY（联网检索场景还需 BRAVE_API_KEY）后执行下面的脚本
 bash ./scripts/bootstrap_one_click.sh
 ```
 
@@ -258,10 +266,11 @@ python app.py --daily --daily-trigger daily
 ### 6.3.1 Agent 任务模式（浏览器 + 本地工具）
 
 该工作流只接收任务描述并交给 Worker Agent 决策，是否调用浏览器/本地工具由 Agent 自行判断。
+联网搜索默认采用 Brave Search：先检索候选来源链接与摘要，再按需抓取网页正文。
 实现见 [seneschal/workflows.py](seneschal/workflows.py)。
 
 ```bash
-python app.py --agent-task "帮我获取并总结微博前十的热搜，并通过md文件的方式保存在本地"
+python app.py --agent-task "帮我查看今天美伊战争的情况总结，并且生成对应的md总结"
 ```
 
 如果需要指定输出路径，可提供 `--output`（Agent 会优先遵循）：

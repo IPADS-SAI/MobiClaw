@@ -27,6 +27,7 @@ write_text_file = file_tools.write_text_file
 fetch_url_text = web.fetch_url_text
 fetch_url_readable_text = web.fetch_url_readable_text
 fetch_url_links = web.fetch_url_links
+brave_search = web.brave_search
 
 __all__ = [
     "call_mobi_action",
@@ -40,4 +41,5 @@ __all__ = [
     "fetch_url_text",
     "fetch_url_readable_text",
     "fetch_url_links",
+    "brave_search",
 ]

@@ -30,3 +30,10 @@ WEKNORA_CONFIG = {
     "agent_name": os.environ.get("WEKNORA_AGENT_NAME", ""),
     "session_id": os.environ.get("WEKNORA_SESSION_ID", "seneschal-session"),
 }
+
+# Brave Search 配置 (联网搜索)
+BRAVE_SEARCH_CONFIG = {
+    "api_key": os.environ.get("BRAVE_API_KEY", ""),
+    "base_url": os.environ.get("BRAVE_SEARCH_BASE_URL", "https://api.search.brave.com/res/v1/web/search"),
+    "max_results": int(os.environ.get("BRAVE_SEARCH_MAX_RESULTS", "5")),
+}
