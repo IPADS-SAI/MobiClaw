@@ -4,41 +4,92 @@
 
 ---
 
-## 项目简化架构图（1页版）
+## 项目详细架构图（新版）
 
 ```mermaid
-flowchart LR
-    U[用户 / 定时触发] --> S[Seneschal<br/>app.py + workflows]
-    S --> A[AgentScope ReActAgent<br/>Steward]
+flowchart TB
+    U[用户/定时任务/CLI] --> APP[app.py 入口]
+    APP --> WF[seneschal/workflows.py
+模式: demo / interactive / daily / worker]
+    WF --> AG[seneschal/agents.py
+Steward ReActAgent]
 
-    A -->|Collect / Action| G[mobiagent_server 网关]
-    G --> M[MobiAgent 执行层<br/>mock / proxy / task_queue / cli]
+    subgraph ToolLayer[工具层 seneschal/tools]
+      MT1[call_mobi_collect]
+      MT2[call_mobi_action]
+      WT1[weknora_add_knowledge]
+      WT2[weknora_rag_chat]
+    end
 
-    A -->|Store / Analyze| W[WeKnora API]
-    W --> P[(PostgreSQL / ParadeDB)]
-    W --> R[(Redis)]
-    W --> D[DocReader gRPC]
-    W --> V[Retriever<br/>Postgres / ES / Qdrant]
-    W --> O[对象存储<br/>MinIO / COS / Local]
+    AG --> MT1
+    AG --> MT2
+    AG --> WT1
+    AG --> WT2
 
-    D --> O
+    subgraph MobiGateway[mobiagent_server 网关 FastAPI]
+      API[REST API
+/collect /action /jobs]
+      MODE[运行模式
+mock / proxy / task_queue / cli]
+      PARSE[output_schema 解析
+VL/LLM 结构化提取]
+    end
+
+    MT1 --> API
+    MT2 --> API
+    API --> MODE --> MA[MobiAgent / GUI Agent 执行器]
+    MODE --> PARSE
+
+    subgraph WeKnora[WeKnora 知识与推理底座]
+      WKAPI[API Router / Handler / Service]
+      CHAT[Session Chat / Agent Chat
+SSE 事件流]
+      RET[Retriever
+Postgres / ES / Qdrant]
+      DOC[DocReader gRPC
+解析/切分/OCR]
+      STORE[(PostgreSQL/ParadeDB)]
+      REDIS[(Redis)]
+      OBJ[(MinIO/COS/Local)]
+      ENG[Agent Engine + MCP + WebSearch]
+    end
+
+    WT1 --> WKAPI
+    WT2 --> CHAT
+    WKAPI --> STORE
+    WKAPI --> REDIS
+    WKAPI --> DOC --> OBJ
+    CHAT --> RET
+    CHAT --> ENG
+    RET --> STORE
+
+    DL[seneschal/dailytasks
+任务编排器] --> MT1
+    DL --> WT1
+    DL --> WT2
 ```
 
-核心闭环：`Collect -> Store -> Analyze -> Execute`
+核心闭环仍然是：`Collect -> Store -> Analyze -> Execute`，但新版架构强调了两条关键数据通路：
 
-- `Collect`：Seneschal 通过网关调用 MobiAgent 采集手机侧数据  
-- `Store`：将采集结果写入 WeKnora 知识库  
-- `Analyze`：基于 WeKnora 的 RAG/Agent 能力生成总结与决策  
-- `Execute`：按分析结果回调 MobiAgent 执行动作  
+- **执行通路**：`Steward -> Mobi Tools -> mobiagent_server -> MobiAgent/GUI Agent`
+- **知识通路**：`Steward -> WeKnora Tools -> WeKnora(API/检索/AgentEngine) -> 存储与流式问答`
+
+新增说明：
+
+- `DailyTasks` 会复用同一套工具链，按 `trigger` 执行批量采集+入库+总结。
+- `Worker` 模式由 Agent 自主决定是否调用联网检索（Brave）与本地工具。
+- `mobiagent_server` 的 `task_queue/cli` 模式可将执行器与编排逻辑解耦，便于替换 MobiAgent、UI-TARS 等后端。
 
 更多细节可查看：
 
-- `docs/Seneschal-简化架构图.md`（1页版说明）
+- `docs/Seneschal-简化架构图.md`（1页版）
 - `docs/Seneschal-项目架构说明.md`（详细版）
+- `docs/Seneschal-详细架构图.md`（新版分层图 + 时序图）
 
 ---
 
 ## 1. 下载仓库并拉取子仓库
+
 
 ```bash
 git clone <repo-url>
