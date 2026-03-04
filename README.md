@@ -99,11 +99,18 @@ python rerank_server_bge-reranker-v2-m3.py
 
 ## 3. 修改并导入 WeKnora 配置
 
-根据注册用户名（或租户）修改 `backup/` 目录下的配置文件（租户信息默认 `tenant_id=10000`）：
+根据注册用户名（或租户）修改 `configs/` 目录下的配置文件（租户信息默认 `tenant_id=10000`）：
 
-- `backup/models_export.json`
-- `backup/custom_agents_export.json`
-- `backup/knowledge_bases_export.json`
+- `configs/custom_agents_export.json`
+- `configs/knowledge_bases_export.json`
+- `configs/models_export.json`
+- `configs/tenants_export.json`
+- `configs/users_export.json`
+
+可登录前端页面：
+默认用户
+- 用户名：flyboy@outlook.com
+- 密码：flyboy123456
 
 修改完成后执行一键导入：
 
@@ -118,15 +125,15 @@ bash ./scripts/weknora_import.sh
 Import completed. models=... knowledge_bases=... custom_agents=...
 ```
 
-可登录前端页面：
-默认用户
-- 用户名：flyboy@outlook.com
-- 密码：flyboy123456
+在修改完成后，可以执行备份指令备份配置文件到backup目录下，便于项目修改或者迁移：
 
 记录WeKnora的 **API Key**，后续配置需要使用，API key如下图所示（登录5173端口的前端界面，并注册后获取）
 
 ![WeKnora API Key](figs/Weknora_API_key.png)
 
+```bash
+OUT_DIR=./backup ./scripts/weknora_export.sh
+```
 
 ---
 
