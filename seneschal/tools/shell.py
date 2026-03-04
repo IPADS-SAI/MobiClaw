@@ -1,0 +1,105 @@
+# -*- coding: utf-8 -*-
+"""Safe local shell command tool."""
+
+from __future__ import annotations
+
+import os
+import shlex
+import subprocess
+
+from agentscope.message import TextBlock
+from agentscope.tool import ToolResponse
+
+
+def _load_allowlist() -> set[str]:
+    raw = os.environ.get(
+        "SENESCHAL_SHELL_ALLOWLIST",
+        "ls,rg,grep,cat,head,tail,sed,awk,find,whoami,uname,date,pwd,mkdir",
+    )
+    return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+def _has_unsafe_tokens(command: str) -> bool:
+    unsafe_tokens = ["|", ";", "&&", "||", ">", "<", "$", "`"]
+    return any(token in command for token in unsafe_tokens)
+
+
+async def run_shell_command(command: str) -> ToolResponse:
+    """Run a safe local shell command with allowlist enforcement."""
+    command = (command or "").strip()
+    if not command:
+        return ToolResponse(
+            content=[TextBlock(type="text", text="[Shell] Empty command.")],
+        )
+
+    if _has_unsafe_tokens(command):
+        return ToolResponse(
+            content=[
+                TextBlock(
+                    type="text",
+                    text="[Shell] Command contains unsafe tokens. Use a single simple command.",
+                )
+            ],
+        )
+
+    try:
+        args = shlex.split(command)
+    except ValueError as exc:
+        return ToolResponse(
+            content=[TextBlock(type="text", text=f"[Shell] Parse error: {exc}")],
+        )
+
+    if not args:
+        return ToolResponse(
+            content=[TextBlock(type="text", text="[Shell] No command tokens found.")],
+        )
+
+    allowlist = _load_allowlist()
+    if allowlist and args[0] not in allowlist:
+        return ToolResponse(
+            content=[
+                TextBlock(
+                    type="text",
+                    text=(
+                        "[Shell] Command not allowed. "
+                        "Update SENESCHAL_SHELL_ALLOWLIST to permit it."
+                    ),
+                )
+            ],
+            metadata={"command": args[0]},
+        )
+
+    timeout_s = float(os.environ.get("SENESCHAL_SHELL_TIMEOUT", "20"))
+
+    try:
+        proc = subprocess.run(
+            args,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+    except FileNotFoundError:
+        return ToolResponse(
+            content=[TextBlock(type="text", text=f"[Shell] Command not found: {args[0]}")],
+        )
+    except subprocess.TimeoutExpired:
+        return ToolResponse(
+            content=[TextBlock(type="text", text="[Shell] Command timed out.")],
+        )
+
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    stdout = stdout[:4000]
+    stderr = stderr[:2000]
+
+    message = f"[Shell] Exit code: {proc.returncode}"
+    if stdout:
+        message += f"\n[stdout]\n{stdout}"
+    if stderr:
+        message += f"\n[stderr]\n{stderr}"
+
+    return ToolResponse(
+        content=[TextBlock(type="text", text=message)],
+        metadata={"returncode": proc.returncode},
+    )

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from agentscope.message import Msg
 
-from .agents import create_steward_agent, create_user_agent
+from .agents import create_steward_agent, create_user_agent, create_worker_agent
 from .dailytasks.runner import run_daily_tasks
 
 
@@ -99,6 +99,45 @@ async def run_interactive_mode() -> None:
             continue
 
 
+async def run_agent_task(task: str, output_path: str | None = None) -> None:
+    """运行通用 Agent 任务，具体策略由 Agent 决策。"""
+    print("=" * 70)
+    print("Seneschal Agent Task")
+    print("=" * 70)
+    print()
+
+    worker = create_worker_agent()
+    msg_content = task.strip() if task else ""
+    if output_path:
+        msg_content += (
+            "\n\n输出文件路径: "
+            + output_path
+            + "\n如需落盘，请自行选择合适工具完成。"
+        )
+
+    msg = Msg(
+        name="User",
+        content=msg_content,
+        role="user",
+    )
+
+    print("[Worker 正在思考和执行...]")
+    print("-" * 70)
+
+    try:
+        response = await worker(msg)
+        print("-" * 70)
+        print("[Worker 回复]:")
+        print(response.get_text_content() if response else "（无回复）")
+        print("-" * 70)
+    except Exception as e:
+        print(f"[错误] Agent 执行出错: {e}")
+        import traceback
+        traceback.print_exc()
+
+    print("=" * 70)
+
+
 async def main() -> None:
     """主入口函数。"""
     import argparse
@@ -119,6 +158,14 @@ async def main() -> None:
         default="daily",
         help="Trigger name used to filter daily tasks",
     )
+    parser.add_argument(
+        "--agent-task",
+        help="Run an agent task with tool usage",
+    )
+    parser.add_argument(
+        "--output",
+        help="Optional output path hint for agent tasks",
+    )
     args = parser.parse_args()
 
     if args.daily:
@@ -132,5 +179,7 @@ async def main() -> None:
         print("-" * 70)
     elif args.interactive:
         await run_interactive_mode()
+    elif args.agent_task:
+        await run_agent_task(args.agent_task, args.output)
     else:
         await run_demo_conversation()

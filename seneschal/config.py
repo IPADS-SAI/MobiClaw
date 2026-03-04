@@ -7,7 +7,7 @@ import os
 
 # LLM 模型配置 - 优先从环境变量读取，否则使用默认值
 MODEL_CONFIG = {
-    "model_name": os.environ.get("OPENROUTER_MODEL", os.environ.get("OPENAI_MODEL", "google/gemini-2.5-flash")),
+    "model_name": os.environ.get("OPENROUTER_MODEL", os.environ.get("OPENAI_MODEL", "qwen/qwen3.5-397b-a17b")),
     "api_key": os.environ.get("OPENROUTER_API_KEY", os.environ.get("OPENAI_API_KEY", "sk-or-v1-xxx")),
     "api_base": os.environ.get("OPENROUTER_BASE_URL", os.environ.get("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")),
     "temperature": 0.5,
@@ -29,4 +29,11 @@ WEKNORA_CONFIG = {
     "knowledge_base_name": os.environ.get("WEKNORA_KB_NAME", ""),
     "agent_name": os.environ.get("WEKNORA_AGENT_NAME", ""),
     "session_id": os.environ.get("WEKNORA_SESSION_ID", "seneschal-session"),
+}
+
+# Brave Search 配置 (联网搜索)
+BRAVE_SEARCH_CONFIG = {
+    "api_key": os.environ.get("BRAVE_API_KEY", ""),
+    "base_url": os.environ.get("BRAVE_SEARCH_BASE_URL", "https://api.search.brave.com/res/v1/web/search"),
+    "max_results": int(os.environ.get("BRAVE_SEARCH_MAX_RESULTS", "5")),
 }

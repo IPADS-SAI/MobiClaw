@@ -127,6 +127,10 @@ Import completed. models=... knowledge_bases=... custom_agents=...
 
 在修改完成后，可以执行备份指令备份配置文件到backup目录下，便于项目修改或者迁移：
 
+记录WeKnora的 **API Key**，后续配置需要使用，API key如下图所示（登录5173端口的前端界面，并注册后获取）
+
+![WeKnora API Key](figs/Weknora_API_key.png)
+
 ```bash
 OUT_DIR=./backup ./scripts/weknora_export.sh
 ```
@@ -147,9 +151,10 @@ uv sync
 cp .env-example .env
 ```
 
- `.env-example` 中的Key字段，需要提前在终端中export：
+ `.env-example` 中的Key字段，需要提前在**终端中export，禁止写在env文件中**：
 - `OPENROUTER_API_KEY`，以sk-or-v1-开头
 - `WEKNORA_API_KEY`（首次初始化可自行填写；该值会导入租户配置，并作为后续访问 WeKnora API 的认证密钥，HTTP 头为 `X-API-Key`）
+- `BRAVE_API_KEY`（Worker 进行联网新闻/网页搜索时必需，需要挂**代理**）
 - `WEKNORA_MODEL_EMBEDDING_API_KEY`，当前使用openrouter提供的服务，因此无需额外指定
 - `MOBIAGENT_CLI_CMD` 中的 `service_ip` / 端口参数（按你的设备环境修改）
 
@@ -167,6 +172,12 @@ export WEKNORA_BASE_URL="http://localhost:8080"
 export WEKNORA_API_KEY="sk-Q-xxx"
 export WEKNORA_SESSION_ID="seneschal-session"
 
+# Brave Search (用于 Worker 联网检索)
+export BRAVE_API_KEY="<your-brave-api-key>"
+# 可选覆盖项
+export BRAVE_SEARCH_BASE_URL="https://api.search.brave.com/res/v1/web/search"
+export BRAVE_SEARCH_MAX_RESULTS="5"
+
 # MobiAgent Gateway
 export MOBIAGENT_GATEWAY_PORT="8081"
 export MOBIAGENT_SERVER_MODE="cli"
@@ -178,6 +189,7 @@ export MOBIAGENT_DATA_DIR="mobiagent_server/data"
 说明：
 - `OPENROUTER_*` 用于 `mobiagent_server` 解析 output_schema（VL 抽取）。
 - `WEKNORA_*` 用于知识库写入与 RAG 分析。
+- `BRAVE_*` 用于 Worker 的联网新闻与网页来源检索。
 - `MOBIAGENT_*` 用于网关联通端侧 MobiAgent CLI。
 
 ---
@@ -199,7 +211,7 @@ python -m mobiagent_server.server
 ### 6.0 一键拉取/部署/启动（含 WeKnora + Demo）
 
 ```bash
-# 在env-example或者终端中export WEKNORA_API_KEY和OPENROUTER_API_KEY后执行下面的脚本
+# 在env-example或者终端中export WEKNORA_API_KEY、OPENROUTER_API_KEY（联网检索场景还需 BRAVE_API_KEY）后执行下面的脚本
 bash ./scripts/bootstrap_one_click.sh
 ```
 
@@ -258,11 +270,50 @@ python app.py --interactive
 python app.py --daily --daily-trigger daily
 ```
 
+### 6.3.1 Agent 任务模式（浏览器 + 本地工具）
+
+该工作流只接收任务描述并交给 Worker Agent 决策，是否调用浏览器/本地工具由 Agent 自行判断。
+联网搜索默认采用 Brave Search：先检索候选来源链接与摘要，再按需抓取网页正文。
+实现见 [seneschal/workflows.py](seneschal/workflows.py)。
+
+```bash
+python app.py --agent-task "帮我查看今天美伊战争的情况总结，并且生成对应的md总结"
+```
+
+如果需要指定输出路径，可提供 `--output`（Agent 会优先遵循）：
+
+```bash
+python app.py --agent-task "帮我查看今天美伊战争的情况总结，并且生成对应的md总结" --output "outputs/summart.md"
+```
+
+Shell 工具默认受白名单限制，若你设置了 `SENESCHAL_SHELL_ALLOWLIST`，请按需加入允许的命令。
+如需限制写文件路径，可设置 `SENESCHAL_FILE_WRITE_ROOT`。
+
+### 6.4 启动 Seneschal Gateway（OpenClaw Core 入口）
+
+网关用于接收任务并交给 Steward Agent 处理，支持同步和异步任务查询。
+
+```bash
+python -m seneschal.gateway_server
+```
+
+默认监听：`http://0.0.0.0:8090`
+
+可选环境变量：
+- `SENESCHAL_GATEWAY_PORT`：自定义端口（默认 `8090`）
+- `SENESCHAL_GATEWAY_API_KEY`：网关鉴权（Bearer token）
+
+也可以直接运行示例脚本（无需手动启动gateway_server服务）：
+
+```bash
+bash ./scripts/run_gateway_demo.sh
+```
+
 ---
 
 ## 7. 请求示例（网关）
 
-### 7.1 Collect
+### 7.1 MobiAgent Server：Collect
 
 为支持完整任务执行的场景。
 
@@ -273,7 +324,7 @@ curl -X POST http://localhost:8081/api/v1/collect \
   -d '{"task":"获取微信聊天列表前5条摘要"}'
 ```
 
-### 7.2 Action + output_schema
+### 7.2 MobiAgent Server：Action + output_schema
 
 为支持特定操作、单步操作场景预留接口和请求格式。
 ```bash
@@ -297,6 +348,35 @@ curl -X POST http://localhost:8081/api/v1/action \
   }'
 ```
 
+### 7.3 Seneschal Gateway Task
+
+用于触发 OpenClaw Core（Steward Agent）任务。
+
+```bash
+curl -X POST http://localhost:8090/api/v1/task \
+  -H "Content-Type: application/json" \
+  -d '{"task":"整理今日待办并给出简要总结","async_mode":false}'
+```
+
+异步任务：
+
+```bash
+curl -X POST http://localhost:8090/api/v1/task \
+  -H "Content-Type: application/json" \
+  -d '{"task":"检索近期会议安排并总结","async_mode":true}'
+
+curl http://localhost:8090/api/v1/jobs/<job_id>
+```
+
+如果启用鉴权：
+
+```bash
+curl -X POST http://localhost:8090/api/v1/task \
+  -H "Authorization: Bearer <SENESCHAL_GATEWAY_API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"task":"给出今天的提醒事项","async_mode":false}'
+```
+
 ---
 
 ## 8. 常见问题
@@ -306,6 +386,18 @@ A: 修改填写对应的模型、API配置后，一键导入[修改并导入 WeK
 
 **Q2: MobiAgent CLI 运行很慢、指令执行错误怎么办？**  
 A: 可先把 `MOBIAGENT_SERVER_MODE=mock`，等模型与设备调试就绪后再切回 `cli`。
+
+---
+
+## 模块说明（MobiClaw Core）
+
+- `seneschal/agents.py`：核心 Steward/Worker Agent，含任务编排、工具注册、A2A 委派。
+- `seneschal/tools/`：工具层封装（MobiAgent/WeKnora/Web/Shell）。
+- `seneschal/gateway_server.py`：OpenClaw Core 的常驻网关入口（HTTP 任务接收）。
+- `mobiagent_server/`：手机端操作网关（collect/action），支持 mock / proxy / cli。
+- `seneschal/workflows.py`：演示与交互式流程入口。
+- `app.py`：主入口（加载 .env，运行 workflows）。
+- `scripts/run_gateway_demo.sh`：网关示例脚本，快速验证任务链路。
 
 
 ---
