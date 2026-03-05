@@ -8,8 +8,10 @@ from pathlib import Path
 import json
 from typing import Any
 
+from agentscope.message import Msg
 from agentscope.tool import ToolResponse
 
+from ..agents import create_worker_agent
 from ..run_context import RunContext, create_run_context
 from ..tools import call_mobi_collect, weknora_add_knowledge, weknora_rag_chat
 
@@ -62,9 +64,42 @@ async def run_daily_tasks(
     ctx.log_event("task_selection", {"trigger": trigger, "task_count": len(tasks)})
 
     collected: list[dict[str, Any]] = []
+    collect_count = 0
     for task in tasks:
         task_id = task.get("task_id", "unknown")
         prompt = build_task_prompt(task)
+        task_type = (task.get("task_type") or "collect").strip().lower()
+
+        if task_type == "agent_task":
+            ctx.log_event("agent_task_start", {"task_id": task_id, "prompt": prompt})
+            worker = create_worker_agent()
+            output_path = (task.get("output_path") or "").strip() or None
+            msg_content = prompt or ""
+            if output_path:
+                msg_content += (
+                    "\n\n输出文件路径: "
+                    + output_path
+                    + "\n如需落盘，请自行选择合适工具完成。"
+                )
+            response = await worker(Msg(name="User", content=msg_content, role="user"))
+            text_content = response.get_text_content() if response else ""
+            collected.append(
+                {
+                    "task_id": task_id,
+                    "prompt": prompt,
+                    "content": text_content,
+                    "metadata": {
+                        "run_id": ctx.run_id,
+                        "task_id": task_id,
+                        "task_type": task_type,
+                        "trigger": trigger,
+                        "timestamp": _utc_now_iso(),
+                    },
+                }
+            )
+            ctx.log_event("agent_task_done", {"task_id": task_id})
+            continue
+
         ctx.log_event("collect_start", {"task_id": task_id, "prompt": prompt})
         response = await call_mobi_collect(prompt)
         text_content = tool_response_to_text(response)
@@ -85,6 +120,8 @@ async def run_daily_tasks(
             metadata=metadata,
         )
 
+        collect_count += 1
+
         collected.append(
             {
                 "task_id": task_id,
@@ -95,14 +132,16 @@ async def run_daily_tasks(
         )
         ctx.log_event("collect_done", {"task_id": task_id})
 
-    analysis_query = (
-        "请基于近期新增记录进行总结，输出："
-        "1) 摘要 2) 待办 3) 风险提醒 4) 建议行动。"
-        f"本次 run_id={ctx.run_id}。"
-    )
-    ctx.log_event("analyze_start", {"query": analysis_query})
-    analysis = weknora_rag_chat(analysis_query)
-    ctx.log_event("analyze_done", {"summary": tool_response_to_text(analysis)})
+    analysis = None
+    if collect_count:
+        analysis_query = (
+            "请基于近期新增记录进行总结，输出："
+            "1) 摘要 2) 待办 3) 风险提醒 4) 建议行动。"
+            f"本次 run_id={ctx.run_id}。"
+        )
+        ctx.log_event("analyze_start", {"query": analysis_query})
+        analysis = weknora_rag_chat(analysis_query)
+        ctx.log_event("analyze_done", {"summary": tool_response_to_text(analysis)})
 
     return {
         "run_id": ctx.run_id,

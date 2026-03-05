@@ -128,7 +128,17 @@ async def run_agent_task(task: str, output_path: str | None = None) -> None:
         response = await worker(msg)
         print("-" * 70)
         print("[Worker 回复]:")
-        print(response.get_text_content() if response else "（无回复）")
+        text = response.get_text_content() if response else ""
+        if not text and response is not None:
+            parts = []
+            for block in response.content or []:
+                block_text = getattr(block, "text", "")
+                if block_text:
+                    parts.append(block_text)
+            text = "\n".join(parts).strip()
+        if not text:
+            text = "（无文本回复，可能是空工具调用）"
+        print(text)
         print("-" * 70)
     except Exception as e:
         print(f"[错误] Agent 执行出错: {e}")
