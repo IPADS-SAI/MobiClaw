@@ -15,6 +15,7 @@ weknora = importlib.import_module("seneschal.tools.weknora")
 shell = importlib.import_module("seneschal.tools.shell")
 file_tools = importlib.import_module("seneschal.tools.file")
 web = importlib.import_module("seneschal.tools.web")
+papers = importlib.import_module("seneschal.tools.papers")
 
 call_mobi_action = mobi.call_mobi_action
 call_mobi_collect = mobi.call_mobi_collect
@@ -28,6 +29,10 @@ fetch_url_text = web.fetch_url_text
 fetch_url_readable_text = web.fetch_url_readable_text
 fetch_url_links = web.fetch_url_links
 brave_search = web.brave_search
+arxiv_search = papers.arxiv_search
+dblp_conference_search = papers.dblp_conference_search
+download_file = papers.download_file
+extract_pdf_text = papers.extract_pdf_text
 
 __all__ = [
     "call_mobi_action",
@@ -42,4 +47,8 @@ __all__ = [
     "fetch_url_readable_text",
     "fetch_url_links",
     "brave_search",
+    "arxiv_search",
+    "dblp_conference_search",
+    "download_file",
+    "extract_pdf_text",
 ]

@@ -12,9 +12,13 @@ from agentscope.tool import Toolkit, ToolResponse
 
 from .config import MODEL_CONFIG
 from .tools import (
+    arxiv_search,
     brave_search,
     call_mobi_action,
     call_mobi_collect,
+    dblp_conference_search,
+    download_file,
+    extract_pdf_text,
     fetch_url_links,
     fetch_url_readable_text,
     fetch_url_text,
@@ -57,6 +61,16 @@ def create_worker_agent() -> ReActAgent:
     )
 
     toolkit.register_tool_function(
+        arxiv_search,
+        func_description="查询 arXiv API 获取论文元数据、摘要与 PDF 链接。",
+    )
+
+    toolkit.register_tool_function(
+        dblp_conference_search,
+        func_description="检索会议论文清单与链接（DBLP），用于按年份与关键词筛选。",
+    )
+
+    toolkit.register_tool_function(
         fetch_url_text,
         func_description="抓取指定 URL 的文本内容用于快速检索。",
     )
@@ -69,6 +83,16 @@ def create_worker_agent() -> ReActAgent:
     toolkit.register_tool_function(
         fetch_url_links,
         func_description="抓取网页并提取链接，用于发现相关来源并继续检索。",
+    )
+
+    toolkit.register_tool_function(
+        download_file,
+        func_description="下载 URL 文件到本地路径（支持二进制，例如 PDF）。",
+    )
+
+    toolkit.register_tool_function(
+        extract_pdf_text,
+        func_description="从本地 PDF 文件中提取文本内容。",
     )
 
     toolkit.register_tool_function(
@@ -86,10 +110,15 @@ def create_worker_agent() -> ReActAgent:
 - 只聚焦当前任务，给出简明直接的结果。
 - 必要时使用工具检索或执行本地命令。
 - 如果需要联网搜索新闻或网页来源，优先使用 brave_search 获取候选链接与摘要。
+- 如果检索学术论文，优先使用 arxiv_search 获取元数据与 PDF 链接。
+- 如果检索会议论文，优先使用 dblp_conference_search 获取论文清单与链接，然后去arxiv上搜索对应的论文。
 - 如果任务中有今天，明天等相对日期的描述，你可以通过shell中的date命令，获取具体的日期。
 - 拿到候选链接后，优先使用 fetch_url_readable_text 抓取正文；需要原始 HTML 时再使用 fetch_url_text。
 - 需要从网页中发现相关链接时使用 fetch_url_links，再逐条抓取与筛选。
+- 需要下载论文或附件时使用 download_file；阅读 PDF 用 extract_pdf_text。
 - 需要输出文件时，可用 write_text_file 落盘。
+- 输出格式遵循用户要求；未指定时默认使用 Markdown。
+- 必须输出最终文本结论或可执行结果；不要输出空的工具调用。
 - 不做多步长对话，输出最终结论或可执行结果。
 """
 
@@ -100,7 +129,7 @@ def create_worker_agent() -> ReActAgent:
         formatter=OpenAIChatFormatter(),
         toolkit=toolkit,
         memory=InMemoryMemory(),
-        max_iters=6,
+        max_iters=20,
     )
 
 

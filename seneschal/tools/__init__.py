@@ -15,6 +15,7 @@ import requests
 
 from .mobi import call_mobi_action, call_mobi_collect
 from .file import write_text_file
+from .papers import arxiv_search, dblp_conference_search, download_file, extract_pdf_text
 from .shell import run_shell_command
 from .web import brave_search, fetch_url_links, fetch_url_readable_text, fetch_url_text
 from .weknora import (
@@ -469,6 +470,10 @@ __all__ = [
     "fetch_url_links",
     "brave_search",
     "write_text_file",
+    "arxiv_search",
+    "dblp_conference_search",
+    "download_file",
+    "extract_pdf_text",
     "knowledge_chat",
     "agent_chat",
     "knowledge_search",
