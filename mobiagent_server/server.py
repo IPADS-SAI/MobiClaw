@@ -16,10 +16,12 @@ import httpx
 import json
 import time
 import uuid
+import sys
 from pathlib import Path
 import subprocess
 import base64
 import re
+import xml.etree.ElementTree as ET
 from fastapi import FastAPI, HTTPException, Header, status
 from pydantic import BaseModel, Field
 
@@ -36,6 +38,7 @@ class GatewayConfig:
     queue_dir: Path
     result_dir: Path
     cli_cmd_template: str | None
+    cli_workdir: Path | None
     cli_task_dir: Path
     cli_data_dir: Path
     vl_base_url: str | None
@@ -46,7 +49,7 @@ class GatewayConfig:
 
 def load_config() -> GatewayConfig:
     return GatewayConfig(
-        mode=os.environ.get("MOBIAGENT_SERVER_MODE", "mock"),
+        mode=os.environ.get("MOBIAGENT_SERVER_MODE", "cli"),
         api_key=os.environ.get("MOBI_AGENT_API_KEY", ""),
         collect_url=os.environ.get("MOBIAGENT_COLLECT_URL"),
         action_url=os.environ.get("MOBIAGENT_ACTION_URL"),
@@ -54,6 +57,7 @@ def load_config() -> GatewayConfig:
         queue_dir=Path(os.environ.get("MOBIAGENT_QUEUE_DIR", "mobiagent_server/queue")),
         result_dir=Path(os.environ.get("MOBIAGENT_RESULT_DIR", "mobiagent_server/results")),
         cli_cmd_template=os.environ.get("MOBIAGENT_CLI_CMD"),
+        cli_workdir=Path(os.environ["MOBIAGENT_CLI_WORKDIR"]).expanduser() if os.environ.get("MOBIAGENT_CLI_WORKDIR") else None,
         cli_task_dir=Path(os.environ.get("MOBIAGENT_TASK_DIR", "mobiagent_server/tasks")),
         cli_data_dir=Path(os.environ.get("MOBIAGENT_DATA_DIR", "mobiagent_server/data")),
         vl_base_url=os.environ.get("OPENROUTER_BASE_URL", os.environ.get("OPENAI_BASE_URL")),
@@ -193,13 +197,18 @@ def _write_task_file(cfg: GatewayConfig, task: str, output_schema: dict[str, Any
     task_id = uuid.uuid4().hex
     task_path = cfg.cli_task_dir / f"{task_id}.json"
     data_dir = cfg.cli_data_dir / f"run-{task_id}"
-    payload: dict[str, Any] = {
-        "version": "v1",
-        "task_id": task_id,
-        "task": task,
-    }
-    if output_schema:
-        payload["output_schema"] = output_schema
+    cmd_template = cfg.cli_cmd_template or ""
+    if "runner.mobiagent.mobiagent" in cmd_template:
+        # The legacy MobiAgent single-task CLI expects task_file to be a JSON list.
+        payload: Any = [task]
+    else:
+        payload = {
+            "version": "v1",
+            "task_id": task_id,
+            "task": task,
+        }
+        if output_schema:
+            payload["output_schema"] = output_schema
     task_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return task_path, data_dir
 
@@ -231,6 +240,200 @@ def _find_latest_image(data_dir: Path) -> Path | None:
 def _image_to_b64(path: Path) -> str:
     data = path.read_bytes()
     return base64.b64encode(data).decode("ascii")
+
+
+def _resolve_effective_data_dir(data_dir: Path) -> Path:
+    # Prefer directory that directly contains MobiAgent artifacts.
+    if (data_dir / "actions.json").exists() or (data_dir / "react.json").exists():
+        return data_dir
+    if not data_dir.exists():
+        return data_dir
+    children = [p for p in data_dir.iterdir() if p.is_dir()]
+    if len(children) == 1:
+        child = children[0]
+        if (child / "actions.json").exists() or (child / "react.json").exists():
+            return child
+    return data_dir
+
+
+def _scan_step_files(data_dir: Path) -> list[dict[str, Any]]:
+    steps: list[dict[str, Any]] = []
+    pattern = re.compile(r"^(\d+)$")
+    image_paths = sorted(
+        [p for p in data_dir.glob("*.jpg") if pattern.match(p.stem)],
+        key=lambda p: int(p.stem),
+    )
+    for image_path in image_paths:
+        step_idx = int(image_path.stem)
+        hierarchy_path = None
+        for ext in ("xml", "json"):
+            candidate = data_dir / f"{step_idx}.{ext}"
+            if candidate.exists():
+                hierarchy_path = candidate
+                break
+        overlays: dict[str, str] = {}
+        for suffix in ("_highlighted.jpg", "_bounds.jpg", "_click_point.jpg", "_swipe.jpg"):
+            overlay = data_dir / f"{step_idx}{suffix}"
+            if overlay.exists():
+                overlays[suffix.strip("_.jpg")] = overlay.as_posix()
+        steps.append(
+            {
+                "step_index": step_idx,
+                "image_path": image_path.as_posix(),
+                "hierarchy_path": hierarchy_path.as_posix() if hierarchy_path else "",
+                "overlays": overlays,
+            }
+        )
+    return steps
+
+
+def _extract_text_from_xml(path: Path) -> str:
+    try:
+        root = ET.fromstring(path.read_text(encoding="utf-8", errors="ignore"))
+    except Exception:
+        return ""
+    texts: list[str] = []
+    for node in root.iter():
+        for key in ("text", "content-desc", "content_desc", "label", "name"):
+            value = node.attrib.get(key)
+            if value:
+                texts.append(value.strip())
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for item in texts:
+        if item and item not in seen:
+            seen.add(item)
+            deduped.append(item)
+    return "\n".join(deduped)
+
+
+def _collect_execution_ocr(steps: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
+    by_step: list[dict[str, Any]] = []
+    full_text_parts: list[str] = []
+    for step in steps:
+        hierarchy_path = step.get("hierarchy_path") or ""
+        text = ""
+        source = ""
+        if hierarchy_path.endswith(".xml"):
+            text = _extract_text_from_xml(Path(hierarchy_path))
+            source = "hierarchy_xml"
+        if text:
+            full_text_parts.append(f"[step {step['step_index']}]\n{text}")
+        by_step.append(
+            {
+                "step_index": step["step_index"],
+                "text": text,
+                "source": source,
+            }
+        )
+    return by_step, "\n\n".join([t for t in full_text_parts if t]).strip()
+
+
+def _status_hint_from_history(actions_obj: Any, reacts_obj: Any) -> str:
+    try:
+        if isinstance(actions_obj, dict):
+            actions = actions_obj.get("actions", [])
+            if actions and isinstance(actions[-1], dict) and actions[-1].get("type") == "done":
+                if actions[-1].get("status") == "success":
+                    return "completed"
+                return "ended_with_done_non_success"
+        if isinstance(reacts_obj, list) and reacts_obj:
+            last = reacts_obj[-1]
+            fn_name = (((last or {}).get("function") or {}).get("name") or "").lower()
+            if fn_name == "done":
+                status = (((last or {}).get("function") or {}).get("parameters") or {}).get("status")
+                return "completed" if status == "success" else "ended_with_done_non_success"
+    except Exception:
+        pass
+    return "incomplete_or_unknown"
+
+
+def _build_execution_result(task: str, data_dir: Path, cli_status: str) -> dict[str, Any]:
+    actions_obj = _load_json_safe(data_dir / "actions.json")
+    reacts_obj = _load_json_safe(data_dir / "react.json")
+    steps = _scan_step_files(data_dir)
+    ocr_by_step, ocr_full = _collect_execution_ocr(steps)
+
+    reasonings: list[str] = []
+    if isinstance(reacts_obj, list):
+        for item in reacts_obj:
+            if isinstance(item, dict):
+                reasoning = item.get("reasoning")
+                if isinstance(reasoning, str) and reasoning.strip():
+                    reasonings.append(reasoning.strip())
+
+    images = [s["image_path"] for s in steps if s.get("image_path")]
+    hierarchies = [s["hierarchy_path"] for s in steps if s.get("hierarchy_path")]
+    overlay_paths: list[str] = []
+    for step in steps:
+        for path in (step.get("overlays") or {}).values():
+            overlay_paths.append(path)
+
+    action_count = 0
+    last_action = ""
+    task_description = task
+    if isinstance(actions_obj, dict):
+        action_list = actions_obj.get("actions", [])
+        if isinstance(action_list, list):
+            action_count = len(action_list)
+            if action_list and isinstance(action_list[-1], dict):
+                last_action = str(action_list[-1].get("type") or "")
+        task_description = str(actions_obj.get("task_description") or task)
+
+    status_hint = _status_hint_from_history(actions_obj, reacts_obj)
+    result = {
+        "schema_version": "mobi_exec_v1",
+        "run_dir": data_dir.as_posix(),
+        "task_description": task_description,
+        "raw_cli_status": cli_status,
+        "summary": {
+            "step_count": len(steps),
+            "action_count": action_count,
+            "last_action": last_action,
+            "status_hint": status_hint,
+            "final_screenshot_path": images[-1] if images else "",
+        },
+        "artifacts": {
+            "steps": steps,
+            "images": images,
+            "hierarchies": hierarchies,
+            "overlays": overlay_paths,
+        },
+        "history": {
+            "actions": actions_obj if actions_obj is not None else {},
+            "reacts": reacts_obj if reacts_obj is not None else [],
+            "reasonings": reasonings,
+        },
+        "ocr": {
+            "source": "hierarchy_xml",
+            "by_step": ocr_by_step,
+            "full_text": ocr_full,
+        },
+    }
+    index_file = data_dir / "execution_result.json"
+    index_file.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    result["index_file"] = index_file.as_posix()
+    return result
+
+
+def _render_cli_cmd(template: str, task_path: Path, data_dir: Path) -> str:
+    # Support both {task_file}/{data_dir} and <ENV_VAR> placeholders.
+    cmd = template.format(task_file=task_path.as_posix(), data_dir=data_dir.as_posix())
+
+    def _replace_env_var(match: re.Match[str]) -> str:
+        name = match.group(1)
+        value = os.environ.get(name)
+        if value is None or value == "":
+            raise HTTPException(status_code=500, detail=f"Missing env var for CLI cmd placeholder: {name}")
+        return value
+
+    cmd = re.sub(r"<([A-Z0-9_]+)>", _replace_env_var, cmd)
+    stripped = cmd.lstrip()
+    if stripped.startswith("python "):
+        cmd = cmd.replace("python ", f"{sys.executable} ", 1)
+    elif stripped.startswith("python3 "):
+        cmd = cmd.replace("python3 ", f"{sys.executable} ", 1)
+    return cmd
 
 
 async def _call_vl_model(cfg: GatewayConfig, prompt: str, image_b64: str) -> str | None:
@@ -309,7 +512,13 @@ def _run_cli_job(cfg: GatewayConfig, task: str, output_schema: dict[str, Any] | 
     if not cfg.cli_cmd_template:
         raise HTTPException(status_code=500, detail="MOBIAGENT_CLI_CMD not configured")
     task_path, data_dir = _write_task_file(cfg, task, output_schema)
-    cmd = cfg.cli_cmd_template.format(task_file=task_path.as_posix(), data_dir=data_dir.as_posix())
+    task_path_abs = task_path.resolve()
+    data_dir_abs = data_dir.resolve()
+    cmd = _render_cli_cmd(cfg.cli_cmd_template, task_path_abs, data_dir_abs)
+    workdir: Path | None = cfg.cli_workdir
+    if workdir is None and " -m runner." in cmd and Path("MobiAgent").exists():
+        # MobiAgent CLI frequently uses module path "runner.*" from project subdir.
+        workdir = Path("MobiAgent")
     try:
         proc = subprocess.run(
             cmd,
@@ -318,6 +527,7 @@ def _run_cli_job(cfg: GatewayConfig, task: str, output_schema: dict[str, Any] | 
             timeout=timeout_s,
             capture_output=True,
             text=True,
+            cwd=workdir.as_posix() if workdir else None,
         )
     except subprocess.TimeoutExpired as exc:
         return {
@@ -329,14 +539,18 @@ def _run_cli_job(cfg: GatewayConfig, task: str, output_schema: dict[str, Any] | 
         }
 
     status = "ok" if proc.returncode == 0 else "failed"
-    return {
+    effective_data_dir = _resolve_effective_data_dir(data_dir_abs)
+    result = {
         "status": status,
         "returncode": proc.returncode,
-        "task_file": task_path.as_posix(),
-        "data_dir": data_dir.as_posix(),
+        "task_file": task_path_abs.as_posix(),
+        "data_dir": effective_data_dir.as_posix(),
         "stdout": proc.stdout[-4000:] if proc.stdout else "",
         "stderr": proc.stderr[-4000:] if proc.stderr else "",
     }
+    if status == "ok" and effective_data_dir.exists():
+        result["execution"] = _build_execution_result(task, effective_data_dir, status)
+    return result
 
 
 @app.post("/api/v1/collect", response_model=GatewayResponse)
