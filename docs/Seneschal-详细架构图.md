@@ -1,126 +1,121 @@
-# Seneschal 新版详细架构图
+# Seneschal 详细架构图
 
-本文档提供一份“可直接放入 README 的详细架构图”，用于展示当前项目在**入口层、编排层、工具层、执行层、知识层**的关系，以及关键链路时序。
-
----
-
-## 1. 分层组件图（Detailed Layered Architecture）
+## 1. 分层组件图
 
 ```mermaid
 flowchart TB
     subgraph Entry[入口层]
-      U[用户 / Cron / CLI]
+      U[用户 / Cron / 外部系统]
       APP[app.py]
       U --> APP
     end
 
-    subgraph Orchestrator[编排层 Seneschal]
-      WF[workflows.py\nrun_demo / interactive / daily / worker]
-      AG[agents.py\nSteward(ReActAgent)]
-      DT[dailytasks executor\ntrigger -> task list]
-      RC[run_context.py\nrun_id + jsonl logs]
+    subgraph Orchestrator[编排层 seneschal]
+      WF[workflows.py\nDemo / Interactive / Daily / AgentTask]
+      AG[agents.py\ncreate_steward_agent / create_worker_agent]
+      RC[run_context.py\nrun_id + jsonl 事件日志]
       APP --> WF --> AG
-      WF --> DT
       WF --> RC
-      DT --> RC
+    end
+
+    subgraph Tasking[任务层]
+      DR[dailytasks/runner.py]
+      TJ[tasks/tasks.json]
+      WF --> DR
+      DR --> TJ
     end
 
     subgraph Tools[工具层 seneschal/tools]
-      MCollect[call_mobi_collect]
-      MAction[call_mobi_action]
-      WKAdd[weknora_add_knowledge]
-      WKChat[weknora_rag_chat]
-      AG --> MCollect
-      AG --> MAction
-      AG --> WKAdd
-      AG --> WKChat
-      DT --> MCollect
-      DT --> WKAdd
-      DT --> WKChat
+      M1[call_mobi_collect]
+      M2[call_mobi_collect_verified]
+      M3[call_mobi_action]
+      W1[weknora_add_knowledge]
+      W2[weknora_rag_chat]
+      W3[weknora_knowledge_search]
+      O1[brave/arxiv/dblp/web/file/shell]
+
+      AG --> M1
+      AG --> M2
+      AG --> M3
+      AG --> W1
+      AG --> W2
+      AG --> W3
+      AG --> O1
+      DR --> M1
+      DR --> W1
+      DR --> W2
     end
 
-    subgraph Gateway[执行适配层 mobiagent_server]
-      API[FastAPI\n/api/v1/collect\n/api/v1/action\n/api/v1/jobs/*]
-      MODE[Backend Mode\nmock / proxy / task_queue / cli]
-      SCHEMA[output_schema parser\nOPENROUTER/OpenAI]
-      QUEUE[queue/result/data dirs]
-      MCollect --> API
-      MAction --> API
-      API --> MODE
-      MODE --> SCHEMA
-      MODE --> QUEUE
+    subgraph DeviceGateway[mobiagent_server]
+      GAPI[FastAPI\n/api/v1/collect\n/api/v1/action\n/api/v1/jobs/*]
+      GMODE[mode: mock/proxy/task_queue/cli]
+      GCLI[CLI artifact indexing\nexecution_result.json + OCR]
+      GSCHEMA[output_schema VLM extract]
+      M1 --> GAPI
+      M2 --> GAPI
+      M3 --> GAPI
+      GAPI --> GMODE --> GCLI
+      GCLI --> GSCHEMA
     end
 
-    subgraph DeviceExec[设备执行层]
-      MA[MobiAgent CLI]
-      ALT[可替换 GUI Agent\n(UI-TARS/自定义执行器)]
-      MODE --> MA
-      MODE --> ALT
+    subgraph Knowledge[WeKnora]
+      WKAPI[Knowledge/Session/Agent API]
+      WKCHAT[SSE chat streaming]
+      WKENG[AgentEngine + tools]
+      WKDB[(PG/ParadeDB)]
+      WKREDIS[(Redis)]
+      WKDOC[DocReader]
+      W1 --> WKAPI
+      W2 --> WKCHAT
+      W3 --> WKAPI
+      WKAPI --> WKDB
+      WKAPI --> WKREDIS
+      WKAPI --> WKDOC
+      WKCHAT --> WKENG
     end
 
-    subgraph Knowledge[知识底座层 WeKnora]
-      WKAPI[API Router/Handlers/Services]
-      CHAT[SessionChat/AgentChat\nSSE Streaming]
-      RET[Retriever Registry\nPostgres/ES/Qdrant]
-      DOC[DocReader gRPC\nparse/split/OCR]
-      ENG[Agent Engine\nMCP + WebSearch]
-      PG[(PostgreSQL/ParadeDB)]
-      RD[(Redis)]
-      OBJ[(MinIO/COS/Local)]
-
-      WKAdd --> WKAPI
-      WKChat --> CHAT
-      WKAPI --> PG
-      WKAPI --> RD
-      WKAPI --> DOC --> OBJ
-      CHAT --> RET --> PG
-      CHAT --> ENG
-      ENG --> RET
+    subgraph ExternalGate[seneschal.gateway_server]
+      SGW[/api/v1/task + /api/v1/jobs/{id}/]
+      SGW --> AG
     end
 ```
 
----
-
-## 2. 核心闭环时序图（Collect -> Store -> Analyze -> Execute）
+## 2. 关键时序（Steward 主流程）
 
 ```mermaid
 sequenceDiagram
-    participant User as User/Trigger
-    participant WF as workflows.py
-    participant Agent as Steward Agent
-    participant MTool as mobi tools
-    participant WTool as weknora tools
+    participant User as User
+    participant Steward as Steward Agent
+    participant MobiTool as mobi tools
+    participant WekTool as weknora tools
     participant MG as mobiagent_server
-    participant WK as WeKnora API
+    participant WK as WeKnora
 
-    User->>WF: 提交任务/触发 daily
-    WF->>Agent: 组装上下文并发起推理
+    User->>Steward: 提交任务
+    Steward->>MobiTool: call_mobi_collect_with_retry_report
+    MobiTool->>MG: POST /api/v1/collect
+    MG-->>MobiTool: 执行证据（截图/OCR/历史）
 
-    Agent->>MTool: call_mobi_collect(prompt)
-    MTool->>MG: POST /api/v1/collect
-    MG-->>MTool: collect_result
+    Steward->>WekTool: weknora_add_knowledge
+    WekTool->>WK: create knowledge
+    WK-->>WekTool: knowledge_id
 
-    Agent->>WTool: weknora_add_knowledge(content)
-    WTool->>WK: create_knowledge_manual
-    WK-->>WTool: knowledge_id
+    Steward->>WekTool: weknora_rag_chat
+    WekTool->>WK: session/agent chat
+    WK-->>WekTool: answer + references
 
-    Agent->>WTool: weknora_rag_chat(query)
-    WTool->>WK: POST /agent-chat or /knowledge-chat
-    WK-->>WTool: SSE answer + references
-
-    alt 需要执行动作
-      Agent->>MTool: call_mobi_action(action)
-      MTool->>MG: POST /api/v1/action
-      MG-->>MTool: action_result
+    opt 需要执行动作
+      Steward->>MobiTool: call_mobi_action
+      MobiTool->>MG: POST /api/v1/action
+      MG-->>MobiTool: action result / parsed_output
     end
 
-    Agent-->>WF: 最终总结/执行回执
-    WF-->>User: 输出结果 + 日志(run_id)
+    Steward-->>User: 总结 + 执行结果
 ```
 
----
+## 3. 关键设计点
 
-## 3. 说明
-
-- 与旧版 1 页图相比，新版图增加了：`run_context`、`daily executor`、`output_schema parser`、`SSE/AgentEngine` 等关键节点。
-- 建议在 README 中保留该图的链接，便于开发者快速定位“编排职责”和“执行/知识职责”边界。
+- Seneschal 只做编排，不直接实现知识库和端侧执行引擎。
+- mobiagent_server 在 CLI 模式下会生成结构化执行产物（含 OCR 和 action/react 历史）。
+- Daily 任务不是通过 Steward 执行，而是 `runner.py` 直接串联工具。
+- `--agent-task` 使用 Worker Agent，不经过 Steward。
