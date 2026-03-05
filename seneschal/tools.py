@@ -19,6 +19,7 @@ papers = importlib.import_module("seneschal.tools.papers")
 
 call_mobi_action = mobi.call_mobi_action
 call_mobi_collect = mobi.call_mobi_collect
+call_mobi_collect_verified = mobi.call_mobi_collect_verified
 weknora_add_knowledge = weknora.weknora_add_knowledge
 weknora_knowledge_search = weknora.weknora_knowledge_search
 weknora_list_knowledge_bases = weknora.weknora_list_knowledge_bases
@@ -37,6 +38,7 @@ extract_pdf_text = papers.extract_pdf_text
 __all__ = [
     "call_mobi_action",
     "call_mobi_collect",
+    "call_mobi_collect_verified",
     "weknora_add_knowledge",
     "weknora_knowledge_search",
     "weknora_list_knowledge_bases",
