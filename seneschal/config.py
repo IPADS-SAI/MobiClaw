@@ -37,3 +37,15 @@ BRAVE_SEARCH_CONFIG = {
     "base_url": os.environ.get("BRAVE_SEARCH_BASE_URL", "https://api.search.brave.com/res/v1/web/search"),
     "max_results": int(os.environ.get("BRAVE_SEARCH_MAX_RESULTS", "5")),
 }
+
+# Multi-agent routing configuration
+ROUTING_CONFIG = {
+    "default_mode": os.environ.get("SENESCHAL_ROUTING_DEFAULT_MODE", "router").strip().lower() or "router",
+    "strategy": os.environ.get("SENESCHAL_ROUTING_STRATEGY", "llm_rule_hybrid").strip().lower() or "llm_rule_hybrid",
+    "allow_legacy_mode": os.environ.get("SENESCHAL_ALLOW_LEGACY_MODE", "1").strip() not in {"0", "false", "False"},
+    "max_subtasks": max(1, int(os.environ.get("SENESCHAL_ROUTING_MAX_SUBTASKS", "4"))),
+    "max_routing_depth": max(1, int(os.environ.get("SENESCHAL_ROUTING_MAX_DEPTH", "2"))),
+    "router_timeout_s": max(1.0, float(os.environ.get("SENESCHAL_ROUTER_TIMEOUT_S", "60"))),
+    "planner_timeout_s": max(1.0, float(os.environ.get("SENESCHAL_PLANNER_TIMEOUT_S", "60"))),
+    "subtask_timeout_s": max(5.0, float(os.environ.get("SENESCHAL_SUBTASK_TIMEOUT_S", "300"))),
+}

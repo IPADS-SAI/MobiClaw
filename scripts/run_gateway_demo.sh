@@ -30,18 +30,18 @@ trap cleanup EXIT
 
 sleep 2
 
-echo "[1/3] Sync task"
+echo "[1/3] Sync task (intelligent routing)"
 curl -sS -X POST "${GATEWAY_URL}/api/v1/task" \
   -H "Content-Type: application/json" \
   "${AUTH_HEADER[@]}" \
-  -d '{"task":"获取今日待办，并给出简要总结","async_mode":false}'
+  -d '{"task":"请先整理今日待办，再补充联网检索相关背景并给出行动建议","async_mode":false,"mode":"router"}'
 
 echo
 echo "[2/3] Async task submit"
 ASYNC_RESP="$(curl -sS -X POST "${GATEWAY_URL}/api/v1/task" \
   -H "Content-Type: application/json" \
   "${AUTH_HEADER[@]}" \
-  -d '{"task":"请总结今天的任务并输出关键行动建议","async_mode":true}')"
+  -d '{"task":"先基于手机侧信息提炼重点，再联网补充三条可执行建议，最后输出 markdown","async_mode":true,"mode":"router"}')"
 echo "${ASYNC_RESP}"
 
 JOB_ID="$(printf '%s' "${ASYNC_RESP}" | python -c 'import sys, json; print((json.load(sys.stdin).get("job_id") or "").strip())')"
@@ -57,6 +57,8 @@ for _ in {1..20}; do
   STATUS="$(printf '%s' "${JOB_RESP}" | python -c 'import sys, json; print((json.load(sys.stdin).get("status") or "").strip())')"
   echo "status=${STATUS}"
   if [[ "${STATUS}" == "completed" || "${STATUS}" == "failed" ]]; then
+    echo "routing_trace summary:"
+    printf '%s' "${JOB_RESP}" | python -c 'import sys, json; d=json.load(sys.stdin); t=((d.get("result") or {}).get("routing_trace") or {}); print(json.dumps({"decision":t.get("decision"),"plan_source":t.get("plan_source")}, ensure_ascii=False))'
     echo "${JOB_RESP}"
     break
   fi

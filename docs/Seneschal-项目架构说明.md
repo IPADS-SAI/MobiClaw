@@ -97,10 +97,17 @@ flowchart TD
 - `app.py`
   - 启动时读取根目录 `.env`（仅补充未设置的环境变量）
   - 调用 `seneschal.workflows.main()`
-- `workflows.py` 支持 3 种模式：
+- `workflows.py` 支持 4 类入口：
   - 默认：演示对话
   - `--interactive`：交互式会话
   - `--daily`：按 trigger 执行日常任务采集
+  - `--agent-task`：智能路由多智能体编排（Router + Planner + Executor）
+
+其中 `--agent-task` 与 Gateway `/api/v1/task` 共享同一编排层：
+- Router：决定任务优先交给 `Steward` 还是 `Worker`
+- Planner：复合任务拆分为阶段子任务（可并行）
+- Executor：按阶段调度多个 Agent 并聚合结果
+- 兼容：仍保留 `mode=worker/steward/auto` 的 legacy 强制模式
 
 ### 4.2 Agent 层
 

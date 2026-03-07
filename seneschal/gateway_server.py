@@ -50,6 +50,27 @@ def _load_env_file(env_path: Path) -> None:
 _load_env_file(Path(__file__).resolve().parents[1] / ".env")
 
 
+def _configure_logging() -> None:
+    """Ensure gateway and orchestrator logs are visible under module startup."""
+    level_name = (os.environ.get("SENESCHAL_LOG_LEVEL", "INFO") or "INFO").strip().upper()
+    level = getattr(logging, level_name, logging.INFO)
+
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s %(levelname)s %(name)s : %(message)s",
+        )
+    else:
+        # Keep existing handlers from uvicorn, only raise/lower threshold.
+        root_logger.setLevel(level)
+
+    logging.getLogger("seneschal").setLevel(level)
+
+
+_configure_logging()
+
+
 @dataclass
 class GatewayConfig:
     api_key: str
@@ -85,7 +106,10 @@ class TaskRequest(BaseModel):
     task: str
     async_mode: bool = Field(default=False)
     output_path: str | None = None
-    mode: str = Field(default="auto")
+    mode: str = Field(default="router")
+    agent_hint: str | None = None
+    routing_strategy: str | None = None
+    context_id: str | None = None
     webhook_url: str | None = None
     webhook_token: str | None = None
     callback_headers: dict[str, str] = Field(default_factory=dict)
@@ -182,10 +206,6 @@ def _decorate_result_with_files(job_id: str, result: dict[str, Any], request: Re
     return result
 
 
-async def _run_task(task: str, output_path: str | None, mode: str) -> dict[str, Any]:
-    return await run_gateway_task(task=task, output_path=output_path, mode=mode)
-
-
 def _parse_feishu_text_from_content(content: str) -> str:
     parsed = (content or "").strip()
     if not parsed:
@@ -213,7 +233,17 @@ async def _enqueue_feishu_job(
             feishu_message_id=message_id,
             feishu_receive_id_type="chat_id" if chat_id else "open_id",
         )
-    asyncio.create_task(_run_job(job_id, task, output_path=None, mode="auto"))
+    asyncio.create_task(
+        _run_job(
+            job_id,
+            task,
+            output_path=None,
+            mode="router",
+            agent_hint=None,
+            routing_strategy=None,
+            context_id=message_id or chat_id or open_id,
+        )
+    )
     return job_id
 
 
@@ -419,12 +449,27 @@ async def _deliver_result(job_id: str, result: TaskResult, cfg: GatewayConfig) -
         await asyncio.to_thread(_send_feishu_text, cfg, receive_id, ctx.feishu_receive_id_type, text)
 
 
-async def _run_job(job_id: str, task: str, output_path: str | None, mode: str) -> None:
+async def _run_job(
+    job_id: str,
+    task: str,
+    output_path: str | None,
+    mode: str,
+    agent_hint: str | None,
+    routing_strategy: str | None,
+    context_id: str | None,
+) -> None:
     cfg = load_config()
     async with _JOB_LOCK:
         _JOB_STORE[job_id] = TaskResult(job_id=job_id, status="running")
     try:
-        result = await _run_task(task, output_path=output_path, mode=mode)
+        result = await run_gateway_task(
+            task=task,
+            output_path=output_path,
+            mode=mode,
+            agent_hint=agent_hint,
+            routing_strategy=routing_strategy,
+            context_id=context_id,
+        )
         result = _decorate_result_with_files(job_id, result, request=None, cfg=cfg)
         completed = TaskResult(job_id=job_id, status="completed", result=result)
         async with _JOB_LOCK:
@@ -511,11 +556,28 @@ async def submit_task(
                 webhook_token=request.webhook_token,
                 callback_headers=request.callback_headers,
             )
-        asyncio.create_task(_run_job(job_id, request.task, request.output_path, request.mode))
+        asyncio.create_task(
+            _run_job(
+                job_id,
+                request.task,
+                request.output_path,
+                request.mode,
+                request.agent_hint,
+                request.routing_strategy,
+                request.context_id,
+            )
+        )
         return _JOB_STORE[job_id]
 
     job_id = uuid.uuid4().hex
-    result = await _run_task(request.task, output_path=request.output_path, mode=request.mode)
+    result = await run_gateway_task(
+        task=request.task,
+        output_path=request.output_path,
+        mode=request.mode,
+        agent_hint=request.agent_hint,
+        routing_strategy=request.routing_strategy,
+        context_id=request.context_id,
+    )
     result = _decorate_result_with_files(job_id, result, request=raw_request, cfg=cfg)
     return TaskResult(job_id=job_id, status="completed", result=result)
 
