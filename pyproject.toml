@@ -125,6 +125,7 @@ dependencies = [
     "kubernetes==35.0.0",
     "litellm==1.81.4",
     "loguru==0.7.3",
+    "lark-oapi>=1.4.0",
     "lxml==6.0.2",
     "markdown-it-py==4.0.0",
     "markupsafe==3.0.3",

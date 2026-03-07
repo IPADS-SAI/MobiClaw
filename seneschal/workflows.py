@@ -3,10 +3,107 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+from typing import Any
+
 from agentscope.message import Msg
 
 from .agents import create_steward_agent, create_user_agent, create_worker_agent
 from .dailytasks.runner import run_daily_tasks
+
+
+def _extract_response_text(response: Any) -> str:
+    if response is None:
+        return ""
+    text = response.get_text_content() if hasattr(response, "get_text_content") else ""
+    if text:
+        return text
+    parts: list[str] = []
+    for block in getattr(response, "content", []) or []:
+        block_text = getattr(block, "text", "")
+        if block_text:
+            parts.append(block_text)
+    return "\n".join(parts).strip()
+
+
+def _collect_file_paths(text: str, output_path: str | None = None) -> list[Path]:
+    paths: list[Path] = []
+    if output_path:
+        paths.append(Path(output_path).expanduser())
+
+    for raw in re.findall(r"\[File\]\s+Wrote:\s*(.+)", text or ""):
+        candidate = raw.strip()
+        if candidate:
+            paths.append(Path(candidate).expanduser())
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
+
+
+def _build_file_entries(paths: list[Path]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for path in paths:
+        try:
+            resolved = path.resolve()
+        except FileNotFoundError:
+            resolved = path.absolute()
+        if not resolved.exists() or not resolved.is_file():
+            continue
+        stat = resolved.stat()
+        entries.append(
+            {
+                "path": str(resolved),
+                "name": resolved.name,
+                "size": stat.st_size,
+            }
+        )
+    return entries
+
+
+async def run_gateway_task(
+    task: str,
+    output_path: str | None = None,
+    mode: str = "auto",
+) -> dict[str, Any]:
+    """Run a gateway task through workflow-level control flow.
+
+    mode:
+    - auto/steward: use Steward for general orchestration
+    - worker: use Worker for direct tool-driven task execution
+    """
+    normalized_mode = (mode or "auto").strip().lower()
+    if normalized_mode in {"worker"}:
+        agent = create_worker_agent()
+    else:
+        agent = create_steward_agent()
+
+    msg_content = (task or "").strip()
+    if output_path:
+        msg_content += (
+            "\n\n输出文件路径: "
+            + output_path
+            + "\n如需落盘，请自行选择合适工具完成。"
+        )
+
+    msg = Msg(name="User", content=msg_content, role="user")
+    response = await agent(msg)
+    text = _extract_response_text(response)
+    file_paths = _collect_file_paths(text, output_path)
+    files = _build_file_entries(file_paths)
+
+    return {
+        "reply": text,
+        "mode": normalized_mode,
+        "files": files,
+    }
 
 
 async def run_demo_conversation() -> None:

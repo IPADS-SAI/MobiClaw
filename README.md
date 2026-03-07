@@ -326,7 +326,10 @@ Shell 工具默认受白名单限制，若你设置了 `SENESCHAL_SHELL_ALLOWLIS
 
 ## 8. Gateway模式（类似OpenClaw Core 入口）
 
-网关用于接收任务并交给 Steward Agent 处理，支持同步和异步任务查询。
+网关用于接收任务并交给 workflow 层决策执行，支持同步和异步任务查询。
+
+当前实现已改为将控制流交给 `seneschal/workflows.py`，不在网关层写死具体 Agent 调用逻辑。
+接口语义参考 OpenClaw 的异步任务风格：`submit -> accepted/running -> query result`。
 
 ```bash
 python -m seneschal.gateway_server
@@ -337,12 +340,42 @@ python -m seneschal.gateway_server
 可选环境变量：
 - `SENESCHAL_GATEWAY_PORT`：自定义端口（默认 `8090`）
 - `SENESCHAL_GATEWAY_API_KEY`：网关鉴权（Bearer token）
+- `SENESCHAL_GATEWAY_PUBLIC_BASE_URL`：生成文件下载链接时使用的公网前缀
+- `SENESCHAL_GATEWAY_FILE_ROOT`：允许下载文件的根目录（建议设置）
+- `SENESCHAL_GATEWAY_CALLBACK_TIMEOUT`：异步回调超时秒数
+- `SENESCHAL_GATEWAY_CALLBACK_RETRY`：异步回调重试次数
+- `SENESCHAL_GATEWAY_CALLBACK_BACKOFF`：回调重试退避基数秒数
+- `FEISHU_EVENT_TRANSPORT`：飞书事件接入模式，支持 `webhook` / `long_conn` / `both` / `auto`（默认 `both`）
+- `FEISHU_APP_ID` / `FEISHU_APP_SECRET`：飞书应用机器人凭据（长连接与主动回发结果都会使用）
+- `FEISHU_VERIFICATION_TOKEN`：飞书事件订阅 token（可选）
+- `FEISHU_ENCRYPT_KEY`：飞书签名校验 key（可选）
+
+飞书长连接模式（推荐本地开发，无需公网 IP）：
+
+```bash
+export FEISHU_APP_ID="cli_xxx"
+export FEISHU_APP_SECRET="xxx"
+export FEISHU_EVENT_TRANSPORT="long_conn"
+python -m seneschal.gateway_server
+```
+
+说明：
+- 若 `FEISHU_APP_ID` 或 `FEISHU_APP_SECRET` 未定义，网关会输出 warning 并跳过长连接启动（不会导致服务退出）。
+- `both` 模式下，`/api/v1/feishu/events` webhook 和长连接可同时使用。
 
 也可以直接运行示例脚本（无需手动启动gateway_server服务）：
 
 ```bash
 bash ./scripts/run_gateway_demo.sh
 ```
+
+飞书事件订阅本地模拟验证脚本：
+
+```bash
+bash ./scripts/run_gateway_feishu_demo.sh
+```
+
+该脚本仅用于验证 webhook 入口，不会验证飞书长连接链路。
 
 ---
 
@@ -393,6 +426,27 @@ curl -X POST http://localhost:8090/api/v1/task \
   -d '{"task":"整理今日待办并给出简要总结","async_mode":false}'
 ```
 
+支持可选参数：
+- `output_path`：输出文件提示路径（由 workflow 决策是否落盘）
+- `mode`：`auto` / `steward` / `worker`
+- `webhook_url`：异步完成后回调地址
+- `webhook_token`：回调 Bearer token
+- `callback_headers`：回调附加 headers
+
+异步 + 回调示例：
+
+```bash
+curl -X POST http://localhost:8090/api/v1/task \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task":"总结今天的待办并输出 markdown",
+    "async_mode":true,
+    "output_path":"outputs/tasks/today.md",
+    "webhook_url":"http://127.0.0.1:9000/callback",
+    "webhook_token":"demo-token"
+  }'
+```
+
 异步任务：
 
 ```bash
@@ -403,6 +457,18 @@ curl -X POST http://localhost:8090/api/v1/task \
 curl http://localhost:8090/api/v1/jobs/<job_id>
 ```
 
+如果任务产出了文件，结果中会包含 `result.files`，每个文件包含：
+- `path`：本地绝对路径
+- `name`：文件名
+- `size`：文件大小
+- `download_url`：可下载地址
+
+下载文件示例：
+
+```bash
+curl -L "http://localhost:8090/api/v1/files/<job_id>/<file_name>" -o ./downloaded_file
+```
+
 如果启用鉴权：
 
 ```bash
@@ -411,6 +477,39 @@ curl -X POST http://localhost:8090/api/v1/task \
   -H "Content-Type: application/json" \
   -d '{"task":"给出今天的提醒事项","async_mode":false}'
 ```
+
+### 9.4 飞书机器人事件订阅接入
+
+网关提供飞书事件入口：`POST /api/v1/feishu/events`。
+
+同时支持飞书长连接模式（SDK websocket/event stream），可用于本地开发和内网部署（无需公网 IP）。
+
+配置步骤：
+- 在飞书开放平台创建应用并开启机器人能力。
+- 二选一配置事件接入：
+- webhook 模式：在事件订阅中填入网关地址 `https://<your-domain>/api/v1/feishu/events`。
+- 长连接模式：无需配置公网回调地址，网关会主动连接飞书并接收事件。
+- 配置环境变量：
+- `FEISHU_EVENT_TRANSPORT`（推荐本地开发设为 `long_conn`，混合模式用 `both`）
+- `FEISHU_APP_ID`
+- `FEISHU_APP_SECRET`
+- `FEISHU_VERIFICATION_TOKEN`（若在飞书侧配置了 token）
+- `FEISHU_ENCRYPT_KEY`（若启用了签名校验）
+- 建议配置 `SENESCHAL_GATEWAY_PUBLIC_BASE_URL`，让回传的文件链接可被飞书用户访问。
+
+启动示例（长连接）：
+
+```bash
+export FEISHU_APP_ID="cli_xxx"
+export FEISHU_APP_SECRET="xxx"
+export FEISHU_EVENT_TRANSPORT="long_conn"
+python -m seneschal.gateway_server
+```
+
+事件处理说明：
+- 网关收到飞书消息后会创建异步任务（返回 accepted 或写入日志）。
+- 任务完成后，网关会主动调用飞书消息接口回发结果文本。
+- 若包含文件，默认以下载链接形式附在结果文本中。
 
 ---
 
