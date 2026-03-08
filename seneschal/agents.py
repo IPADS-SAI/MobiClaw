@@ -67,8 +67,6 @@ def get_agent_capability_descriptions() -> dict[str, dict[str, object]]:
             role="负责手机端数据收集-存储-分析这一类特殊任务（Collect/Store/Analyze/Execute）",
             strengths=[
                 "手机端数据采集与执行动作",
-                "WeKnora 知识写入与分析",
-                "跨工具编排与进度汇报",
             ],
             typical_tasks=[
                 "整理今日待办并决定是否执行手机操作",

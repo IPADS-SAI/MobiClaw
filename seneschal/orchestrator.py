@@ -8,12 +8,14 @@ import json
 import logging
 import re
 import time
+from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from agentscope.message import Msg
 
+from . import agents as agents_module
 from .agents import (
     create_planner_agent,
     create_router_agent,
@@ -114,11 +116,41 @@ def _parse_json_object(text: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def _normalize_agent_name(raw: str) -> str:
-    value = (raw or "").strip().lower()
-    if value in {"worker", "research", "researcher"}:
+@lru_cache(maxsize=1)
+def _available_agent_names() -> tuple[str, ...]:
+    profiles = get_agent_capability_descriptions() or {}
+    names: list[str] = []
+    if isinstance(profiles, dict):
+        for key in profiles.keys():
+            name = str(key or "").strip().lower()
+            if name and name not in names:
+                names.append(name)
+    if not names:
+        names = ["steward", "worker"]
+    return tuple(names)
+
+
+def _default_agent_name() -> str:
+    names = list(_available_agent_names())
+    if "worker" in names:
         return "worker"
-    return "steward"
+    return names[0]
+
+
+def _normalize_agent_name(
+    raw: str,
+    allowed_agents: set[str] | None = None,
+    default_agent: str | None = None,
+) -> str:
+    allowed = allowed_agents or set(_available_agent_names())
+    fallback = default_agent or _default_agent_name()
+    value = (raw or "").strip().lower()
+    alias_map = {
+        "research": "worker",
+        "researcher": "worker",
+    }
+    value = alias_map.get(value, value)
+    return value if value in allowed else fallback
 
 
 def _rule_route(task: str) -> RouteDecision:
@@ -172,8 +204,8 @@ def _rule_route(task: str) -> RouteDecision:
             strategy="rule_fallback",
         )
     return RouteDecision(
-        target_agents=["steward"],
-        reason="规则路由默认回退到 Steward",
+        target_agents=[_default_agent_name()],
+        reason=f"规则路由默认回退到 {_default_agent_name()}",
         confidence=0.55,
         plan_required=plan_required,
         strategy="rule_fallback",
@@ -182,16 +214,19 @@ def _rule_route(task: str) -> RouteDecision:
 
 async def _llm_route(task: str, strategy: str) -> RouteDecision:
     profiles = get_agent_capability_descriptions()
+    available_agents = list(_available_agent_names())
+    route_default_agent = _default_agent_name()
     prompt = (
         "你是任务路由器。请根据任务为多智能体系统做决策。请你快速做选择，不需要多想\n"
         "候选 Agent 及能力:\n"
         f"{json.dumps(profiles, ensure_ascii=False, indent=2)}\n\n"
         "输出严格 JSON，不要输出其他文本，格式为:\n"
-        '{"target_agents":["steward"|"worker"],"reason":"...","confidence":0.0,"plan_required":true|false}\n\n'
+        '{"target_agents":["agent_name"],"reason":"...","confidence":0.0,"plan_required":true|false}\n\n'
         "要求:\n"
-        "1) 可选一个或多个 agent。\n"
-        "2) 任务明显复合时 plan_required=true。\n"
-        "3) 不确定时优先 steward。\n\n"
+        f"1) target_agents 里的每个值必须来自: {available_agents}。\n"
+        "2) 可选一个或多个 agent。\n"
+        "3) 任务明显复合时 plan_required=true。\n"
+        f"4) 不确定时优先 {route_default_agent}。\n\n"
         f"用户任务:\n{task}"
     )
     agent = create_router_agent()
@@ -205,9 +240,16 @@ async def _llm_route(task: str, strategy: str) -> RouteDecision:
     if not isinstance(targets, list) or not targets:
         return _rule_route(task)
 
+    allowed = set(available_agents)
     normalized: list[str] = []
     for item in targets:
-        normalized.append(_normalize_agent_name(str(item)))
+        normalized.append(
+            _normalize_agent_name(
+                str(item),
+                allowed_agents=allowed,
+                default_agent=route_default_agent,
+            )
+        )
     normalized = list(dict.fromkeys(normalized))
 
     confidence = parsed.get("confidence")
@@ -243,17 +285,22 @@ def _split_task_by_connectors(task: str) -> list[str]:
 
 def _subtask_agent_by_rule(subtask: str) -> str:
     decision = _rule_route(subtask)
-    return decision.target_agents[0] if decision.target_agents else "steward"
+    return decision.target_agents[0] if decision.target_agents else _default_agent_name()
 
 
 async def _llm_plan(task: str, decision: RouteDecision, max_subtasks: int) -> list[list[dict[str, str]]]:
+    available_agents = list(_available_agent_names())
+    allowed = set(available_agents)
+    default_plan_agent = (
+        decision.target_agents[0] if decision.target_agents else _default_agent_name()
+    )
     prompt = (
-        "你是任务规划器。请把用户任务拆成可执行阶段。\n"
+        "你是任务规划器。请把用户任务拆成可执行阶段，并且**快速**做出相应。\n"
         "输出严格 JSON，格式为:\n"
-        '{"stages":[[{"agent":"steward|worker","task":"..."}]]}\n\n'
+        '{"stages":[[{"agent":"agent_name","task":"..."}]]}\n\n'
         "规则:\n"
         "1) stages 是二维数组，外层表示阶段（串行），内层表示同阶段并行子任务。\n"
-        "2) agent 只能是 steward 或 worker。\n"
+        f"2) agent 只能从以下集合中选择: {available_agents}。\n"
         "3) 子任务总数不超过 max_subtasks。\n"
         "4) 若任务简单，可只给一个子任务。\n\n"
         f"max_subtasks={max_subtasks}\n"
@@ -276,7 +323,11 @@ async def _llm_plan(task: str, decision: RouteDecision, max_subtasks: int) -> li
         for item in stage:
             if not isinstance(item, dict):
                 continue
-            agent_name = _normalize_agent_name(str(item.get("agent") or ""))
+            agent_name = _normalize_agent_name(
+                str(item.get("agent") or ""),
+                allowed_agents=allowed,
+                default_agent=default_plan_agent,
+            )
             task_text = str(item.get("task") or "").strip()
             if not task_text:
                 continue
@@ -308,11 +359,28 @@ def _fallback_plan(task: str, decision: RouteDecision, max_subtasks: int) -> lis
 
     for part in parts[:max_subtasks]:
         stages.append([{"agent": _subtask_agent_by_rule(part), "task": part}])
-    return stages or [[{"agent": "steward", "task": task.strip()}]]
+    return stages or [[{"agent": _default_agent_name(), "task": task.strip()}]]
 
 
 def _build_agent(agent_name: str):
-    if agent_name == "worker":
+    normalized = (agent_name or "").strip().lower()
+    factory = getattr(agents_module, f"create_{normalized}_agent", None)
+    if callable(factory):
+        return factory()
+
+    fallback = _default_agent_name()
+    if normalized != fallback:
+        logger.warning(
+            "orchestrator.agent.unknown agent=%s; fallback=%s",
+            normalized,
+            fallback,
+        )
+    fallback_factory = getattr(agents_module, f"create_{fallback}_agent", None)
+    if callable(fallback_factory):
+        return fallback_factory()
+
+    # Defensive fallback to keep runtime compatible if registry and factories drift.
+    if fallback == "worker":
         return create_worker_agent()
     return create_steward_agent()
 
@@ -417,15 +485,20 @@ async def run_orchestrated_task(
                 decision.reason,
             )
         except asyncio.TimeoutError:
+            timeout_default_agent = "worker" if "worker" in _available_agent_names() else _default_agent_name()
             decision = RouteDecision(
-                target_agents=["worker"],
-                reason="router timeout -> default worker",
+                target_agents=[timeout_default_agent],
+                reason=f"router timeout -> default {timeout_default_agent}",
                 confidence=0.0,
                 plan_required=False,
                 strategy="timeout_default_worker",
             )
             route_control_path = "router_timeout_worker"
-            logger.warning("orchestrator.route.timeout timeout_s=%.2f; fallback=worker", router_timeout_s)
+            logger.warning(
+                "orchestrator.route.timeout timeout_s=%.2f; fallback=%s",
+                router_timeout_s,
+                timeout_default_agent,
+            )
         except Exception:
             decision = _rule_route(task)
             route_control_path = "router_error_fallback"
@@ -450,10 +523,15 @@ async def run_orchestrated_task(
                 len(stages),
             )
         except asyncio.TimeoutError:
-            stages = [[{"agent": "worker", "task": task.strip()}]]
+            timeout_default_agent = "worker" if "worker" in _available_agent_names() else _default_agent_name()
+            stages = [[{"agent": timeout_default_agent, "task": task.strip()}]]
             plan_source = "timeout_worker"
             plan_control_path = "planner_timeout_worker"
-            logger.warning("orchestrator.plan.timeout timeout_s=%.2f; fallback=worker", planner_timeout_s)
+            logger.warning(
+                "orchestrator.plan.timeout timeout_s=%.2f; fallback=%s",
+                planner_timeout_s,
+                timeout_default_agent,
+            )
         except Exception:
             stages = _fallback_plan(task, decision, max_subtasks=max_subtasks)
             plan_source = "fallback"
