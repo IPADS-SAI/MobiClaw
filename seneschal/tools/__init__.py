@@ -13,7 +13,7 @@ from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 import requests
 
-from .mobi import call_mobi_action, call_mobi_collect
+from .mobi import call_mobi_action, call_mobi_collect, call_mobi_collect_verified
 from .file import write_text_file
 from .papers import arxiv_search, dblp_conference_search, download_file, extract_pdf_text
 from .shell import run_shell_command
@@ -464,6 +464,7 @@ weknora_list_knowledge_bases = list_knowledge_bases
 __all__ = [
     "call_mobi_action",
     "call_mobi_collect",
+    "call_mobi_collect_verified",
     "run_shell_command",
     "fetch_url_text",
     "fetch_url_readable_text",

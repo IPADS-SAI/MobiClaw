@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from typing import Any
 
 import requests
 
@@ -14,78 +16,133 @@ from ..config import MOBI_AGENT_CONFIG
 from .mock_data import get_mock_action_result, get_mock_collect_result
 
 
-async def call_mobi_collect(task_desc: str) -> ToolResponse:
-    """调用 MobiAgent 获取手机端数据（如截图、OCR识别结果等）。"""
+def _load_execution_from_data_dir(data_dir: str) -> dict:
+    if not data_dir:
+        return {}
+    path = Path(data_dir) / "execution_result.json"
+    if not path.exists():
+        return {}
     try:
-        api_url = f"{MOBI_AGENT_CONFIG['base_url']}/api/v1/collect"
-        headers = {
-            "Authorization": f"Bearer {MOBI_AGENT_CONFIG['api_key']}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "task": task_desc,
-            "options": {
-                "ocr_enabled": True,
-                "timeout": 30,
-            },
-        }
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
-        response = requests.post(
-            api_url,
-            headers=headers,
-            json=payload,
-            timeout=60,
-        )
-        response.raise_for_status()
-        result = response.json()
 
-        collected_data = result.get("data", {})
-        ocr_text = collected_data.get("ocr_text", "")
-        screenshot_path = collected_data.get("screenshot_path", "")
+def _normalize_collect_result(result: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
+    success = bool(result.get("success", False))
+    message = str(result.get("message", ""))
+    data = result.get("data")
+    collected_data = data if isinstance(data, dict) else {}
+    return success, message, collected_data
 
+
+def _extract_summary_from_execution(collected_data: dict[str, Any]) -> dict[str, Any]:
+    execution = collected_data.get("execution", {})
+    if not execution:
+        execution = _load_execution_from_data_dir(collected_data.get("data_dir", ""))
+
+    summary = execution.get("summary", {}) if isinstance(execution, dict) else {}
+    ocr = execution.get("ocr", {}) if isinstance(execution, dict) else {}
+    history = execution.get("history", {}) if isinstance(execution, dict) else {}
+    ocr_text = (ocr.get("full_text") if isinstance(ocr, dict) else "") or collected_data.get("ocr_text", "")
+    screenshot_path = (summary.get("final_screenshot_path") if isinstance(summary, dict) else "") or collected_data.get("screenshot_path", "")
+    reasonings = history.get("reasonings", []) if isinstance(history, dict) else []
+    last_reasoning = reasonings[-1] if isinstance(reasonings, list) and reasonings else ""
+    action_count = int(summary.get("action_count", 0)) if isinstance(summary, dict) else 0
+    step_count = int(summary.get("step_count", 0)) if isinstance(summary, dict) else 0
+    status_hint = str(summary.get("status_hint", "")) if isinstance(summary, dict) else ""
+    run_dir = str(execution.get("run_dir", "")) if isinstance(execution, dict) else ""
+    index_file = str(execution.get("index_file", "")) if isinstance(execution, dict) else ""
+
+    return {
+        "execution": execution,
+        "ocr_text": ocr_text,
+        "screenshot_path": screenshot_path,
+        "last_reasoning": last_reasoning,
+        "action_count": action_count,
+        "step_count": step_count,
+        "status_hint": status_hint,
+        "run_dir": run_dir,
+        "index_file": index_file,
+    }
+
+
+def _collect_request(task_desc: str, timeout: int = 120) -> dict[str, Any]:
+    api_url = f"{MOBI_AGENT_CONFIG['base_url']}/api/v1/collect"
+    headers = {
+        "Authorization": f"Bearer {MOBI_AGENT_CONFIG['api_key']}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "task": task_desc,
+        "options": {"ocr_enabled": True, "timeout": timeout},
+    }
+    response = requests.post(api_url, headers=headers, json=payload, timeout=max(timeout + 30, 60))
+    response.raise_for_status()
+    return response.json()
+
+
+async def call_mobi_collect(task_desc: str) -> ToolResponse:
+    """兼容别名：等价于单次 `call_mobi_collect_verified(max_retries=0)`。"""
+    return await call_mobi_collect_verified(task_desc, max_retries=0)
+
+
+async def call_mobi_collect_verified(task_desc: str, max_retries: int = 2) -> ToolResponse:
+    """兼容接口：执行一次收集并返回证据，不做工具内验证或自动重试。"""
+    _ = max_retries  # kept for backward compatibility
+    try:
+        raw = _collect_request(task_desc, timeout=180)
+        success, message, collected_data = _normalize_collect_result(raw)
+        if not success:
+            return ToolResponse(
+                content=[
+                    TextBlock(
+                        type="text",
+                        text=(
+                            "[MobiAgent 收集失败]\n"
+                            f"任务: {task_desc}\n"
+                            f"message: {message}\n"
+                            f"status: {collected_data.get('status', '')}\n"
+                            f"stderr: {(collected_data.get('stderr', '') if isinstance(collected_data, dict) else '')[:500]}"
+                        ),
+                    )
+                ],
+                metadata={"success": False, "requires_agent_validation": True, "raw_data": collected_data},
+            )
+        normalized = _extract_summary_from_execution(collected_data)
         return ToolResponse(
             content=[
                 TextBlock(
                     type="text",
                     text=(
-                        f"[MobiAgent 收集成功]\n"
+                        "[MobiAgent 收集完成(需Agent验证)]\n"
                         f"任务: {task_desc}\n"
-                        f"截图路径: {screenshot_path}\n"
-                        f"OCR识别结果: {ocr_text}"
+                        f"执行器状态提示: {normalized['status_hint']}\n"
+                        f"截图路径: {normalized['screenshot_path']}\n"
+                        f"最后推理: {normalized['last_reasoning']}\n"
+                        f"OCR摘要: {(normalized['ocr_text'] or '')[:500]}"
                     ),
-                ),
+                )
             ],
             metadata={
-                "ocr_text": ocr_text,
-                "screenshot_path": screenshot_path,
+                "success": True,
+                "requires_agent_validation": True,
+                "attempt": 1,
+                "original_task": task_desc,
+                "final_task": task_desc,
+                **normalized,
                 "raw_data": collected_data,
             },
         )
-
-    except requests.exceptions.RequestException as e:
-        mock_result = get_mock_collect_result(task_desc)
+    except requests.exceptions.RequestException as exc:
         return ToolResponse(
-            content=[
-                TextBlock(
-                    type="text",
-                    text=(
-                        f"[MobiAgent Mock 模式]\n"
-                        f"任务: {task_desc}\n"
-                        f"模拟数据: {mock_result}\n"
-                        f"(实际错误: {str(e)[:100]})"
-                    ),
-                ),
-            ],
-            metadata={"mock": True, "data": mock_result},
+            content=[TextBlock(type="text", text=f"[MobiAgent 调用失败] 请求异常: {exc}")],
+            metadata={"success": False, "requires_agent_validation": True, "error": str(exc)},
         )
-    except Exception as e:
+    except Exception as exc:  # noqa: BLE001
         return ToolResponse(
-            content=[
-                TextBlock(
-                    type="text",
-                    text=f"[MobiAgent 调用失败] 错误: {str(e)}",
-                ),
-            ],
+            content=[TextBlock(type="text", text=f"[MobiAgent 调用失败] 错误: {exc}")],
+            metadata={"success": False, "requires_agent_validation": True, "error": str(exc)},
         )
 
 

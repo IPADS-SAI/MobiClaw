@@ -1,23 +1,26 @@
-# Seneschal 简化架构图（1页版）
+# Seneschal 简化架构图（1 页总览）
 
 ## 组件关系
 
 ```mermaid
 flowchart LR
-    U[用户 / 定时触发] --> S[Seneschal<br/>app.py + workflows]
-    S --> A[AgentScope ReActAgent<br/>Steward]
+    U[用户 / CLI / 定时触发] --> APP[app.py]
+    APP --> WF[seneschal/workflows.py]
+    WF --> SA[Steward Agent]
+    WF --> WA[Worker Agent]
+    WF --> DT[DailyTasks Runner]
 
-    A -->|Collect / Action| G[mobiagent_server 网关]
-    G --> M[MobiAgent 执行层<br/>mock / proxy / task_queue / cli]
+    SA --> T[seneschal/tools/*]
+    WA --> T
+    DT --> T
 
-    A -->|Store / Analyze| W[WeKnora API]
-    W --> P[(PostgreSQL / ParadeDB)]
-    W --> R[(Redis)]
-    W --> D[DocReader gRPC]
-    W --> V[Retriever<br/>Postgres / ES / Qdrant]
-    W --> O[对象存储<br/>MinIO / COS / Local]
+    T --> MG[mobiagent_server]
+    T --> WK[WeKnora API]
 
-    D --> O
+    MG --> MExec[MobiAgent 执行后端\nmock/proxy/task_queue/cli]
+    WK --> DB[(PostgreSQL/ParadeDB)]
+    WK --> RE[(Redis)]
+    WK --> DR[DocReader gRPC]
 ```
 
 ## 运行闭环
@@ -26,19 +29,16 @@ flowchart LR
 Collect -> Store -> Analyze -> Execute
 ```
 
-- Collect：通过 `mobiagent_server` 调用 MobiAgent 采集手机端数据
-- Store：通过 WeKnora API 写入知识库
-- Analyze：通过 WeKnora 的 RAG/Agent 能力分析与总结
-- Execute：根据分析结果执行手机端动作
-
-## 各层职责
-
-- 编排层（Seneschal）：负责流程控制、任务触发与工具调用
-- 执行适配层（mobiagent_server）：统一对接不同 MobiAgent 运行方式
-- 知识底座层（WeKnora）：负责知识管理、检索、会话、流式问答
-- 执行层（MobiAgent）：在设备侧完成 GUI 采集和操作执行
+- Collect：`call_mobi_collect` / `call_mobi_collect_verified`
+- Store：`weknora_add_knowledge`
+- Analyze：`weknora_rag_chat` / `weknora_knowledge_search`
+- Execute：`call_mobi_action`
 
 ## 详细文档
 
 - `docs/Seneschal-项目架构说明.md`
-
+- `docs/Seneschal-详细架构图.md`
+- `docs/模块-seneschal-core.md`
+- `docs/模块-tools.md`
+- `docs/模块-dailytasks.md`
+- `docs/模块-gateway.md`
