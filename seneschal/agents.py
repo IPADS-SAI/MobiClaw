@@ -118,7 +118,7 @@ def create_router_agent() -> ReActAgent:
 - 只输出 JSON，不要包含额外解释。
 - JSON 字段：target_agents(list)、reason(str)、confidence(float 0-1)、plan_required(bool)。
 - 如果任务涉及多种能力，可返回多个 agent。
-- 不确定时优先选择 steward。
+- 不确定时优先选择 worker。
 """
     return ReActAgent(
         name="Router",
@@ -127,7 +127,7 @@ def create_router_agent() -> ReActAgent:
         formatter=OpenAIChatFormatter(),
         toolkit=Toolkit(),
         memory=InMemoryMemory(),
-        max_iters=2,
+        max_iters=1,
     )
 
 
@@ -148,7 +148,7 @@ def create_planner_agent() -> ReActAgent:
         formatter=OpenAIChatFormatter(),
         toolkit=Toolkit(),
         memory=InMemoryMemory(),
-        max_iters=2,
+        max_iters=1,
     )
 
 

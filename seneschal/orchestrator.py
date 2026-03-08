@@ -546,28 +546,70 @@ def _rule_route(task: str) -> RouteDecision:
     )
 
 
+def _compact_agent_profiles_for_route(
+    profiles: Any,
+    max_desc_chars: int,
+) -> list[dict[str, str]]:
+    if not isinstance(profiles, dict):
+        return []
+    compact: list[dict[str, str]] = []
+    for name, info in profiles.items():
+        agent_name = str(name or "").strip().lower()
+        if not agent_name:
+            continue
+        desc = str(info or "").replace("\n", " ").strip()
+        desc = re.sub(r"\s+", " ", desc)
+        if max_desc_chars > 0 and len(desc) > max_desc_chars:
+            desc = desc[:max_desc_chars].rstrip() + "..."
+        compact.append({"agent": agent_name, "desc": desc})
+    return compact
+
+
+def _compact_task_for_route(task: str, max_chars: int) -> str:
+    text = re.sub(r"\s+", " ", (task or "").strip())
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "..."
+
+
 async def _llm_route(task: str, strategy: str) -> RouteDecision:
     profiles = get_agent_capability_descriptions()
     available_agents = list(_available_agent_names())
     route_default_agent = _default_agent_name()
+    task_for_prompt = _compact_task_for_route(
+        task,
+        int(ROUTING_CONFIG.get("route_task_max_chars", 320)),
+    )
+    profile_brief = _compact_agent_profiles_for_route(
+        profiles,
+        int(ROUTING_CONFIG.get("route_profile_desc_max_chars", 100)),
+    )
     prompt = (
-        "你是任务路由器。请根据任务为多智能体系统做决策。请你快速做选择，不需要多想\n"
-        "候选 Agent 及能力:\n"
-        f"{json.dumps(profiles, ensure_ascii=False, indent=2)}\n\n"
-        "输出严格 JSON，不要输出其他文本，格式为:\n"
+        "你是任务路由器，请快速选择最合适的 agent。\n"
+        "候选 Agent(精简版):\n"
+        f"{json.dumps(profile_brief, ensure_ascii=False, separators=(",", ":"))}\n\n"
+        "仅输出 JSON，不要输出其他文本，格式为:\n"
         '{"target_agents":["agent_name"],"reason":"...","confidence":0.0,"plan_required":true|false}\n\n'
         "要求:\n"
         f"1) target_agents 里的每个值必须来自: {available_agents}。\n"
         "2) 可选一个或多个 agent。\n"
         "3) 任务明显复合时 plan_required=true。\n"
         f"4) 不确定时优先 {route_default_agent}。\n\n"
-        f"用户任务:\n{task}"
+        f"用户任务(精简): {task_for_prompt}"
     )
-    logger.info("orchestrator.route.prompt strategy=%s prompt=\n%s", strategy, prompt)
+    logger.info(
+        "orchestrator.route.prompt strategy=%s prompt_chars=%d task_chars=%d task_compact_chars=%d prompt=\n%s",
+        strategy,
+        len(prompt),
+        len(task or ""),
+        len(task_for_prompt),
+        prompt,
+    )
     agent = create_router_agent()
     
     response = await agent(Msg(name="User", content=prompt, role="user"))
-    
+    logger.info("orchestrator.route.response is finished")
+
 
     text = _extract_response_text(response)
     logger.info("orchestrator.route.response strategy=%s response=\n%s", strategy, text)
