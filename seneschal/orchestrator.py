@@ -8,12 +8,14 @@ import json
 import logging
 import re
 import time
+from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from agentscope.message import Msg
 
+from . import agents as agents_module
 from .agents import (
     create_planner_agent,
     create_router_agent,
@@ -37,6 +39,23 @@ class RouteDecision:
     confidence: float
     plan_required: bool
     strategy: str
+
+
+@dataclass
+class SkillProfile:
+    name: str
+    description: str
+    content_hint: str
+
+
+@dataclass
+class SkillDecision:
+    selected_skills: list[str]
+    source: str
+    reason: str
+    candidates: list[dict[str, Any]]
+    hint_used: list[str]
+    hint_invalid: list[str]
 
 
 def _extract_response_text(response: Any) -> str:
@@ -114,11 +133,358 @@ def _parse_json_object(text: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def _normalize_agent_name(raw: str) -> str:
-    value = (raw or "").strip().lower()
-    if value in {"worker", "research", "researcher"}:
+def _skills_root() -> Path:
+    configured = str(ROUTING_CONFIG.get("skill_root_dir") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path(__file__).resolve().parent / "skills"
+
+
+def _parse_skill_frontmatter(text: str) -> dict[str, str]:
+    if not text:
+        return {}
+    match = re.match(r"\s*---\s*\n([\s\S]*?)\n---\s*(?:\n|$)", text)
+    if not match:
+        return {}
+    body = match.group(1)
+    meta: dict[str, str] = {}
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip().lower()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            meta[key] = value
+    return meta
+
+
+def _strip_frontmatter(text: str) -> str:
+    return re.sub(r"\A\s*---\s*\n[\s\S]*?\n---\s*(?:\n|$)", "", text, count=1)
+
+
+def _skill_content_hint(markdown: str) -> str:
+    content = _strip_frontmatter(markdown)
+    lines = [line.strip() for line in content.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    chunks: list[str] = []
+    for line in lines:
+        if line.startswith("#"):
+            continue
+        chunks.append(line)
+        if len(" ".join(chunks)) >= 220:
+            break
+    return " ".join(chunks)[:280].strip()
+
+
+def _tokenize_query(text: str) -> list[str]:
+    if not text:
+        return []
+    lowered = text.lower()
+    raw_tokens = re.findall(r"[a-z0-9_]{2,}|[\u4e00-\u9fff]{2,}", lowered)
+    return list(dict.fromkeys(raw_tokens))
+
+
+@lru_cache(maxsize=1)
+def _available_skill_profiles() -> tuple[SkillProfile, ...]:
+    root = _skills_root()
+    if not root.exists() or not root.is_dir():
+        return tuple()
+
+    profiles: list[SkillProfile] = []
+    for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+        if not child.is_dir():
+            continue
+        skill_file = child / "SKILL.md"
+        if not skill_file.exists() or not skill_file.is_file():
+            continue
+        try:
+            raw = skill_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        meta = _parse_skill_frontmatter(raw)
+        name = str(meta.get("name") or child.name).strip().lower()
+        description = str(meta.get("description") or "").strip()
+        if not description:
+            hint = _skill_content_hint(raw)
+            description = hint or f"Skill {name}"
+        profiles.append(
+            SkillProfile(
+                name=name,
+                description=description,
+                content_hint=_skill_content_hint(raw),
+            )
+        )
+    return tuple(profiles)
+
+
+def _rule_select_skills(task: str, agent_name: str, max_candidates: int) -> list[dict[str, Any]]:
+    task_tokens = _tokenize_query(task)
+    agent_token = (agent_name or "").strip().lower()
+    candidates: list[dict[str, Any]] = []
+    for profile in _available_skill_profiles():
+        haystack = f"{profile.name}\n{profile.description}\n{profile.content_hint}".lower()
+        score = 0
+        matched: list[str] = []
+        if profile.name in (task or "").lower():
+            score += 6
+            matched.append(profile.name)
+        if agent_token and agent_token in haystack:
+            score += 2
+            matched.append(f"agent:{agent_token}")
+        for token in task_tokens:
+            if token in haystack:
+                score += 1
+                matched.append(token)
+        if score <= 0:
+            continue
+        candidates.append(
+            {
+                "name": profile.name,
+                "score": score,
+                "description": profile.description,
+                "matched": list(dict.fromkeys(matched))[:8],
+            }
+        )
+
+    candidates.sort(key=lambda item: (-int(item.get("score", 0)), str(item.get("name", ""))))
+    return candidates[:max_candidates]
+
+
+def _all_skill_candidates(max_candidates: int) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for profile in _available_skill_profiles()[:max_candidates]:
+        candidates.append(
+            {
+                "name": profile.name,
+                "score": 0,
+                "description": profile.description,
+                "matched": [],
+            }
+        )
+    return candidates
+
+
+async def _llm_rerank_skills(
+    task: str,
+    subtask: str,
+    agent_name: str,
+    candidates: list[dict[str, Any]],
+    max_skills: int,
+) -> tuple[list[str], str]:
+    if not candidates:
+        return [], "empty_candidates"
+
+    names = [str(item.get("name") or "").strip().lower() for item in candidates]
+    names = [name for name in names if name]
+    if not names:
+        return [], "empty_names"
+
+    prompt = (
+        "你是 Skill Selector。请从候选技能中为子任务选择最合适的技能。\n"
+        "仅输出 JSON，不要输出其他文本。格式:\n"
+        '{"skills":["skill_name"],"reason":"..."}\n\n'
+        "要求:\n"
+        f"1) skills 中每个值必须来自候选集合: {names}\n"
+        f"2) 最多选择 {max_skills} 个；若没有合适技能可返回空数组。\n"
+        "3) 优先与子任务直接相关的技能。\n\n"
+        f"总任务: {task}\n"
+        f"子任务: {subtask}\n"
+        f"目标 agent: {agent_name}\n"
+        f"候选详情: {json.dumps(candidates, ensure_ascii=False)}"
+    )
+    agent = create_router_agent()
+    response = await agent(Msg(name="User", content=prompt, role="user"))
+    parsed = _parse_json_object(_extract_response_text(response))
+    if not parsed:
+        return [], "parse_failed"
+
+    raw_skills = parsed.get("skills")
+    if not isinstance(raw_skills, list):
+        return [], "invalid_skills_field"
+
+    allowed = set(names)
+    selected: list[str] = []
+    for item in raw_skills:
+        name = str(item or "").strip().lower()
+        if name in allowed:
+            selected.append(name)
+    selected = list(dict.fromkeys(selected))[:max_skills]
+    return selected, str(parsed.get("reason") or "llm_rerank")
+
+
+def _skill_hint_items(skill_hint: str | None) -> list[str]:
+    if not skill_hint:
+        return []
+    parts = [item.strip().lower() for item in re.split(r"[,;，；\s]+", skill_hint) if item and item.strip()]
+    return list(dict.fromkeys(parts))
+
+
+def _skill_prompt_context(selected_skills: list[str]) -> str:
+    if not selected_skills:
+        return ""
+    profile_map = {profile.name: profile for profile in _available_skill_profiles()}
+    lines: list[str] = []
+    for name in selected_skills:
+        profile = profile_map.get(name)
+        if not profile:
+            continue
+        summary = profile.description or profile.content_hint
+        summary = (summary or "").replace("\n", " ").strip()
+        if len(summary) > 260:
+            summary = summary[:260].rstrip() + "..."
+        lines.append(f"- {profile.name}: {summary}")
+    return "\n".join(lines)
+
+
+async def _select_skills_for_subtask(
+    task: str,
+    subtask: str,
+    agent_name: str,
+    strategy: str,
+    skill_hint: str | None,
+) -> SkillDecision:
+    if not bool(ROUTING_CONFIG.get("skill_enabled", True)):
+        return SkillDecision([], "disabled", "skill selection disabled", [], [], [])
+
+    profiles = _available_skill_profiles()
+    if not profiles:
+        return SkillDecision([], "no_skills", "no skill profiles discovered", [], [], [])
+
+    max_skills = int(ROUTING_CONFIG.get("skill_max_per_subtask", 2))
+    if max_skills <= 0:
+        return SkillDecision([], "disabled", "skill max is 0", [], [], [])
+
+    all_names = {profile.name for profile in profiles}
+    hint_items = _skill_hint_items(skill_hint)
+    hint_valid = [name for name in hint_items if name in all_names]
+    hint_invalid = [name for name in hint_items if name not in all_names]
+
+    if hint_valid and bool(ROUTING_CONFIG.get("skill_hint_override", True)):
+        selected = hint_valid[:max_skills]
+        return SkillDecision(
+            selected_skills=selected,
+            source="hint",
+            reason="manual skill_hint override",
+            candidates=[{"name": name, "score": 999, "description": "hint"} for name in selected],
+            hint_used=selected,
+            hint_invalid=hint_invalid,
+        )
+
+    rule_candidates = _rule_select_skills(
+        subtask or task,
+        agent_name,
+        max_candidates=int(ROUTING_CONFIG.get("skill_rule_max_candidates", 8)),
+    )
+    if not rule_candidates and bool(ROUTING_CONFIG.get("skill_llm_rerank", True)):
+        semantic_pool = _all_skill_candidates(int(ROUTING_CONFIG.get("skill_rule_max_candidates", 8)))
+        timeout_s = float(ROUTING_CONFIG.get("skill_selector_timeout_s", 20.0))
+        try:
+            llm_selected, llm_reason = await asyncio.wait_for(
+                _llm_rerank_skills(
+                    task=task,
+                    subtask=subtask,
+                    agent_name=agent_name,
+                    candidates=semantic_pool,
+                    max_skills=max_skills,
+                ),
+                timeout=timeout_s,
+            )
+            if llm_selected:
+                return SkillDecision(
+                    selected_skills=llm_selected,
+                    source="llm_global",
+                    reason=llm_reason or "llm selected from global pool",
+                    candidates=semantic_pool,
+                    hint_used=hint_valid[:max_skills],
+                    hint_invalid=hint_invalid,
+                )
+        except asyncio.TimeoutError:
+            return SkillDecision([], "no_match", "rule empty and llm global timeout", semantic_pool, hint_valid[:max_skills], hint_invalid)
+        except Exception:
+            logger.exception("orchestrator.skill.global_rerank.error strategy=%s", strategy)
+            return SkillDecision([], "no_match", "rule empty and llm global failed", semantic_pool, hint_valid[:max_skills], hint_invalid)
+
+    if not rule_candidates:
+        return SkillDecision([], "no_match", "rule recall returned empty", [], hint_valid[:max_skills], hint_invalid)
+
+    selected = [str(item.get("name") or "").strip().lower() for item in rule_candidates[:max_skills]]
+    selected = [name for name in selected if name]
+    source = "rule"
+    reason = "rule ranked"
+
+    if bool(ROUTING_CONFIG.get("skill_llm_rerank", True)) and len(rule_candidates) > 1:
+        timeout_s = float(ROUTING_CONFIG.get("skill_selector_timeout_s", 20.0))
+        try:
+            llm_selected, llm_reason = await asyncio.wait_for(
+                _llm_rerank_skills(
+                    task=task,
+                    subtask=subtask,
+                    agent_name=agent_name,
+                    candidates=rule_candidates,
+                    max_skills=max_skills,
+                ),
+                timeout=timeout_s,
+            )
+            if llm_selected:
+                selected = llm_selected
+                source = "llm_rerank"
+                reason = llm_reason or "llm reranked"
+            else:
+                reason = f"llm fallback: {llm_reason or 'empty'}"
+        except asyncio.TimeoutError:
+            reason = "llm rerank timeout -> rule fallback"
+        except Exception:
+            logger.exception("orchestrator.skill.rerank.error strategy=%s", strategy)
+            reason = "llm rerank error -> rule fallback"
+
+    return SkillDecision(
+        selected_skills=selected[:max_skills],
+        source=source,
+        reason=reason,
+        candidates=rule_candidates,
+        hint_used=hint_valid[:max_skills],
+        hint_invalid=hint_invalid,
+    )
+
+
+@lru_cache(maxsize=1)
+def _available_agent_names() -> tuple[str, ...]:
+    profiles = get_agent_capability_descriptions() or {}
+    names: list[str] = []
+    if isinstance(profiles, dict):
+        for key in profiles.keys():
+            name = str(key or "").strip().lower()
+            if name and name not in names:
+                names.append(name)
+    if not names:
+        names = ["steward", "worker"]
+    return tuple(names)
+
+
+def _default_agent_name() -> str:
+    names = list(_available_agent_names())
+    if "worker" in names:
         return "worker"
-    return "steward"
+    return names[0]
+
+
+def _normalize_agent_name(
+    raw: str,
+    allowed_agents: set[str] | None = None,
+    default_agent: str | None = None,
+) -> str:
+    allowed = allowed_agents or set(_available_agent_names())
+    fallback = default_agent or _default_agent_name()
+    value = (raw or "").strip().lower()
+    alias_map = {
+        "research": "worker",
+        "researcher": "worker",
+    }
+    value = alias_map.get(value, value)
+    return value if value in allowed else fallback
 
 
 def _rule_route(task: str) -> RouteDecision:
@@ -172,31 +538,81 @@ def _rule_route(task: str) -> RouteDecision:
             strategy="rule_fallback",
         )
     return RouteDecision(
-        target_agents=["steward"],
-        reason="规则路由默认回退到 Steward",
+        target_agents=[_default_agent_name()],
+        reason=f"规则路由默认回退到 {_default_agent_name()}",
         confidence=0.55,
         plan_required=plan_required,
         strategy="rule_fallback",
     )
 
 
+def _compact_agent_profiles_for_route(
+    profiles: Any,
+    max_desc_chars: int,
+) -> list[dict[str, str]]:
+    if not isinstance(profiles, dict):
+        return []
+    compact: list[dict[str, str]] = []
+    for name, info in profiles.items():
+        agent_name = str(name or "").strip().lower()
+        if not agent_name:
+            continue
+        desc = str(info or "").replace("\n", " ").strip()
+        desc = re.sub(r"\s+", " ", desc)
+        if max_desc_chars > 0 and len(desc) > max_desc_chars:
+            desc = desc[:max_desc_chars].rstrip() + "..."
+        compact.append({"agent": agent_name, "desc": desc})
+    return compact
+
+
+def _compact_task_for_route(task: str, max_chars: int) -> str:
+    text = re.sub(r"\s+", " ", (task or "").strip())
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "..."
+
+
 async def _llm_route(task: str, strategy: str) -> RouteDecision:
     profiles = get_agent_capability_descriptions()
+    available_agents = list(_available_agent_names())
+    route_default_agent = _default_agent_name()
+    task_for_prompt = _compact_task_for_route(
+        task,
+        int(ROUTING_CONFIG.get("route_task_max_chars", 320)),
+    )
+    profile_brief = _compact_agent_profiles_for_route(
+        profiles,
+        int(ROUTING_CONFIG.get("route_profile_desc_max_chars", 100)),
+    )
     prompt = (
-        "你是任务路由器。请根据任务为多智能体系统做决策。请你快速做选择，不需要多想\n"
-        "候选 Agent 及能力:\n"
-        f"{json.dumps(profiles, ensure_ascii=False, indent=2)}\n\n"
-        "输出严格 JSON，不要输出其他文本，格式为:\n"
-        '{"target_agents":["steward"|"worker"],"reason":"...","confidence":0.0,"plan_required":true|false}\n\n'
+        "你是任务路由器，请快速选择最合适的 agent。\n"
+        "候选 Agent(精简版):\n"
+        f"{json.dumps(profile_brief, ensure_ascii=False, separators=(",", ":"))}\n\n"
+        "仅输出 JSON，不要输出其他文本，格式为:\n"
+        '{"target_agents":["agent_name"],"reason":"...","confidence":0.0,"plan_required":true|false}\n\n'
         "要求:\n"
-        "1) 可选一个或多个 agent。\n"
-        "2) 任务明显复合时 plan_required=true。\n"
-        "3) 不确定时优先 steward。\n\n"
-        f"用户任务:\n{task}"
+        f"1) target_agents 里的每个值必须来自: {available_agents}。\n"
+        "2) 可选一个或多个 agent。\n"
+        "3) 任务明显复合时 plan_required=true。\n"
+        f"4) 不确定时优先 {route_default_agent}。\n\n"
+        f"用户任务(精简): {task_for_prompt}"
+    )
+    logger.info(
+        "orchestrator.route.prompt strategy=%s prompt_chars=%d task_chars=%d task_compact_chars=%d prompt=\n%s",
+        strategy,
+        len(prompt),
+        len(task or ""),
+        len(task_for_prompt),
+        prompt,
     )
     agent = create_router_agent()
+    
     response = await agent(Msg(name="User", content=prompt, role="user"))
+    logger.info("orchestrator.route.response is finished")
+
+
     text = _extract_response_text(response)
+    logger.info("orchestrator.route.response strategy=%s response=\n%s", strategy, text)
     parsed = _parse_json_object(text)
     if not parsed:
         return _rule_route(task)
@@ -205,9 +621,16 @@ async def _llm_route(task: str, strategy: str) -> RouteDecision:
     if not isinstance(targets, list) or not targets:
         return _rule_route(task)
 
+    allowed = set(available_agents)
     normalized: list[str] = []
     for item in targets:
-        normalized.append(_normalize_agent_name(str(item)))
+        normalized.append(
+            _normalize_agent_name(
+                str(item),
+                allowed_agents=allowed,
+                default_agent=route_default_agent,
+            )
+        )
     normalized = list(dict.fromkeys(normalized))
 
     confidence = parsed.get("confidence")
@@ -243,17 +666,22 @@ def _split_task_by_connectors(task: str) -> list[str]:
 
 def _subtask_agent_by_rule(subtask: str) -> str:
     decision = _rule_route(subtask)
-    return decision.target_agents[0] if decision.target_agents else "steward"
+    return decision.target_agents[0] if decision.target_agents else _default_agent_name()
 
 
 async def _llm_plan(task: str, decision: RouteDecision, max_subtasks: int) -> list[list[dict[str, str]]]:
+    available_agents = list(_available_agent_names())
+    allowed = set(available_agents)
+    default_plan_agent = (
+        decision.target_agents[0] if decision.target_agents else _default_agent_name()
+    )
     prompt = (
-        "你是任务规划器。请把用户任务拆成可执行阶段。\n"
+        "你是任务规划器。请把用户任务拆成可执行阶段，并且**快速**做出相应。\n"
         "输出严格 JSON，格式为:\n"
-        '{"stages":[[{"agent":"steward|worker","task":"..."}]]}\n\n'
+        '{"stages":[[{"agent":"agent_name","task":"..."}]]}\n\n'
         "规则:\n"
         "1) stages 是二维数组，外层表示阶段（串行），内层表示同阶段并行子任务。\n"
-        "2) agent 只能是 steward 或 worker。\n"
+        f"2) agent 只能从以下集合中选择: {available_agents}。\n"
         "3) 子任务总数不超过 max_subtasks。\n"
         "4) 若任务简单，可只给一个子任务。\n\n"
         f"max_subtasks={max_subtasks}\n"
@@ -276,7 +704,11 @@ async def _llm_plan(task: str, decision: RouteDecision, max_subtasks: int) -> li
         for item in stage:
             if not isinstance(item, dict):
                 continue
-            agent_name = _normalize_agent_name(str(item.get("agent") or ""))
+            agent_name = _normalize_agent_name(
+                str(item.get("agent") or ""),
+                allowed_agents=allowed,
+                default_agent=default_plan_agent,
+            )
             task_text = str(item.get("task") or "").strip()
             if not task_text:
                 continue
@@ -308,17 +740,44 @@ def _fallback_plan(task: str, decision: RouteDecision, max_subtasks: int) -> lis
 
     for part in parts[:max_subtasks]:
         stages.append([{"agent": _subtask_agent_by_rule(part), "task": part}])
-    return stages or [[{"agent": "steward", "task": task.strip()}]]
+    return stages or [[{"agent": _default_agent_name(), "task": task.strip()}]]
 
 
-def _build_agent(agent_name: str):
-    if agent_name == "worker":
-        return create_worker_agent()
-    return create_steward_agent()
+def _build_agent(agent_name: str, skill_context: str | None = None):
+    normalized = (agent_name or "").strip().lower()
+    factory = getattr(agents_module, f"create_{normalized}_agent", None)
+    if callable(factory):
+        try:
+            return factory(skill_context=skill_context)
+        except TypeError:
+            return factory()
+
+    fallback = _default_agent_name()
+    if normalized != fallback:
+        logger.warning(
+            "orchestrator.agent.unknown agent=%s; fallback=%s",
+            normalized,
+            fallback,
+        )
+    fallback_factory = getattr(agents_module, f"create_{fallback}_agent", None)
+    if callable(fallback_factory):
+        return fallback_factory()
+
+    # Defensive fallback to keep runtime compatible if registry and factories drift.
+    if fallback == "worker":
+        return create_worker_agent(skill_context=skill_context)
+    return create_steward_agent(skill_context=skill_context)
 
 
-async def _run_one_agent(agent_name: str, task: str, output_path: str | None = None) -> dict[str, Any]:
-    agent = _build_agent(agent_name)
+async def _run_one_agent(
+    agent_name: str,
+    task: str,
+    output_path: str | None = None,
+    selected_skills: list[str] | None = None,
+) -> dict[str, Any]:
+    skill_list = selected_skills or []
+    skill_context = _skill_prompt_context(skill_list)
+    agent = _build_agent(agent_name, skill_context=skill_context)
     msg_content = task.strip()
     if output_path:
         msg_content += (
@@ -332,6 +791,7 @@ async def _run_one_agent(agent_name: str, task: str, output_path: str | None = N
     return {
         "agent": agent_name,
         "task": task,
+        "skills": skill_list,
         "reply": _extract_response_text(response),
         "elapsed_ms": elapsed_ms,
     }
@@ -358,6 +818,7 @@ async def run_orchestrated_task(
     output_path: str | None = None,
     mode: str = "router",
     agent_hint: str | None = None,
+    skill_hint: str | None = None,
     routing_strategy: str | None = None,
     context_id: str | None = None,
 ) -> dict[str, Any]:
@@ -417,15 +878,20 @@ async def run_orchestrated_task(
                 decision.reason,
             )
         except asyncio.TimeoutError:
+            timeout_default_agent = "worker" if "worker" in _available_agent_names() else _default_agent_name()
             decision = RouteDecision(
-                target_agents=["worker"],
-                reason="router timeout -> default worker",
+                target_agents=[timeout_default_agent],
+                reason=f"router timeout -> default {timeout_default_agent}",
                 confidence=0.0,
                 plan_required=False,
                 strategy="timeout_default_worker",
             )
             route_control_path = "router_timeout_worker"
-            logger.warning("orchestrator.route.timeout timeout_s=%.2f; fallback=worker", router_timeout_s)
+            logger.warning(
+                "orchestrator.route.timeout timeout_s=%.2f; fallback=%s",
+                router_timeout_s,
+                timeout_default_agent,
+            )
         except Exception:
             decision = _rule_route(task)
             route_control_path = "router_error_fallback"
@@ -450,10 +916,15 @@ async def run_orchestrated_task(
                 len(stages),
             )
         except asyncio.TimeoutError:
-            stages = [[{"agent": "worker", "task": task.strip()}]]
+            timeout_default_agent = "worker" if "worker" in _available_agent_names() else _default_agent_name()
+            stages = [[{"agent": timeout_default_agent, "task": task.strip()}]]
             plan_source = "timeout_worker"
             plan_control_path = "planner_timeout_worker"
-            logger.warning("orchestrator.plan.timeout timeout_s=%.2f; fallback=worker", planner_timeout_s)
+            logger.warning(
+                "orchestrator.plan.timeout timeout_s=%.2f; fallback=%s",
+                planner_timeout_s,
+                timeout_default_agent,
+            )
         except Exception:
             stages = _fallback_plan(task, decision, max_subtasks=max_subtasks)
             plan_source = "fallback"
@@ -466,6 +937,7 @@ async def run_orchestrated_task(
 
     executions: list[dict[str, Any]] = []
     stage_traces: list[dict[str, Any]] = []
+    skill_trace_records: list[dict[str, Any]] = []
 
     for stage_index, stage in enumerate(stages, start=1):
         stage_start = time.perf_counter()
@@ -479,9 +951,35 @@ async def run_orchestrated_task(
         for sub_index, item in enumerate(stage, start=1):
             is_last = stage_index == len(stages) and sub_index == len(stage)
             hint_path = output_path if is_last else None
+            skill_decision = await _select_skills_for_subtask(
+                task=task,
+                subtask=item["task"],
+                agent_name=item["agent"],
+                strategy=strategy,
+                skill_hint=skill_hint,
+            )
+            skill_trace_records.append(
+                {
+                    "stage": stage_index,
+                    "subtask": sub_index,
+                    "agent": item["agent"],
+                    "task_preview": item["task"][:120],
+                    "selected_skills": skill_decision.selected_skills,
+                    "source": skill_decision.source,
+                    "reason": skill_decision.reason,
+                    "candidates": skill_decision.candidates,
+                    "hint_used": skill_decision.hint_used,
+                    "hint_invalid": skill_decision.hint_invalid,
+                }
+            )
             run_items.append(
                 asyncio.wait_for(
-                    _run_one_agent(item["agent"], item["task"], output_path=hint_path),
+                    _run_one_agent(
+                        item["agent"],
+                        item["task"],
+                        output_path=hint_path,
+                        selected_skills=skill_decision.selected_skills,
+                    ),
                     timeout=subtask_timeout_s,
                 )
             )
@@ -561,6 +1059,11 @@ async def run_orchestrated_task(
                 "strategy": decision.strategy,
             },
             "plan_source": plan_source,
+            "skills": {
+                "enabled": bool(ROUTING_CONFIG.get("skill_enabled", True)),
+                "max_per_subtask": int(ROUTING_CONFIG.get("skill_max_per_subtask", 2)),
+                "records": skill_trace_records,
+            },
             "stages": stage_traces,
         },
     }

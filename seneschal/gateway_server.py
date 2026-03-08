@@ -108,6 +108,7 @@ class TaskRequest(BaseModel):
     output_path: str | None = None
     mode: str = Field(default="router")
     agent_hint: str | None = None
+    skill_hint: str | None = None
     routing_strategy: str | None = None
     context_id: str | None = None
     webhook_url: str | None = None
@@ -240,6 +241,7 @@ async def _enqueue_feishu_job(
             output_path=None,
             mode="router",
             agent_hint=None,
+            skill_hint=None,
             routing_strategy=None,
             context_id=message_id or chat_id or open_id,
         )
@@ -455,6 +457,7 @@ async def _run_job(
     output_path: str | None,
     mode: str,
     agent_hint: str | None,
+    skill_hint: str | None,
     routing_strategy: str | None,
     context_id: str | None,
 ) -> None:
@@ -467,6 +470,7 @@ async def _run_job(
             output_path=output_path,
             mode=mode,
             agent_hint=agent_hint,
+            skill_hint=skill_hint,
             routing_strategy=routing_strategy,
             context_id=context_id,
         )
@@ -563,6 +567,7 @@ async def submit_task(
                 request.output_path,
                 request.mode,
                 request.agent_hint,
+                request.skill_hint,
                 request.routing_strategy,
                 request.context_id,
             )
@@ -575,6 +580,7 @@ async def submit_task(
         output_path=request.output_path,
         mode=request.mode,
         agent_hint=request.agent_hint,
+        skill_hint=request.skill_hint,
         routing_strategy=request.routing_strategy,
         context_id=request.context_id,
     )

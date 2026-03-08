@@ -51,6 +51,18 @@ def create_openai_model(*, stream: bool = True, temperature: float | None = None
     )
 
 
+def _build_skill_prompt_suffix(skill_context: str | None) -> str:
+    text = (skill_context or "").strip()
+    if not text:
+        return ""
+    return (
+        "\n\n[Activated Skills]\n"
+        f"{text}\n"
+        "使用方式：仅在与当前任务直接相关时参考这些技能约束；"
+        "若不相关则忽略，不要为了使用技能而使用技能。"
+    )
+
+
 @dataclass
 class AgentCapability:
     name: str
@@ -67,8 +79,6 @@ def get_agent_capability_descriptions() -> dict[str, dict[str, object]]:
             role="负责手机端数据收集-存储-分析这一类特殊任务（Collect/Store/Analyze/Execute）",
             strengths=[
                 "手机端数据采集与执行动作",
-                "WeKnora 知识写入与分析",
-                "跨工具编排与进度汇报",
             ],
             typical_tasks=[
                 "整理今日待办并决定是否执行手机操作",
@@ -108,7 +118,7 @@ def create_router_agent() -> ReActAgent:
 - 只输出 JSON，不要包含额外解释。
 - JSON 字段：target_agents(list)、reason(str)、confidence(float 0-1)、plan_required(bool)。
 - 如果任务涉及多种能力，可返回多个 agent。
-- 不确定时优先选择 steward。
+- 不确定时优先选择 worker。
 """
     return ReActAgent(
         name="Router",
@@ -117,7 +127,7 @@ def create_router_agent() -> ReActAgent:
         formatter=OpenAIChatFormatter(),
         toolkit=Toolkit(),
         memory=InMemoryMemory(),
-        max_iters=2,
+        max_iters=1,
     )
 
 
@@ -138,11 +148,11 @@ def create_planner_agent() -> ReActAgent:
         formatter=OpenAIChatFormatter(),
         toolkit=Toolkit(),
         memory=InMemoryMemory(),
-        max_iters=2,
+        max_iters=1,
     )
 
 
-def create_worker_agent() -> ReActAgent:
+def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
     """创建 Worker Agent，用于子任务委派。"""
     toolkit = Toolkit()
 
@@ -218,6 +228,7 @@ def create_worker_agent() -> ReActAgent:
 - 不做多步长对话，输出最终结论或可执行结果。
 - 若任务明显要求手机端采集/操作或完整 Collect-Store-Analyze-Execute 流程，应明确建议切换 steward 处理。
 """
+    sys_prompt += _build_skill_prompt_suffix(skill_context)
 
     return ReActAgent(
         name="Worker",
@@ -230,7 +241,7 @@ def create_worker_agent() -> ReActAgent:
     )
 
 
-def create_steward_agent() -> ReActAgent:
+def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
     """创建智能管家 Agent (StewardAgent)。"""
     toolkit = Toolkit()
     retry_cap = max(0, min(int(os.environ.get("STEWARD_MOBI_MAX_RETRIES", "2")), 5))
@@ -488,6 +499,7 @@ def create_steward_agent() -> ReActAgent:
 5. 如发现待办事项，询问是否需要添加到日历，然后调用 call_mobi_action
 
 现在，请准备好为用户服务！"""
+    sys_prompt += _build_skill_prompt_suffix(skill_context)
 
     return ReActAgent(
         name="Steward",
