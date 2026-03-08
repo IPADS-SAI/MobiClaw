@@ -32,6 +32,8 @@
 3. 将用户任务转成消息与工具调用
 4. 输出运行日志（run_id + jsonl）用于复盘
 
+5. 为每个子任务选择可选技能（Skill），并按需注入到目标 Agent 的执行上下文
+
 ---
 
 ## 3. 启动链路（从 `python app.py` 开始）
@@ -56,6 +58,22 @@
 ---
 
 ## 4. Agent 构建设计
+
+## 4.0 Skill 选择与注入
+
+当前 orchestrator 在执行每个子任务前会执行 Skill Selector 子流程：
+
+1. 发现：扫描 `seneschal/skills/*/SKILL.md`，提取 skill 名称与描述。
+2. 召回：根据子任务文本与目标 agent，做规则召回并打分。
+3. 重排：若开启配置，使用 LLM 对候选 skill 重排。
+4. 注入：将选中的 skill 摘要注入 `create_worker_agent` / `create_steward_agent` 的 prompt。
+5. 回退：若无命中、超时或解析失败，自动回退为“无 skill 执行”。
+
+设计要点：
+- Skill 是可选增强层，不改变既有 Router/Planner/Executor 主流程。
+- 支持 `skill_hint` 人工覆盖（优先级高于自动选择）。
+- 每个子任务最多挂载 N 个 skill（默认 2）。
+- routing trace 中会记录 skill 选择来源、候选与最终结果，便于复盘。
 
 ## 4.1 `create_openai_model`
 
@@ -160,8 +178,10 @@ python app.py --agent-task "检索今天的 AI 新闻并生成摘要" --output "
 
 行为：
 
-- 构造 Worker 输入消息
-- 如果给 `--output`，会附加“输出路径提示”到任务文本
+- 默认走 orchestrator（Router + Planner + Executor + Skill Selector）
+- 如果给 `--output`，会附加“输出路径提示”到最后一个子任务
+- 可选 `--agent-hint` 控制目标 agent
+- 可选 `--skill-hint` 控制 skill 选择（支持逗号分隔）
 
 ---
 
@@ -193,6 +213,16 @@ python app.py --agent-task "检索今天的 AI 新闻并生成摘要" --output "
 - `BRAVE_API_KEY`
 - `BRAVE_SEARCH_BASE_URL`
 - `BRAVE_SEARCH_MAX_RESULTS`
+
+### 6.5 Skill Selector
+
+- `SENESCHAL_SKILL_ENABLED`
+- `SENESCHAL_SKILL_ROOT_DIR`
+- `SENESCHAL_SKILL_MAX_PER_SUBTASK`
+- `SENESCHAL_SKILL_SELECTOR_TIMEOUT_S`
+- `SENESCHAL_SKILL_LLM_RERANK`
+- `SENESCHAL_SKILL_RULE_MAX_CANDIDATES`
+- `SENESCHAL_SKILL_HINT_OVERRIDE`
 
 ---
 

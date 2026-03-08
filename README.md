@@ -141,6 +141,7 @@ python app.py --agent-task "从 arXiv 搜索今天的 Agent 论文并总结" --o
 - Router Agent：根据任务语义选择目标 Agent（LLM 语义路由 + 规则兜底）
 - Planner Agent：复合任务自动拆分为阶段子任务（串并行混合）
 - Executor：将子任务分发给 `Steward` / `Worker` 执行并聚合结果
+- Skill Selector：为每个子任务自动选择最合适的 Skill（规则召回 + LLM 重排，可为空）
 
 联网搜索默认采用 Brave Search：先检索候选来源链接与摘要，再按需抓取网页正文。
 实现见 [seneschal/workflows.py](seneschal/workflows.py) 与 `seneschal/orchestrator.py`。
@@ -172,7 +173,17 @@ python app.py --agent-task "帮我检索最新 Agent 论文" --mode worker
 
 # 可选：给路由器提示偏好 Agent
 python app.py --agent-task "整理并补充今日行动建议" --agent-hint steward
+
+# 可选：手动指定 skill（优先级高于自动选择，支持逗号分隔）
+python app.py --agent-task "做一个内部周报草稿" --skill-hint internal-comms
+python app.py --agent-task "生成一个前端页面原型" --skill-hint web-artifacts-builder,frontend-design
 ```
+
+Skill 自动选择说明：
+- 默认启用混合策略：先规则召回，再用 LLM 在候选中重排。
+- 每个子任务最多挂载 2 个 skill（可通过环境变量调整）。
+- 如果没有匹配 skill，系统会回退为“无 skill 执行”，不影响原有流程。
+- `--skill-hint` 会优先生效；非法 skill 名会自动忽略并回退自动选择。
 
 Shell 工具默认受白名单限制，若你设置了 `SENESCHAL_SHELL_ALLOWLIST`，请按需加入允许的命令。
 如需限制写文件路径，可设置 `SENESCHAL_FILE_WRITE_ROOT`。
@@ -201,6 +212,13 @@ python -m seneschal.gateway_server
 - `SENESCHAL_ROUTER_TIMEOUT_S`：Router 决策超时秒数（默认 `60`，超时默认回退到 `worker`）
 - `SENESCHAL_PLANNER_TIMEOUT_S`：Planner 拆分超时秒数（默认 `60`，超时默认回退到 `worker`）
 - `SENESCHAL_SUBTASK_TIMEOUT_S`：单子任务执行超时秒数（默认 `300`）
+- `SENESCHAL_SKILL_ENABLED`：是否启用 skill 自动选择（默认 `1`）
+- `SENESCHAL_SKILL_ROOT_DIR`：skill 根目录（默认 `seneschal/skills`）
+- `SENESCHAL_SKILL_MAX_PER_SUBTASK`：每个子任务最多挂载的 skill 数（默认 `2`）
+- `SENESCHAL_SKILL_SELECTOR_TIMEOUT_S`：skill LLM 重排超时秒数（默认 `20`）
+- `SENESCHAL_SKILL_LLM_RERANK`：是否启用 LLM 重排（默认 `1`）
+- `SENESCHAL_SKILL_RULE_MAX_CANDIDATES`：规则召回候选上限（默认 `8`）
+- `SENESCHAL_SKILL_HINT_OVERRIDE`：是否允许 `skill_hint` 覆盖自动选择（默认 `1`）
 - `SENESCHAL_GATEWAY_PUBLIC_BASE_URL`：生成文件下载链接时使用的公网前缀
 - `SENESCHAL_GATEWAY_FILE_ROOT`：允许下载文件的根目录（建议设置）
 - `SENESCHAL_GATEWAY_CALLBACK_TIMEOUT`：异步回调超时秒数
@@ -291,6 +309,7 @@ curl -X POST http://localhost:8090/api/v1/task \
 - `output_path`：输出文件提示路径（由 workflow 决策是否落盘）
 - `mode`：`router`（默认）/ `intelligent` / `worker` / `steward` / `auto`
 - `agent_hint`：可选路由提示（`worker` / `steward`）
+- `skill_hint`：可选 skill 提示（单个名称或逗号分隔，优先于自动选择）
 - `routing_strategy`：可选路由策略覆盖
 - `context_id`：可选上下文标识（便于多轮编排追踪）
 - `webhook_url`：异步完成后回调地址

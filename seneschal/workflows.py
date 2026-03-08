@@ -74,6 +74,7 @@ async def run_gateway_task(
     output_path: str | None = None,
     mode: str = "router",
     agent_hint: str | None = None,
+    skill_hint: str | None = None,
     routing_strategy: str | None = None,
     context_id: str | None = None,
 ) -> dict[str, Any]:
@@ -83,6 +84,7 @@ async def run_gateway_task(
         output_path=output_path,
         mode=mode,
         agent_hint=agent_hint,
+        skill_hint=skill_hint,
         routing_strategy=routing_strategy,
         context_id=context_id,
     )
@@ -183,6 +185,7 @@ async def run_agent_task(
     output_path: str | None = None,
     mode: str = "router",
     agent_hint: str | None = None,
+    skill_hint: str | None = None,
     routing_strategy: str | None = None,
     context_id: str | None = None,
 ) -> None:
@@ -201,6 +204,7 @@ async def run_agent_task(
             output_path=output_path,
             mode=mode,
             agent_hint=agent_hint,
+            skill_hint=skill_hint,
             routing_strategy=routing_strategy,
             context_id=context_id,
         )
@@ -263,6 +267,10 @@ async def main() -> None:
         help="Optional forced agent hint (worker/steward)",
     )
     parser.add_argument(
+        "--skill-hint",
+        help="Optional skill hint (single skill or comma separated skill names)",
+    )
+    parser.add_argument(
         "--routing-strategy",
         help="Optional routing strategy override",
     )
@@ -289,6 +297,7 @@ async def main() -> None:
             args.output,
             mode=args.mode,
             agent_hint=args.agent_hint,
+            skill_hint=args.skill_hint,
             routing_strategy=args.routing_strategy,
             context_id=args.context_id,
         )
