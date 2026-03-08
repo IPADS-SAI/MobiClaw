@@ -60,7 +60,33 @@ Seneschal/
 
 ## 4. Agent 模块
 
-### 4.1 Steward Agent
+### 4.1 入口与运行模式
+
+- `app.py`
+  - 启动时读取根目录 `.env`（仅补充未设置的环境变量）
+  - 调用 `seneschal.workflows.main()`
+- `workflows.py` 支持 4 类入口：
+  - 默认：演示对话
+  - `--interactive`：交互式会话
+  - `--daily`：按 trigger 执行日常任务采集
+  - `--agent-task`：智能路由多智能体编排（Router + Planner + Executor）
+
+其中 `--agent-task` 与 Gateway `/api/v1/task` 共享同一编排层：
+- Router：决定任务优先交给 `Steward` 还是 `Worker`
+- Planner：复合任务拆分为阶段子任务（可并行）
+- Executor：按阶段调度多个 Agent 并聚合结果
+- 兼容：仍保留 `mode=worker/steward/auto` 的 legacy 强制模式
+
+### 4.2 Agent 层
+
+- 使用 `AgentScope` 的 `ReActAgent`
+- 系统提示词将流程固定为四步：Collect -> Store -> Analyze -> Execute
+- 注册工具（`seneschal/agents.py`）：
+  - `call_mobi_collect`
+  - `weknora_add_knowledge`
+  - `weknora_rag_chat`
+  - `call_mobi_action`
+#### 4.2.1 Steward Agent
 
 `create_steward_agent()` 注册的关键工具：
 
@@ -80,7 +106,7 @@ Seneschal/
 - 显式重试上限由 `STEWARD_MOBI_MAX_RETRIES` 控制（默认 2）。
 - 最终“任务是否完成”由 Agent 基于证据判断，不直接信任工具状态字段。
 
-### 4.2 Worker Agent
+###@ 4.2.2 Worker Agent
 
 `create_worker_agent()` 偏向“检索/处理/落盘”：
 
@@ -92,43 +118,39 @@ Seneschal/
 - 写文件
 - WeKnora 检索
 
----
+### 4.3 工具层（Mobi + WeKnora）
 
-## 5. 工具层
+- `seneschal/tools/mobi.py`
+  - 调用网关：
+    - `POST /api/v1/collect`
+    - `POST /api/v1/action`
+  - 请求失败时自动降级到 `mock_data`
 
-`seneschal/tools/__init__.py` 统一导出工具，并做 WeKnora 缓存管理：
+- `seneschal/tools/__init__.py`（WeKnora 高阶封装）
+  - 自动解析 KB/Agent/Session（含本地缓存 `seneschal/tools/weknora_cache.json`）
+  - `weknora_add_knowledge`：
+    - 通过 `create_knowledge_manual` 入库
+    - 默认补当天日期标签
+  - `weknora_rag_chat`：
+    - 默认开启 `agent_enabled`、`web_search_enabled`
+    - 404 时自动创建会话并重试
 
-- 缓存文件：`seneschal/tools/weknora_cache.json`
-- 缓存内容：KB、Agent、Session 映射
-- 能力：按名称解析 KB/Agent，必要时自动建会话、补标签
+### 4.4 Daily 任务执行器
 
-`mobi.py` 与 `mobiagent_server` 通信；失败时可回退到 mock 数据。
-
-`shell.py` 默认禁止管道与重定向，只允许白名单命令（环境变量可改）。
-
----
-
-## 6. DailyTasks
-
-任务定义在 `seneschal/dailytasks/tasks/tasks.json`，核心字段：
-
-- `task_id`, `triggers`, `description/steps`
-- 可选 `task_type=agent_task`（走 Worker）
-- 可选 `output_path`（给 Worker 的落盘提示）
-
-执行流程（`run_daily_tasks`）：
-
-1. 按 trigger 过滤任务
-2. collect 类任务调用 `call_mobi_collect`
-3. 写入 WeKnora（附 run_id/task_id 元数据）
-4. 所有 collect 完成后做一次统一 RAG 总结
-5. 事件写入 `seneschal/logs/{run_id}.jsonl`
+- 任务定义：`seneschal/dailytasks/tasks/tasks.json`
+- 选择逻辑：按 `trigger` 过滤任务
+- 执行逻辑：
+  1. `call_mobi_collect(prompt)`
+  2. `weknora_add_knowledge(content, metadata)`
+  3. 最后统一 `weknora_rag_chat` 生成总结
+- 每次运行生成 `run_id`，事件写入 `seneschal/logs/{run_id}.jsonl`
 
 ---
 
-## 7. 网关模块
 
-### 7.1 `mobiagent_server/server.py`
+## 5. 网关模块
+
+### 5.1 `mobiagent_server/server.py`
 
 API：
 
@@ -152,7 +174,7 @@ CLI 模式会：
 - 扫描图片/XML/action/react 构建 `execution_result.json`
 - 可对 `output_schema` 做 VLM 抽取
 
-### 7.2 `seneschal/gateway_server.py`
+### 5.2 `seneschal/gateway_server.py`
 
 API：
 
@@ -164,7 +186,7 @@ API：
 
 ---
 
-## 8. 配置要点
+## 6. 配置要点
 
 `seneschal/config.py` 约定：
 
@@ -183,7 +205,7 @@ API：
 
 ---
 
-## 9. 扩展建议
+## 7. 扩展建议
 
 1. 增加新任务：修改 `tasks/tasks.json`
 2. 增加新工具：在 `seneschal/tools/` 新增并在 Agent 注册

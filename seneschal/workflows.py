@@ -3,10 +3,89 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+from typing import Any
+
 from agentscope.message import Msg
 
 from .agents import create_steward_agent, create_user_agent, create_worker_agent
 from .dailytasks.runner import run_daily_tasks
+from .orchestrator import run_orchestrated_task
+
+
+def _extract_response_text(response: Any) -> str:
+    if response is None:
+        return ""
+    text = response.get_text_content() if hasattr(response, "get_text_content") else ""
+    if text:
+        return text
+    parts: list[str] = []
+    for block in getattr(response, "content", []) or []:
+        block_text = getattr(block, "text", "")
+        if block_text:
+            parts.append(block_text)
+    return "\n".join(parts).strip()
+
+
+def _collect_file_paths(text: str, output_path: str | None = None) -> list[Path]:
+    paths: list[Path] = []
+    if output_path:
+        paths.append(Path(output_path).expanduser())
+
+    for raw in re.findall(r"\[File\]\s+Wrote:\s*(.+)", text or ""):
+        candidate = raw.strip()
+        if candidate:
+            paths.append(Path(candidate).expanduser())
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
+
+
+def _build_file_entries(paths: list[Path]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for path in paths:
+        try:
+            resolved = path.resolve()
+        except FileNotFoundError:
+            resolved = path.absolute()
+        if not resolved.exists() or not resolved.is_file():
+            continue
+        stat = resolved.stat()
+        entries.append(
+            {
+                "path": str(resolved),
+                "name": resolved.name,
+                "size": stat.st_size,
+            }
+        )
+    return entries
+
+
+async def run_gateway_task(
+    task: str,
+    output_path: str | None = None,
+    mode: str = "router",
+    agent_hint: str | None = None,
+    routing_strategy: str | None = None,
+    context_id: str | None = None,
+) -> dict[str, Any]:
+    """Run a gateway task through intelligent multi-agent orchestration."""
+    return await run_orchestrated_task(
+        task=task,
+        output_path=output_path,
+        mode=mode,
+        agent_hint=agent_hint,
+        routing_strategy=routing_strategy,
+        context_id=context_id,
+    )
 
 
 async def run_demo_conversation() -> None:
@@ -99,46 +178,44 @@ async def run_interactive_mode() -> None:
             continue
 
 
-async def run_agent_task(task: str, output_path: str | None = None) -> None:
-    """运行通用 Agent 任务，具体策略由 Agent 决策。"""
+async def run_agent_task(
+    task: str,
+    output_path: str | None = None,
+    mode: str = "router",
+    agent_hint: str | None = None,
+    routing_strategy: str | None = None,
+    context_id: str | None = None,
+) -> None:
+    """运行通用 Agent 任务，默认使用智能路由多智能体编排。"""
     print("=" * 70)
     print("Seneschal Agent Task")
     print("=" * 70)
     print()
 
-    worker = create_worker_agent()
-    msg_content = task.strip() if task else ""
-    if output_path:
-        msg_content += (
-            "\n\n输出文件路径: "
-            + output_path
-            + "\n如需落盘，请自行选择合适工具完成。"
-        )
-
-    msg = Msg(
-        name="User",
-        content=msg_content,
-        role="user",
-    )
-
-    print("[Worker 正在思考和执行...]")
+    print("[Orchestrator 正在路由与执行...]")
     print("-" * 70)
 
     try:
-        response = await worker(msg)
+        result = await run_orchestrated_task(
+            task=task,
+            output_path=output_path,
+            mode=mode,
+            agent_hint=agent_hint,
+            routing_strategy=routing_strategy,
+            context_id=context_id,
+        )
         print("-" * 70)
-        print("[Worker 回复]:")
-        text = response.get_text_content() if response else ""
-        if not text and response is not None:
-            parts = []
-            for block in response.content or []:
-                block_text = getattr(block, "text", "")
-                if block_text:
-                    parts.append(block_text)
-            text = "\n".join(parts).strip()
+        print("[Orchestrator 回复]:")
+        text = str(result.get("reply") or "")
         if not text:
             text = "（无文本回复，可能是空工具调用）"
         print(text)
+
+        trace = result.get("routing_trace") if isinstance(result, dict) else None
+        if isinstance(trace, dict):
+            print("-" * 70)
+            print("[Routing Trace]:")
+            print(str(trace))
         print("-" * 70)
     except Exception as e:
         print(f"[错误] Agent 执行出错: {e}")
@@ -176,6 +253,23 @@ async def main() -> None:
         "--output",
         help="Optional output path hint for agent tasks",
     )
+    parser.add_argument(
+        "--mode",
+        default="router",
+        help="Task execution mode: router/intelligent or legacy worker/steward/auto",
+    )
+    parser.add_argument(
+        "--agent-hint",
+        help="Optional forced agent hint (worker/steward)",
+    )
+    parser.add_argument(
+        "--routing-strategy",
+        help="Optional routing strategy override",
+    )
+    parser.add_argument(
+        "--context-id",
+        help="Optional context id for future multi-turn orchestration",
+    )
     args = parser.parse_args()
 
     if args.daily:
@@ -190,6 +284,13 @@ async def main() -> None:
     elif args.interactive:
         await run_interactive_mode()
     elif args.agent_task:
-        await run_agent_task(args.agent_task, args.output)
+        await run_agent_task(
+            args.agent_task,
+            args.output,
+            mode=args.mode,
+            agent_hint=args.agent_hint,
+            routing_strategy=args.routing_strategy,
+            context_id=args.context_id,
+        )
     else:
         await run_demo_conversation()

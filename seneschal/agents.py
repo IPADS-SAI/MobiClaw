@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
 import os
 import json
 
@@ -13,7 +14,7 @@ from agentscope.memory import InMemoryMemory
 from agentscope.model import OpenAIChatModel
 from agentscope.tool import Toolkit, ToolResponse
 
-from .config import MODEL_CONFIG
+from .config import MODEL_CONFIG, ROUTING_CONFIG
 from .tools import (
     arxiv_search,
     brave_search,
@@ -34,18 +35,110 @@ from .tools import (
 )
 
 
-def create_openai_model() -> OpenAIChatModel:
+def create_openai_model(*, stream: bool = True, temperature: float | None = None) -> OpenAIChatModel:
     """创建 OpenAI 兼容的聊天模型实例。"""
     api_base = MODEL_CONFIG["api_base"]
     if not api_base.startswith("http://") and not api_base.startswith("https://"):
         api_base = "http://" + api_base
 
+    temp = MODEL_CONFIG["temperature"] if temperature is None else temperature
     return OpenAIChatModel(
         model_name=MODEL_CONFIG["model_name"],
         api_key=MODEL_CONFIG["api_key"],
-        stream=True,
+        stream=stream,
         client_kwargs={"base_url": api_base},
-        generate_kwargs={"temperature": MODEL_CONFIG["temperature"]},
+        generate_kwargs={"temperature": temp},
+    )
+
+
+@dataclass
+class AgentCapability:
+    name: str
+    role: str
+    strengths: list[str]
+    typical_tasks: list[str]
+    boundaries: list[str]
+
+
+def get_agent_capability_descriptions() -> dict[str, dict[str, object]]:
+    registry = [
+        AgentCapability(
+            name="steward",
+            role="负责手机端数据收集-存储-分析这一类特殊任务（Collect/Store/Analyze/Execute）",
+            strengths=[
+                "手机端数据采集与执行动作",
+                "WeKnora 知识写入与分析",
+                "跨工具编排与进度汇报",
+            ],
+            typical_tasks=[
+                "整理今日待办并决定是否执行手机操作",
+                "采集微信信息后入库并生成建议",
+            ],
+            boundaries=[
+                "不擅长大规模网页/论文检索",
+                "通用检索类子任务建议委派给 worker",
+            ],
+        ),
+        AgentCapability(
+            name="worker",
+            role="负责通用检索、网页阅读、学术资料收集和本地工具执行",
+            strengths=[
+                "Brave/网页/arXiv/DBLP 检索",
+                "下载文件与 PDF 文本提取",
+                "Shell 与本地文件写入",
+            ],
+            typical_tasks=[
+                "检索最新论文并总结",
+                "抓取网页并提炼可执行结论",
+            ],
+            boundaries=[
+                "不直接执行手机 GUI 操作",
+                "不负责 WeKnora 主流程编排",
+            ],
+        ),
+    ]
+    return {item.name: asdict(item) for item in registry}
+
+
+def create_router_agent() -> ReActAgent:
+    """创建 Router Agent，用于任务路由决策。"""
+    sys_prompt = """你是多智能体任务路由器。你的目标是根据任务文本选择最合适的 Agent。
+
+输出要求：
+- 只输出 JSON，不要包含额外解释。
+- JSON 字段：target_agents(list)、reason(str)、confidence(float 0-1)、plan_required(bool)。
+- 如果任务涉及多种能力，可返回多个 agent。
+- 不确定时优先选择 steward。
+"""
+    return ReActAgent(
+        name="Router",
+        sys_prompt=sys_prompt,
+        model=create_openai_model(stream=False, temperature=0.1),
+        formatter=OpenAIChatFormatter(),
+        toolkit=Toolkit(),
+        memory=InMemoryMemory(),
+        max_iters=2,
+    )
+
+
+def create_planner_agent() -> ReActAgent:
+    """创建 Planner Agent，用于复合任务拆分。"""
+    sys_prompt = """你是多智能体任务规划器。请把复杂任务拆成阶段化子任务。
+
+输出要求：
+- 只输出 JSON，不要包含额外解释。
+- 格式：{"stages":[[{"agent":"steward|worker","task":"..."}]]}
+- 外层 stages 表示串行阶段，内层列表表示可并行任务。
+- 子任务必须简洁可执行，避免重复。
+"""
+    return ReActAgent(
+        name="Planner",
+        sys_prompt=sys_prompt,
+        model=create_openai_model(stream=False, temperature=0.1),
+        formatter=OpenAIChatFormatter(),
+        toolkit=Toolkit(),
+        memory=InMemoryMemory(),
+        max_iters=2,
     )
 
 
@@ -123,6 +216,7 @@ def create_worker_agent() -> ReActAgent:
 - 输出格式遵循用户要求；未指定时默认使用 Markdown。
 - 必须输出最终文本结论或可执行结果；不要输出空的工具调用。
 - 不做多步长对话，输出最终结论或可执行结果。
+- 若任务明显要求手机端采集/操作或完整 Collect-Store-Analyze-Execute 流程，应明确建议切换 steward 处理。
 """
 
     return ReActAgent(
@@ -204,7 +298,7 @@ def create_steward_agent() -> ReActAgent:
         run_shell_command,
         func_description="运行受限的本地命令行工具（白名单约束）。",
     )
-
+    
     async def call_mobi_collect_with_retry_report(task_desc: str, success_criteria: str = "") -> ToolResponse:
         """执行带重试上限的 mobi 采集，并返回结构化证据包。"""
         attempts: list[dict[str, object]] = []
@@ -307,15 +401,21 @@ def create_steward_agent() -> ReActAgent:
         ),
     )
 
-    async def delegate_to_worker(task: str) -> ToolResponse:
+    async def delegate_to_worker(task: str, delegation_depth: int = 0) -> ToolResponse:
         """将子任务委派给 Worker Agent 并返回结果。"""
+        max_depth = int(ROUTING_CONFIG.get("max_routing_depth", 2))
+        if delegation_depth >= max_depth:
+            return ToolResponse(
+                content=[TextBlock(type="text", text="[Worker 结果]\n已达到委派深度上限，停止继续委派。")],
+                metadata={"task": task, "delegation_depth": delegation_depth, "stopped": True},
+            )
         worker = create_worker_agent()
         msg = Msg(name="User", content=task, role="user")
         response = await worker(msg)
         text = response.get_text_content() if response else ""
         return ToolResponse(
             content=[TextBlock(type="text", text=f"[Worker 结果]\n{text}")],
-            metadata={"task": task},
+            metadata={"task": task, "delegation_depth": delegation_depth + 1},
         )
 
     toolkit.register_tool_function(
@@ -375,6 +475,8 @@ def create_steward_agent() -> ReActAgent:
 - 如果某一步失败，要尝试其他方法或向用户说明
 - 在执行敏感操作前，需要用户确认（除非用户明确授权自动执行）
 - 保持回复简洁专业，优先使用中文交流
+- 如果任务主要是通用网页/论文检索，优先委派给 Worker，避免重复调用端侧工具
+- 若路由层已明确指定本 Agent，仅处理职责范围内任务，不要无限自委派
 
 ## 示例对话
 用户：开始今日的数据整理和分析
