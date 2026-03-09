@@ -19,6 +19,7 @@ from . import agents as agents_module
 from .agents import (
     create_planner_agent,
     create_router_agent,
+    create_skill_selector_agent,
     create_steward_agent,
     create_worker_agent,
     get_agent_capability_descriptions,
@@ -26,6 +27,17 @@ from .agents import (
 from .config import ROUTING_CONFIG
 
 logger = logging.getLogger(__name__)
+
+
+ANSI_RESET = "\033[0m"
+ANSI_BOLD = "\033[1m"
+ANSI_CYAN = "\033[96m"
+ANSI_YELLOW = "\033[93m"
+ANSI_GREEN = "\033[92m"
+
+
+def _highlight_log(message: str, color: str = ANSI_CYAN) -> str:
+    return f"{ANSI_BOLD}{color}{message}{ANSI_RESET}"
 
 
 LEGACY_MODES = {"worker", "steward", "auto"}
@@ -295,9 +307,22 @@ async def _llm_rerank_skills(
         f"目标 agent: {agent_name}\n"
         f"候选详情: {json.dumps(candidates, ensure_ascii=False)}"
     )
-    agent = create_router_agent()
+    agent = create_skill_selector_agent()
+    logger.info(
+        _highlight_log(
+            "orchestrator.skill_selector.request start=1 prompt=\n" + prompt,
+            ANSI_YELLOW,
+        )
+    )
     response = await agent(Msg(name="User", content=prompt, role="user"))
-    parsed = _parse_json_object(_extract_response_text(response))
+    response_text = _extract_response_text(response)
+    logger.info(
+        _highlight_log(
+            "orchestrator.skill_selector.response done=1 response=\n" + response_text,
+            ANSI_GREEN,
+        )
+    )
+    parsed = _parse_json_object(response_text)
     if not parsed:
         return [], "parse_failed"
 
@@ -606,13 +631,27 @@ async def _llm_route(task: str, strategy: str) -> RouteDecision:
         prompt,
     )
     agent = create_router_agent()
-    
-    response = await agent(Msg(name="User", content=prompt, role="user"))
-    logger.info("orchestrator.route.response is finished")
+    logger.info(
+        _highlight_log(
+            "orchestrator.route.request start=1 strategy="
+            + strategy
+            + " prompt=\n"
+            + prompt,
+            ANSI_CYAN,
+        )
+    )
 
+    response = await agent(Msg(name="User", content=prompt, role="user"))
+    logger.info(_highlight_log("orchestrator.route.response.received strategy=" + strategy, ANSI_GREEN))
 
     text = _extract_response_text(response)
     logger.info("orchestrator.route.response strategy=%s response=\n%s", strategy, text)
+    logger.info(
+        _highlight_log(
+            "orchestrator.route.response.full strategy=" + strategy + " response=\n" + text,
+            ANSI_GREEN,
+        )
+    )
     parsed = _parse_json_object(text)
     if not parsed:
         return _rule_route(task)
@@ -689,8 +728,24 @@ async def _llm_plan(task: str, decision: RouteDecision, max_subtasks: int) -> li
         f"task={task}"
     )
     planner = create_planner_agent()
+    logger.info(
+        _highlight_log(
+            "orchestrator.planner.request start=1 max_subtasks="
+            + str(max_subtasks)
+            + " prompt=\n"
+            + prompt,
+            ANSI_YELLOW,
+        )
+    )
     response = await planner(Msg(name="User", content=prompt, role="user"))
-    parsed = _parse_json_object(_extract_response_text(response))
+    response_text = _extract_response_text(response)
+    logger.info(
+        _highlight_log(
+            "orchestrator.planner.response done=1 response=\n" + response_text,
+            ANSI_GREEN,
+        )
+    )
+    parsed = _parse_json_object(response_text)
     stages = parsed.get("stages") if isinstance(parsed, dict) else None
     if not isinstance(stages, list):
         raise ValueError("invalid stages")

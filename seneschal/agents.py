@@ -123,10 +123,10 @@ def create_router_agent() -> ReActAgent:
     return ReActAgent(
         name="Router",
         sys_prompt=sys_prompt,
-        model=create_openai_model(stream=False, temperature=0.1),
+        model=create_openai_model(stream=True, temperature=0.1),
         formatter=OpenAIChatFormatter(),
-        toolkit=Toolkit(),
-        memory=InMemoryMemory(),
+        # toolkit=Toolkit(),
+        # memory=InMemoryMemory(),
         max_iters=1,
     )
 
@@ -144,10 +144,29 @@ def create_planner_agent() -> ReActAgent:
     return ReActAgent(
         name="Planner",
         sys_prompt=sys_prompt,
-        model=create_openai_model(stream=False, temperature=0.1),
+        model=create_openai_model(stream=True, temperature=0.1),
         formatter=OpenAIChatFormatter(),
-        toolkit=Toolkit(),
-        memory=InMemoryMemory(),
+        # toolkit=Toolkit(),
+        # memory=InMemoryMemory(),
+        max_iters=1,
+    )
+
+
+def create_skill_selector_agent() -> ReActAgent:
+    """创建 Skill Selector Agent，用于技能候选重排。"""
+    sys_prompt = """你是 Skill Selector。你的目标是在给定候选技能集合中选择最合适的技能。
+
+输出要求：
+- 只输出 JSON，不要包含额外解释。
+- JSON 字段：skills(list)、reason(str)。
+- skills 中的每个值必须来自输入给出的候选集合。
+- 若没有合适技能，可以返回空数组。
+"""
+    return ReActAgent(
+        name="SkillSelector",
+        sys_prompt=sys_prompt,
+        model=create_openai_model(stream=True, temperature=0.1),
+        formatter=OpenAIChatFormatter(),
         max_iters=1,
     )
 
