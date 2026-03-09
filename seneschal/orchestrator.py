@@ -512,6 +512,25 @@ def _normalize_agent_name(
     return value if value in allowed else fallback
 
 
+def _planner_allowed_agents(decision: RouteDecision) -> list[str]:
+    if decision.target_agents:
+        return list(dict.fromkeys([name for name in decision.target_agents if name]))
+    return list(_available_agent_names())
+
+
+def _normalize_planner_agent(
+    raw: str,
+    allowed_agents: list[str],
+    default_agent: str,
+) -> str:
+    allowed_set = set(allowed_agents)
+    return _normalize_agent_name(
+        raw,
+        allowed_agents=allowed_set,
+        default_agent=default_agent if default_agent in allowed_set else allowed_agents[0],
+    )
+
+
 def _rule_route(task: str) -> RouteDecision:
     text = (task or "").lower()
     split_signals = ["并且", "同时", "然后", "再", ";", "；"]
@@ -709,18 +728,15 @@ def _subtask_agent_by_rule(subtask: str) -> str:
 
 
 async def _llm_plan(task: str, decision: RouteDecision, max_subtasks: int) -> list[list[dict[str, str]]]:
-    available_agents = list(_available_agent_names())
-    allowed = set(available_agents)
-    default_plan_agent = (
-        decision.target_agents[0] if decision.target_agents else _default_agent_name()
-    )
+    planner_allowed = _planner_allowed_agents(decision)
+    default_plan_agent = planner_allowed[0] if planner_allowed else _default_agent_name()
     prompt = (
         "你是任务规划器。请把用户任务拆成可执行阶段，并且**快速**做出相应。\n"
         "输出严格 JSON，格式为:\n"
         '{"stages":[[{"agent":"agent_name","task":"..."}]]}\n\n'
         "规则:\n"
         "1) stages 是二维数组，外层表示阶段（串行），内层表示同阶段并行子任务。\n"
-        f"2) agent 只能从以下集合中选择: {available_agents}。\n"
+        f"2) agent 只能从以下集合中选择: {planner_allowed}。\n"
         "3) 子任务总数不超过 max_subtasks。\n"
         "4) 若任务简单，可只给一个子任务。\n\n"
         f"max_subtasks={max_subtasks}\n"
@@ -759,9 +775,9 @@ async def _llm_plan(task: str, decision: RouteDecision, max_subtasks: int) -> li
         for item in stage:
             if not isinstance(item, dict):
                 continue
-            agent_name = _normalize_agent_name(
+            agent_name = _normalize_planner_agent(
                 str(item.get("agent") or ""),
-                allowed_agents=allowed,
+                allowed_agents=planner_allowed,
                 default_agent=default_plan_agent,
             )
             task_text = str(item.get("task") or "").strip()
@@ -782,6 +798,8 @@ async def _llm_plan(task: str, decision: RouteDecision, max_subtasks: int) -> li
 
 
 def _fallback_plan(task: str, decision: RouteDecision, max_subtasks: int) -> list[list[dict[str, str]]]:
+    planner_allowed = _planner_allowed_agents(decision)
+    default_plan_agent = planner_allowed[0] if planner_allowed else _default_agent_name()
     if not decision.plan_required and len(decision.target_agents) == 1:
         return [[{"agent": decision.target_agents[0], "task": task.strip()}]]
 
@@ -790,11 +808,17 @@ def _fallback_plan(task: str, decision: RouteDecision, max_subtasks: int) -> lis
 
     if len(parts) <= 1 and len(decision.target_agents) > 1:
         stages.append([{"agent": decision.target_agents[0], "task": task.strip()}])
-        stages.append([{"agent": decision.target_agents[1], "task": f"基于用户任务补充执行并总结：{task.strip()}"}])
+        second_agent = decision.target_agents[1] if len(decision.target_agents) > 1 else default_plan_agent
+        stages.append([{"agent": second_agent, "task": f"基于用户任务补充执行并总结：{task.strip()}"}])
         return stages
 
     for part in parts[:max_subtasks]:
-        stages.append([{"agent": _subtask_agent_by_rule(part), "task": part}])
+        agent_name = _normalize_planner_agent(
+            _subtask_agent_by_rule(part),
+            allowed_agents=planner_allowed,
+            default_agent=default_plan_agent,
+        )
+        stages.append([{"agent": agent_name, "task": part}])
     return stages or [[{"agent": _default_agent_name(), "task": task.strip()}]]
 
 
@@ -956,6 +980,7 @@ async def run_orchestrated_task(
         route_control_path = "rule"
 
     max_subtasks = int(ROUTING_CONFIG["max_subtasks"])
+    planner_allowed_agents = _planner_allowed_agents(decision)
     plan_control_path = "direct"
     if decision.plan_required or len(decision.target_agents) > 1:
         try:
@@ -1113,6 +1138,7 @@ async def run_orchestrated_task(
                 "plan_required": decision.plan_required,
                 "strategy": decision.strategy,
             },
+            "planner_allowed_agents": planner_allowed_agents,
             "plan_source": plan_source,
             "skills": {
                 "enabled": bool(ROUTING_CONFIG.get("skill_enabled", True)),
