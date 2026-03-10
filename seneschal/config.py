@@ -48,6 +48,8 @@ ROUTING_CONFIG = {
     "router_timeout_s": max(1.0, float(os.environ.get("SENESCHAL_ROUTER_TIMEOUT_S", "60"))),
     "planner_timeout_s": max(1.0, float(os.environ.get("SENESCHAL_PLANNER_TIMEOUT_S", "60"))),
     "subtask_timeout_s": max(5.0, float(os.environ.get("SENESCHAL_SUBTASK_TIMEOUT_S", "300"))),
+    "upstream_context_max_chars": max(200, int(os.environ.get("SENESCHAL_UPSTREAM_CONTEXT_MAX_CHARS", "4000"))),
+    "upstream_context_max_steps": max(1, int(os.environ.get("SENESCHAL_UPSTREAM_CONTEXT_MAX_STEPS", "20"))),
     "skill_enabled": os.environ.get("SENESCHAL_SKILL_ENABLED", "1").strip() not in {"0", "false", "False"},
     "skill_root_dir": os.environ.get("SENESCHAL_SKILL_ROOT_DIR", ""),
     "skill_max_per_subtask": max(0, int(os.environ.get("SENESCHAL_SKILL_MAX_PER_SUBTASK", "2"))),
