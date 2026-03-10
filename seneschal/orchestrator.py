@@ -34,6 +34,7 @@ ANSI_BOLD = "\033[1m"
 ANSI_CYAN = "\033[96m"
 ANSI_YELLOW = "\033[93m"
 ANSI_GREEN = "\033[92m"
+ANSI_RED = "\033[91m"
 
 
 def _highlight_log(message: str, color: str = ANSI_CYAN) -> str:
@@ -1111,6 +1112,25 @@ async def run_orchestrated_task(
                     "hint_used": skill_decision.hint_used,
                     "hint_invalid": skill_decision.hint_invalid,
                 }
+            )
+            selected_skill_text = ", ".join(skill_decision.selected_skills) if skill_decision.selected_skills else "(none)"
+            highlight_color = ANSI_GREEN if skill_decision.selected_skills else ANSI_RED
+            logger.info(
+                _highlight_log(
+                    "orchestrator.skill.final stage="
+                    + str(stage_index)
+                    + " subtask="
+                    + str(sub_index)
+                    + " agent="
+                    + str(item["agent"])
+                    + " selected=["
+                    + selected_skill_text
+                    + "] source="
+                    + str(skill_decision.source)
+                    + " reason="
+                    + str(skill_decision.reason),
+                    highlight_color,
+                )
             )
             prior_context = _build_upstream_context(
                 executions=executions,

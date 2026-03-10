@@ -278,19 +278,18 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
 工作准则：
 - 只聚焦当前任务，给出简明直接的结果。
 - 必要时使用工具检索或执行本地命令。
-- 如果需要联网搜索新闻或网页来源，优先使用 brave_search 获取候选链接与摘要。
-- 如果检索学术论文，优先使用 arxiv_search 获取元数据与 PDF 链接。
-- 如果检索会议论文，优先使用 dblp_conference_search 获取论文清单与链接，然后去arxiv上搜索对应的论文。
+- 如果需要联网搜索新闻或网页来源，优先使用 "brave_search" 获取候选链接与摘要。
+- 如果检索学术论文，优先使用 "arxiv_search" 获取元数据与 PDF 链接。
+- 如果检索会议论文，优先使用 "dblp_conference_search" 获取论文清单与链接，然后去arxiv上搜索对应的论文。
 - 如果任务中有今天，明天等相对日期的描述，你可以通过shell中的date命令，获取具体的日期。
-- 拿到候选链接后，优先使用 fetch_url_readable_text 抓取正文；需要原始 HTML 时再使用 fetch_url_text。
-- 需要从网页中发现相关链接时使用 fetch_url_links，再逐条抓取与筛选。
-- 需要下载论文或附件时使用 download_file；阅读 PDF 用 extract_pdf_text。
+- 拿到候选链接后，优先使用 "fetch_url_readable_text" 抓取正文；需要原始 HTML 时再使用 "fetch_url_text"。
+- 需要从网页中发现相关链接时使用 "fetch_url_links"，再逐条抓取与筛选。
+- 需要下载论文或附件时使用 "download_file"；阅读 PDF 用 "extract_pdf_text"。
 - 处理 Word/Excel/PDF 文档时，使用 docx/xlsx/pdf 相关工具完成读取或生成。
-- 需要输出文件时，可用 write_text_file 落盘。
+- 需要输出文件时，可用 "write_text_file" 落盘。
 - 输出格式遵循用户要求；未指定时默认使用 Markdown。
 - 必须输出最终文本结论或可执行结果；不要输出空的工具调用。
 - 不做多步长对话，输出最终结论或可执行结果。
-- 若任务明显要求手机端采集/操作或完整 Collect-Store-Analyze-Execute 流程，应明确建议切换 steward 处理。
 """
     sys_prompt += _build_skill_prompt_suffix(skill_context)
 
