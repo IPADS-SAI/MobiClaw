@@ -111,12 +111,6 @@ bash ./scripts/stop_all.sh
 
 ### 6) 运行 Seneschal
 
-#### Demo 模式
-
-```bash
-python app.py
-```
-
 #### 交互模式
 
 ```bash
@@ -129,10 +123,11 @@ python app.py --interactive
 python app.py --daily --daily-trigger daily
 ```
 
-#### Worker 单任务模式
+#### Worker 单智能体模式
 
+通过`--mode`指定具体的Agen：t
 ```bash
-python app.py --agent-task "从 arXiv 搜索今天的 Agent 论文并总结" --output "outputs/papers.md"
+python app.py --agent-task "从 arXiv 搜索今天的 Agent 论文并总结" --mode worker
 ```
 
 示例：生成 Word/Excel/PDF 文档：
@@ -143,12 +138,12 @@ python app.py --agent-task "帮我把2025年各家车企的销量，写入 xlsx 
 python app.py --agent-task "帮我搜索美伊战争的内容，生成 pdf 输出 outputs/summary.pdf" --mode worker
 ```
 
-### 7) 智能路由多智能体模式（Router + Steward + Worker）
+#### 智能路由多智能体模式（Router + Steward + Worker）
 
 当前 `app.py --agent-task` 与 `gateway /api/v1/task` 默认都走统一编排：
 - Router Agent：根据任务语义选择目标 Agent（LLM 语义路由 + 规则兜底）
 - Planner Agent：复合任务自动拆分为阶段子任务（串并行混合）
-- Executor：将子任务分发给 `Steward` / `Worker` 执行并聚合结果
+- Executor：将子任务分发给 `Steward` / `Worker` / 其他Agent 执行并聚合结果
 - Skill Selector：为每个子任务自动选择最合适的 Skill（规则召回 + LLM 重排，可为空）
 
 联网搜索默认采用 Brave Search：先检索候选来源链接与摘要，再按需抓取网页正文。
@@ -196,7 +191,7 @@ Skill 自动选择说明：
 Shell 工具默认受白名单限制，若你设置了 `SENESCHAL_SHELL_ALLOWLIST`，请按需加入允许的命令。
 如需限制写文件路径，可设置 `SENESCHAL_FILE_WRITE_ROOT`。
 
-### 8) Gateway模式（类似OpenClaw Core 入口）
+### 7) Gateway模式（类似OpenClaw Core 入口）
 
 网关用于接收任务并交给 workflow 层决策执行，支持同步和异步任务查询。
 
@@ -266,9 +261,9 @@ bash ./scripts/run_gateway_feishu_demo.sh
 ---
 
 
-### 9) 其他请求示例（网关）
+### 8) 其他请求示例（网关）
 
-#### 9.1 MobiAgent Server：Collect
+#### 8.1 MobiAgent Server：Collect
 
 为支持完整任务执行的场景。
 
@@ -279,7 +274,7 @@ curl -X POST http://localhost:8081/api/v1/collect \
   -d '{"task":"获取微信聊天列表前5条摘要"}'
 ```
 
-#### 9.2 MobiAgent Server：Action + output_schema
+#### 8.2 MobiAgent Server：Action + output_schema
 
 为支持特定操作、单步操作场景预留接口和请求格式。
 ```bash
@@ -303,7 +298,7 @@ curl -X POST http://localhost:8081/api/v1/action \
   }'
 ```
 
-#### 9.3 Seneschal Gateway Task
+#### 8.3 Seneschal Gateway Task
 
 用于触发 OpenClaw Core（Steward Agent）任务。
 
@@ -376,7 +371,7 @@ curl -X POST http://localhost:8090/api/v1/task \
   -d '{"task":"给出今天的提醒事项","async_mode":false}'
 ```
 
-#### 9.4 飞书机器人事件订阅接入
+#### 8.4 飞书机器人事件订阅接入
 
 网关提供飞书事件入口：`POST /api/v1/feishu/events`。
 
