@@ -1,5 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Seneschal 工作流模块。"""
+"""Seneschal 工作流编排入口。
+
+适用场景：
+- CLI 演示模式与交互模式；
+- 网关任务转发到编排层；
+- 日常任务（daily）触发执行。
+
+依赖模块：
+- `seneschal.agents`：创建用户/执行 Agent；
+- `seneschal.orchestrator`：多 Agent 智能路由与执行；
+- `seneschal.dailytasks.runner`：定时/触发型每日任务流程。
+"""
 
 from __future__ import annotations
 
@@ -15,6 +26,13 @@ from .orchestrator import run_orchestrated_task
 
 
 def _extract_response_text(response: Any) -> str:
+    """提取 Agent 返回对象中的纯文本内容。
+
+    参数说明：
+        response: Agent 返回对象，兼容 `get_text_content` 或 `content` 块结构。
+    返回值说明：
+        str: 提取后的文本，若无可用文本则返回空字符串。
+    """
     if response is None:
         return ""
     text = response.get_text_content() if hasattr(response, "get_text_content") else ""
@@ -29,6 +47,7 @@ def _extract_response_text(response: Any) -> str:
 
 
 def _collect_file_paths(text: str, output_path: str | None = None) -> list[Path]:
+    """从回复文本与输出路径提示中收集文件路径并去重。"""
     paths: list[Path] = []
     if output_path:
         paths.append(Path(output_path).expanduser())
@@ -50,6 +69,7 @@ def _collect_file_paths(text: str, output_path: str | None = None) -> list[Path]
 
 
 def _build_file_entries(paths: list[Path]) -> list[dict[str, Any]]:
+    """将文件路径列表转换为可序列化的文件元数据结构。"""
     entries: list[dict[str, Any]] = []
     for path in paths:
         try:
@@ -78,7 +98,21 @@ async def run_gateway_task(
     routing_strategy: str | None = None,
     context_id: str | None = None,
 ) -> dict[str, Any]:
-    """Run a gateway task through intelligent multi-agent orchestration."""
+    """通过编排器执行网关任务。
+
+    功能描述：
+        将网关层请求透传至 `run_orchestrated_task`，统一走多 Agent 路由与执行流程。
+    参数说明：
+        task: 用户任务文本。
+        output_path: 可选输出路径提示。
+        mode: 执行模式（默认 router）。
+        agent_hint: 可选 Agent 选择提示。
+        skill_hint: 可选技能提示。
+        routing_strategy: 可选路由策略覆盖值。
+        context_id: 可选上下文 ID（用于多轮扩展）。
+    返回值说明：
+        dict[str, Any]: 编排执行结果。
+    """
     return await run_orchestrated_task(
         task=task,
         output_path=output_path,

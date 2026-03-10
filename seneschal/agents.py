@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Seneschal Agent 构建模块。"""
+"""Seneschal Agent 构建与能力注册模块。
+
+核心功能：
+- 统一创建 Router/Planner/SkillSelector/Worker/Steward/User 等 Agent；
+- 注册各类工具能力并注入系统提示词；
+- 提供路由层可消费的 Agent 能力描述。
+"""
 
 from __future__ import annotations
 
@@ -59,6 +65,13 @@ def create_openai_model(*, stream: bool = True, temperature: float | None = None
 
 
 def _build_skill_prompt_suffix(skill_context: str | None) -> str:
+    """构建技能上下文补充提示。
+
+    参数说明：
+        skill_context: 技能选择阶段输出的技能说明文本。
+    返回值说明：
+        str: 可直接拼接到系统提示词末尾的约束文本；无输入时返回空字符串。
+    """
     text = (skill_context or "").strip()
     if not text:
         return ""
@@ -72,6 +85,8 @@ def _build_skill_prompt_suffix(skill_context: str | None) -> str:
 
 @dataclass
 class AgentCapability:
+    """描述单个 Agent 能力边界的结构化模型。"""
+
     name: str
     role: str
     strengths: list[str]
@@ -80,6 +95,11 @@ class AgentCapability:
 
 
 def get_agent_capability_descriptions() -> dict[str, dict[str, object]]:
+    """返回路由可用的 Agent 能力描述字典。
+
+    返回值说明：
+        dict[str, dict[str, object]]: 以 agent 名称为键、能力画像为值的映射。
+    """
     registry = [
         AgentCapability(
             name="steward",
