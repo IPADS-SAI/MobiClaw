@@ -548,18 +548,16 @@ def _rule_route(task: str) -> RouteDecision:
         "总结",
         "下载",
         "pdf",
-        "osdi",
     }
     steward_keys = {
         "微信",
         "手机",
         "日历",
         "提醒",
-        "mobi",
-        "weknora",
-        "知识库",
-        "收集",
-        "待办",
+        "微博",
+        "携程",
+        "淘宝",
+        "饿了么",
     }
 
     hit_worker = any(k in text for k in worker_keys)
