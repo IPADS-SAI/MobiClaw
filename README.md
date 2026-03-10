@@ -74,9 +74,6 @@ cp .env-example .env
 export OPENROUTER_API_KEY='...'
 # 或者：export OPENAI_API_KEY='...'
 
-# WeKnora（推荐，涉及知识库存储 / RAG 时需要）
-export WEKNORA_API_KEY='...'
-
 # Brave Search（可选，联网搜索时建议）
 export BRAVE_API_KEY='...'
 ```
@@ -114,11 +111,45 @@ python rerank_server_bge-reranker-v2-m3.py
 ```
 
 #### 4.3 导入其余 WeKnora 配置
+
+根据注册用户名（或租户）修改 `configs/` 目录下的配置文件（租户信息默认 `tenant_id=10000`）：
+
+- `configs/custom_agents_export.json`
+- `configs/knowledge_bases_export.json`
+- `configs/models_export.json`
+- `configs/tenants_export.json`
+- `configs/users_export.json`
+
+
 导入WeKnora的其余配置，包括知识库、模型、Agent等配置
 ```bash
 cd /workspace/Seneschal
 ENV_FILE=./.env CONFIG_DIR=./configs bash ./scripts/weknora_import.sh
 ```
+
+可选：导入前生成并导入新的租户 API key（推荐在迁移或密钥不一致时使用）
+```bash
+cd /workspace/Seneschal
+TENANT_AES_KEY='weknorarag-api-key-secret-secret' \
+GENERATE_API_KEY=1 \
+UPDATE_ENV_FILE_KEY=1 \
+ENV_FILE=./.env \
+CONFIG_DIR=./configs \
+bash ./scripts/weknora_import.sh
+```
+
+说明：
+- `GENERATE_API_KEY=1`：导入前为租户生成新 key
+- `TENANT_AES_KEY`：必须与当前 WeKnora 实例一致
+- `UPDATE_ENV_FILE_KEY=1`：自动把新 key 写回 `.env`
+- `WEKNORA_TENANT_ID`：可选，不填时默认取 `configs/tenants_export.json` 的第一个租户 id
+
+更多脚本用法见：`scripts/README.md`
+
+可登录前端页面：
+默认用户
+- 用户名：flyboy@outlook.com
+- 密码：flyboy123456
 
 > 若非首次部署/本地已有WeKnora服务，建议先检查 `configs/*.json` 中 tenant、用户、知识库、模型等配置是否与已有的 WeKnora 环境一致，避免覆盖导致冲突。
 
@@ -137,6 +168,19 @@ python -m mobiagent_server.server
 ```bash
 bash ./scripts/bootstrap_one_click.sh
 ```
+
+如需在一键启动时自动生成并导入新的 WeKnora 租户 API key：
+
+```bash
+TENANT_AES_KEY='weknorarag-api-key-secret-secret' \
+WEKNORA_IMPORT_GENERATE_KEY=1 \
+WEKNORA_IMPORT_UPDATE_ENV_KEY=1 \
+bash ./scripts/bootstrap_one_click.sh
+```
+
+可选参数：
+- `WEKNORA_IMPORT_TENANT_ID`：指定生成 key 的租户 ID（默认取导入配置中的第一个租户）
+- `WEKNORA_IMPORT_UPDATE_ENV_KEY`：是否把新 key 回写到 `.env`（默认 `1`）
 
 #### 一键停止
 
