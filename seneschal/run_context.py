@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Run context and logging utilities for Seneschal."""
+"""Seneschal 运行上下文与事件日志工具。
+
+核心功能：
+- 为每次任务执行生成唯一 run_id；
+- 将运行过程中的结构化事件写入内存并按 JSONL 追加落盘；
+- 为上层工作流提供统一的运行追踪接口。
+"""
 
 from __future__ import annotations
 
@@ -12,12 +18,13 @@ from typing import Any
 
 
 def _utc_now_iso() -> str:
+    """获取当前 UTC 时间的 ISO 8601 字符串。"""
     return datetime.now(timezone.utc).isoformat()
 
 
 @dataclass
 class RunContext:
-    """Represents a single run with lightweight event logging."""
+    """单次运行上下文与轻量事件日志容器。"""
 
     run_id: str
     started_at: str
@@ -41,7 +48,17 @@ class RunContext:
 
 
 def create_run_context(log_dir: str | Path = "seneschal/logs") -> RunContext:
-    """Create a run context with a unique run_id and optional JSONL logging."""
+    """创建运行上下文并记录启动事件。
+
+    功能描述：
+        生成唯一 `run_id`，初始化 JSONL 日志路径，并写入 `run_start` 事件。
+    参数说明：
+        log_dir: 日志目录，支持字符串或 Path。
+    返回值说明：
+        RunContext: 可持续记录事件的运行上下文实例。
+    异常说明：
+        无显式抛出；文件系统错误由底层 I/O 在写入事件时抛出。
+    """
 
     run_id = uuid.uuid4().hex
     log_path = Path(log_dir) / f"{run_id}.jsonl"
