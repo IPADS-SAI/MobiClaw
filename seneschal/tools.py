@@ -16,6 +16,7 @@ shell = importlib.import_module("seneschal.tools.shell")
 file_tools = importlib.import_module("seneschal.tools.file")
 web = importlib.import_module("seneschal.tools.web")
 papers = importlib.import_module("seneschal.tools.papers")
+office = importlib.import_module("seneschal.tools.office")
 
 call_mobi_action = mobi.call_mobi_action
 call_mobi_collect = mobi.call_mobi_collect
@@ -34,6 +35,13 @@ arxiv_search = papers.arxiv_search
 dblp_conference_search = papers.dblp_conference_search
 download_file = papers.download_file
 extract_pdf_text = papers.extract_pdf_text
+read_docx_text = office.read_docx_text
+create_docx_from_text = office.create_docx_from_text
+edit_docx = office.edit_docx
+create_pdf_from_text = office.create_pdf_from_text
+read_xlsx_summary = office.read_xlsx_summary
+write_xlsx_from_records = office.write_xlsx_from_records
+write_xlsx_from_rows = office.write_xlsx_from_rows
 
 __all__ = [
     "call_mobi_action",
@@ -53,4 +61,11 @@ __all__ = [
     "dblp_conference_search",
     "download_file",
     "extract_pdf_text",
+    "read_docx_text",
+    "create_docx_from_text",
+    "edit_docx",
+    "create_pdf_from_text",
+    "read_xlsx_summary",
+    "write_xlsx_from_records",
+    "write_xlsx_from_rows",
 ]

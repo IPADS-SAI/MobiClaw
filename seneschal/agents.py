@@ -22,11 +22,18 @@ from .tools import (
     call_mobi_collect_verified,
     dblp_conference_search,
     download_file,
+    edit_docx,
     extract_pdf_text,
     fetch_url_links,
     fetch_url_readable_text,
     fetch_url_text,
+    create_docx_from_text,
+    create_pdf_from_text,
+    read_docx_text,
+    read_xlsx_summary,
     run_shell_command,
+    write_xlsx_from_records,
+    write_xlsx_from_rows,
     write_text_file,
     weknora_add_knowledge,
     weknora_knowledge_search,
@@ -91,14 +98,16 @@ def get_agent_capability_descriptions() -> dict[str, dict[str, object]]:
         ),
         AgentCapability(
             name="worker",
-            role="负责通用检索、网页阅读、学术资料收集和本地工具执行",
+            role="负责通用检索、网页阅读、学术资料收集、生成和阅读各类文档，和本地工具执行",
             strengths=[
                 "Brave/网页/arXiv/DBLP 检索",
                 "下载文件与 PDF 文本提取",
+                "Word/Excel/PDF 文档读写与编辑",
                 "Shell 与本地文件写入",
             ],
             typical_tasks=[
                 "检索最新论文并总结",
+                "整理或生成 Word/Excel/PDF 文档",
                 "抓取网页并提炼可执行结论",
             ],
             boundaries=[
@@ -221,6 +230,41 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
     )
 
     toolkit.register_tool_function(
+        read_docx_text,
+        func_description="读取 DOCX 文档文本内容。",
+    )
+
+    toolkit.register_tool_function(
+        create_docx_from_text,
+        func_description="从纯文本生成 DOCX 文档。",
+    )
+
+    toolkit.register_tool_function(
+        edit_docx,
+        func_description="对 DOCX 文档进行查找替换、追加段落或插入表格。",
+    )
+
+    toolkit.register_tool_function(
+        create_pdf_from_text,
+        func_description="从纯文本生成 PDF 文档。",
+    )
+
+    toolkit.register_tool_function(
+        read_xlsx_summary,
+        func_description="读取 XLSX 工作簿摘要与预览。",
+    )
+
+    toolkit.register_tool_function(
+        write_xlsx_from_records,
+        func_description="从记录列表生成 XLSX 文件。",
+    )
+
+    toolkit.register_tool_function(
+        write_xlsx_from_rows,
+        func_description="从行数据生成 XLSX 文件。",
+    )
+
+    toolkit.register_tool_function(
         write_text_file,
         func_description="写入本地文本文件，用于保存结果或日志。",
     )
@@ -234,18 +278,18 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
 工作准则：
 - 只聚焦当前任务，给出简明直接的结果。
 - 必要时使用工具检索或执行本地命令。
-- 如果需要联网搜索新闻或网页来源，优先使用 brave_search 获取候选链接与摘要。
-- 如果检索学术论文，优先使用 arxiv_search 获取元数据与 PDF 链接。
-- 如果检索会议论文，优先使用 dblp_conference_search 获取论文清单与链接，然后去arxiv上搜索对应的论文。
+- 如果需要联网搜索新闻或网页来源，优先使用 "brave_search" 获取候选链接与摘要。
+- 如果检索学术论文，优先使用 "arxiv_search" 获取元数据与 PDF 链接。
+- 如果检索会议论文，优先使用 "dblp_conference_search" 获取论文清单与链接，然后去arxiv上搜索对应的论文。
 - 如果任务中有今天，明天等相对日期的描述，你可以通过shell中的date命令，获取具体的日期。
-- 拿到候选链接后，优先使用 fetch_url_readable_text 抓取正文；需要原始 HTML 时再使用 fetch_url_text。
-- 需要从网页中发现相关链接时使用 fetch_url_links，再逐条抓取与筛选。
-- 需要下载论文或附件时使用 download_file；阅读 PDF 用 extract_pdf_text。
-- 需要输出文件时，可用 write_text_file 落盘。
+- 拿到候选链接后，优先使用 "fetch_url_readable_text" 抓取正文；需要原始 HTML 时再使用 "fetch_url_text"。
+- 需要从网页中发现相关链接时使用 "fetch_url_links"，再逐条抓取与筛选。
+- 需要下载论文或附件时使用 "download_file"；阅读 PDF 用 "extract_pdf_text"。
+- 处理 Word/Excel/PDF 文档时，使用 docx/xlsx/pdf 相关工具完成读取或生成。
+- 需要输出文件时，可用 "write_text_file" 落盘。
 - 输出格式遵循用户要求；未指定时默认使用 Markdown。
 - 必须输出最终文本结论或可执行结果；不要输出空的工具调用。
 - 不做多步长对话，输出最终结论或可执行结果。
-- 若任务明显要求手机端采集/操作或完整 Collect-Store-Analyze-Execute 流程，应明确建议切换 steward 处理。
 """
     sys_prompt += _build_skill_prompt_suffix(skill_context)
 

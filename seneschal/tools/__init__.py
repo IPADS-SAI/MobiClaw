@@ -16,6 +16,15 @@ import requests
 from .mobi import call_mobi_action, call_mobi_collect, call_mobi_collect_verified
 from .file import write_text_file
 from .papers import arxiv_search, dblp_conference_search, download_file, extract_pdf_text
+from .office import (
+    create_docx_from_text,
+    create_pdf_from_text,
+    edit_docx,
+    read_docx_text,
+    read_xlsx_summary,
+    write_xlsx_from_records,
+    write_xlsx_from_rows,
+)
 from .shell import run_shell_command
 from .web import brave_search, fetch_url_links, fetch_url_readable_text, fetch_url_text
 from .weknora import (
@@ -475,6 +484,13 @@ __all__ = [
     "dblp_conference_search",
     "download_file",
     "extract_pdf_text",
+    "read_docx_text",
+    "create_docx_from_text",
+    "edit_docx",
+    "create_pdf_from_text",
+    "read_xlsx_summary",
+    "write_xlsx_from_records",
+    "write_xlsx_from_rows",
     "knowledge_chat",
     "agent_chat",
     "knowledge_search",

@@ -34,6 +34,7 @@ ANSI_BOLD = "\033[1m"
 ANSI_CYAN = "\033[96m"
 ANSI_YELLOW = "\033[93m"
 ANSI_GREEN = "\033[92m"
+ANSI_RED = "\033[91m"
 
 
 def _highlight_log(message: str, color: str = ANSI_CYAN) -> str:
@@ -123,6 +124,58 @@ def _build_file_entries(paths: list[Path]) -> list[dict[str, Any]]:
             }
         )
     return entries
+
+
+def _merge_file_paths(existing: list[Path], incoming: list[Path]) -> list[Path]:
+    merged: list[Path] = []
+    seen: set[str] = set()
+    for path in [*(existing or []), *(incoming or [])]:
+        key = str(path)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(path)
+    return merged
+
+
+def _trim_for_prompt(text: str, max_chars: int) -> str:
+    cleaned = re.sub(r"\s+", " ", (text or "").strip())
+    if max_chars <= 0 or len(cleaned) <= max_chars:
+        return cleaned
+    return cleaned[:max_chars].rstrip() + "..."
+
+
+def _build_upstream_context(
+    executions: list[dict[str, Any]],
+    file_paths: list[Path],
+    *,
+    max_chars: int = 4000,
+    max_steps: int = 20,
+) -> str:
+    if not executions and not file_paths:
+        return ""
+
+    recent = executions[-max_steps:] if max_steps > 0 else executions
+    sections: list[str] = ["上游子任务上下文（按时间顺序）:"]
+
+    if recent:
+        sections.append("前序子任务结果:")
+        start_index = len(executions) - len(recent) + 1
+        for offset, item in enumerate(recent):
+            idx = start_index + offset
+            agent = str(item.get("agent") or "unknown")
+            subtask = _trim_for_prompt(str(item.get("task") or ""), 240)
+            reply = _trim_for_prompt(str(item.get("reply") or ""), 600)
+            if not reply:
+                reply = "(无文本输出)"
+            sections.append(f"- [{idx}] agent={agent}; task={subtask}; reply={reply}")
+
+    if file_paths:
+        sections.append("前序产出文件:")
+        for path in file_paths:
+            sections.append(f"- {path}")
+
+    return _trim_for_prompt("\n".join(sections), max_chars)
 
 
 def _parse_json_object(text: str) -> dict[str, Any] | None:
@@ -548,18 +601,16 @@ def _rule_route(task: str) -> RouteDecision:
         "总结",
         "下载",
         "pdf",
-        "osdi",
     }
     steward_keys = {
         "微信",
         "手机",
         "日历",
         "提醒",
-        "mobi",
-        "weknora",
-        "知识库",
-        "收集",
-        "待办",
+        "微博",
+        "携程",
+        "淘宝",
+        "饿了么",
     }
 
     hit_worker = any(k in text for k in worker_keys)
@@ -732,6 +783,7 @@ async def _llm_plan(task: str, decision: RouteDecision, max_subtasks: int) -> li
     default_plan_agent = planner_allowed[0] if planner_allowed else _default_agent_name()
     prompt = (
         "你是任务规划器。请把用户任务拆成可执行阶段，并且**快速**做出相应。\n"
+        "如果是涉及手机类应用（例如微博，微信，饿了么等），请按照不同的应用拆分任务。如果任务只涉及一个应用，则无需拆分。\n"
         "输出严格 JSON，格式为:\n"
         '{"stages":[[{"agent":"agent_name","task":"..."}]]}\n\n'
         "规则:\n"
@@ -853,11 +905,19 @@ async def _run_one_agent(
     task: str,
     output_path: str | None = None,
     selected_skills: list[str] | None = None,
+    prior_context: str | None = None,
 ) -> dict[str, Any]:
     skill_list = selected_skills or []
     skill_context = _skill_prompt_context(skill_list)
     agent = _build_agent(agent_name, skill_context=skill_context)
     msg_content = task.strip()
+    if prior_context:
+        msg_content = (
+            "请在执行当前子任务时参考以下前序上下文（结果与文件），并据此衔接后续工作。\n\n"
+            + prior_context
+            + "\n\n"
+            + msg_content
+        )
     if output_path:
         msg_content += (
             "\n\n输出文件路径: "
@@ -901,7 +961,7 @@ async def run_orchestrated_task(
     routing_strategy: str | None = None,
     context_id: str | None = None,
 ) -> dict[str, Any]:
-    del context_id  # Reserved for future multi-turn context persistence.
+    del context_id  # Reserved for future multi-turn persistence identifier.
 
     task_start = time.perf_counter()
     normalized_mode = (mode or "").strip().lower() or ROUTING_CONFIG["default_mode"]
@@ -1016,6 +1076,7 @@ async def run_orchestrated_task(
         plan_control_path = "direct"
 
     executions: list[dict[str, Any]] = []
+    shared_file_paths: list[Path] = []
     stage_traces: list[dict[str, Any]] = []
     skill_trace_records: list[dict[str, Any]] = []
 
@@ -1027,7 +1088,7 @@ async def run_orchestrated_task(
             len(stage),
             len(stage) > 1,
         )
-        run_items = []
+        stage_execs: list[dict[str, Any]] = []
         for sub_index, item in enumerate(stage, start=1):
             is_last = stage_index == len(stages) and sub_index == len(stage)
             hint_path = output_path if is_last else None
@@ -1052,43 +1113,70 @@ async def run_orchestrated_task(
                     "hint_invalid": skill_decision.hint_invalid,
                 }
             )
-            run_items.append(
-                asyncio.wait_for(
+            selected_skill_text = ", ".join(skill_decision.selected_skills) if skill_decision.selected_skills else "(none)"
+            highlight_color = ANSI_GREEN if skill_decision.selected_skills else ANSI_RED
+            logger.info(
+                _highlight_log(
+                    "orchestrator.skill.final stage="
+                    + str(stage_index)
+                    + " subtask="
+                    + str(sub_index)
+                    + " agent="
+                    + str(item["agent"])
+                    + " selected=["
+                    + selected_skill_text
+                    + "] source="
+                    + str(skill_decision.source)
+                    + " reason="
+                    + str(skill_decision.reason),
+                    highlight_color,
+                )
+            )
+            prior_context = _build_upstream_context(
+                executions=executions,
+                file_paths=shared_file_paths,
+                max_chars=int(ROUTING_CONFIG.get("upstream_context_max_chars", 4000)),
+                max_steps=int(ROUTING_CONFIG.get("upstream_context_max_steps", 20)),
+            )
+
+            try:
+                result = await asyncio.wait_for(
                     _run_one_agent(
                         item["agent"],
                         item["task"],
                         output_path=hint_path,
                         selected_skills=skill_decision.selected_skills,
+                        prior_context=prior_context,
                     ),
                     timeout=subtask_timeout_s,
                 )
-            )
-
-        stage_results = await asyncio.gather(*run_items, return_exceptions=True)
-        stage_execs: list[dict[str, Any]] = []
-        for result in stage_results:
-            if isinstance(result, Exception):
-                if isinstance(result, asyncio.TimeoutError):
+            except Exception as exc:
+                if isinstance(exc, asyncio.TimeoutError):
                     error_text = f"subtask timeout>{subtask_timeout_s:.2f}s"
                 else:
-                    error_text = str(result)
-                stage_execs.append(
-                    {
-                        "agent": "unknown",
-                        "task": "",
-                        "reply": f"subtask failed: {error_text}",
-                        "elapsed_ms": 0,
-                        "error": error_text,
-                    }
-                )
-            else:
-                stage_execs.append(result)
-        executions.extend(stage_execs)
+                    error_text = str(exc)
+                result = {
+                    "agent": item["agent"],
+                    "task": item["task"],
+                    "skills": skill_decision.selected_skills,
+                    "reply": f"subtask failed: {error_text}",
+                    "elapsed_ms": 0,
+                    "error": error_text,
+                }
+
+            stage_execs.append(result)
+            executions.append(result)
+            shared_file_paths = _merge_file_paths(
+                shared_file_paths,
+                _collect_file_paths(str(result.get("reply") or ""), output_path=hint_path),
+            )
+
         stage_elapsed_ms = int((time.perf_counter() - stage_start) * 1000)
         stage_traces.append(
             {
                 "stage": stage_index,
-                "parallel": len(stage_execs) > 1,
+                "parallel": False,
+                "execution_mode": "sequential_with_context",
                 "elapsed_ms": stage_elapsed_ms,
                 "subtasks": stage_execs,
             }
@@ -1101,7 +1189,10 @@ async def run_orchestrated_task(
         )
 
     reply = _aggregate_replies(executions)
-    file_paths = _collect_file_paths(reply, output_path=output_path)
+    file_paths = _merge_file_paths(
+        shared_file_paths,
+        _collect_file_paths(reply, output_path=output_path),
+    )
     files = _build_file_entries(file_paths)
     total_elapsed_ms = int((time.perf_counter() - task_start) * 1000)
 
