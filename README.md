@@ -216,7 +216,7 @@ python -m seneschal.gateway_server
 - `SENESCHAL_SKILL_ROOT_DIR`：skill 根目录（默认 `seneschal/skills`）
 - `SENESCHAL_SKILL_MAX_PER_SUBTASK`：每个子任务最多挂载的 skill 数（默认 `2`）
 - `SENESCHAL_SKILL_SELECTOR_TIMEOUT_S`：skill LLM 重排超时秒数（默认 `20`）
-- `SENESCHAL_SKILL_LLM_RERANK`：是否启用 LLM 重排（默认 `1`）
+- `SENESCHAL_SKILL_LLM_RERANK`：是否启用 LLM 重排（默认 `0`）
 - `SENESCHAL_SKILL_RULE_MAX_CANDIDATES`：规则召回候选上限（默认 `8`）
 - `SENESCHAL_SKILL_HINT_OVERRIDE`：是否允许 `skill_hint` 覆盖自动选择（默认 `1`）
 - `SENESCHAL_GATEWAY_PUBLIC_BASE_URL`：生成文件下载链接时使用的公网前缀

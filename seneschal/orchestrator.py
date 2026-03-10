@@ -732,6 +732,7 @@ async def _llm_plan(task: str, decision: RouteDecision, max_subtasks: int) -> li
     default_plan_agent = planner_allowed[0] if planner_allowed else _default_agent_name()
     prompt = (
         "你是任务规划器。请把用户任务拆成可执行阶段，并且**快速**做出相应。\n"
+        "如果是涉及手机类应用（例如微博，微信，饿了么等），请按照不同的应用拆分任务。如果任务只涉及一个应用，则无需拆分。\n"
         "输出严格 JSON，格式为:\n"
         '{"stages":[[{"agent":"agent_name","task":"..."}]]}\n\n'
         "规则:\n"
