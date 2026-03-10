@@ -196,7 +196,7 @@ bash ./scripts/stop_all.sh
 python app.py
 ```
 
-当前 Demo 会直接调用 `seneschal/workflows.py:92` 的 `run_demo_conversation()`，并使用这条预置任务：
+当前 Demo 会直接调用 `run_demo_conversation()`，并使用这条预置任务：
 
 ```text
 开始今日的数据整理和分析，给出最近活动的总结和待办事项。
@@ -222,8 +222,9 @@ python app.py --daily --daily-trigger daily
 
 #### Agent Task 模式
 
+通过`--mode`指定具体的Agen：t
 ```bash
-python app.py --agent-task "从 arXiv 搜索今天的 Agent 论文并总结" --output "outputs/papers.md"
+python app.py --agent-task "从 arXiv 搜索今天的 Agent 论文并总结" --mode worker
 ```
 
 ---
@@ -272,6 +273,39 @@ python app.py --agent-task "从 arXiv 搜索今天的 Agent 论文并总结" --o
 # 默认多智能体路由
 python app.py --agent-task "帮我查看今天美伊战争的情况总结，并且生成对应的 md 总结"
 
+#### 智能路由多智能体模式（Router + Steward + Worker）
+
+当前 `app.py --agent-task` 与 `gateway /api/v1/task` 默认都走统一编排：
+- Router Agent：根据任务语义选择目标 Agent（LLM 语义路由 + 规则兜底）
+- Planner Agent：复合任务自动拆分为阶段子任务（串并行混合）
+- Executor：将子任务分发给 `Steward` / `Worker` / 其他Agent 执行并聚合结果
+- Skill Selector：为每个子任务自动选择最合适的 Skill（规则召回 + LLM 重排，可为空）
+
+联网搜索默认采用 Brave Search：先检索候选来源链接与摘要，再按需抓取网页正文。
+实现见 [seneschal/workflows.py](seneschal/workflows.py) 与 [seneschal/orchestrator.py](seneschal/orchestrator.py)。
+
+```bash
+python app.py --agent-task "帮我查看今天美伊战争的情况总结，并且生成对应的md总结"
+```
+
+如果需要指定输出路径，可提供 `--output`（Agent 会优先遵循）：
+
+```bash
+python app.py --agent-task "帮我查看今天美伊战争的情况总结，并且生成对应的md总结" --output "outputs/summart.md"
+```
+
+示例：每天从 arXiv 搜索最新的 Agent 相关论文并生成 Markdown 总结（可由 cron 定时调用）：
+
+```bash
+python app.py --agent-task "从 arXiv 搜索最新的 Agent 相关论文，下载并阅读 PDF，生成并保存论文摘要与要点，以markdown的格式，" --output "outputs/papers/agent_arxiv_daily.md"
+```
+
+示例：查看近三年 OSDI 会议上关于 Agent 的论文并作总结：
+
+```bash
+python app.py --agent-task "帮我查看近三年 OSDI 会议上关于 端侧大模型推理 的相关论文，总结论文的设计与实现，并以markdown格式保存" --output "outputs/papers/osdi_agent_last3years.md"
+
+# 强制走 legacy 单 Agent 模式（兼容）
 # 指定输出路径
 python app.py --agent-task "帮我查看今天美伊战争的情况总结，并且生成对应的 md 总结" --output "outputs/summary.md"
 
@@ -520,9 +554,90 @@ python -m pytest tests
 
 补充说明：
 
-- 根仓库直接执行 `python -m pytest --collect-only` 目前会被 `MobiAgent/MobiFlow/test_model_connectivity.py` 阻塞
-- 跑单文件：`python -m pytest tests/<file>.py`
-- 跑单用例：`python -m pytest tests/<file>.py -k <pattern>`
+异步 + 回调示例：
+
+```bash
+curl -X POST http://localhost:8090/api/v1/task \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task":"先整理今天的待办，再补充联网信息并输出 markdown",
+    "async_mode":true,
+    "mode":"router",
+    "routing_strategy":"llm_rule_hybrid",
+    "output_path":"outputs/tasks/today.md",
+    "webhook_url":"http://127.0.0.1:9000/callback",
+    "webhook_token":"demo-token"
+  }'
+```
+
+异步任务：
+
+```bash
+curl -X POST http://localhost:8090/api/v1/task \
+  -H "Content-Type: application/json" \
+  -d '{"task":"检索近期会议安排并总结","async_mode":true}'
+
+curl http://localhost:8090/api/v1/jobs/<job_id>
+```
+
+如果任务产出了文件，结果中会包含 `result.files`，每个文件包含：
+- `path`：本地绝对路径
+- `name`：文件名
+- `size`：文件大小
+- `download_url`：可下载地址
+
+智能路由执行结果还会包含 `result.routing_trace`，用于查看：
+- 路由决策（目标 Agent、置信度、理由）
+- 规划来源（`direct` / `llm` / `fallback`）
+- 分阶段子任务执行明细（含并行阶段）
+
+下载文件示例：
+
+```bash
+curl -L "http://localhost:8090/api/v1/files/<job_id>/<file_name>" -o ./downloaded_file
+```
+
+如果启用鉴权：
+
+```bash
+curl -X POST http://localhost:8090/api/v1/task \
+  -H "Authorization: Bearer <SENESCHAL_GATEWAY_API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"task":"给出今天的提醒事项","async_mode":false}'
+```
+
+#### 8.4 飞书机器人事件订阅接入
+
+网关提供飞书事件入口：`POST /api/v1/feishu/events`。
+
+同时支持飞书长连接模式（SDK websocket/event stream），可用于本地开发和内网部署（无需公网 IP）。
+
+配置步骤：
+- 在飞书开放平台创建应用并开启机器人能力。
+- 二选一配置事件接入：
+- webhook 模式：在事件订阅中填入网关地址 `https://<your-domain>/api/v1/feishu/events`。
+- 长连接模式：无需配置公网回调地址，网关会主动连接飞书并接收事件。
+- 配置环境变量：
+- `FEISHU_EVENT_TRANSPORT`（推荐本地开发设为 `long_conn`，混合模式用 `both`）
+- `FEISHU_APP_ID`
+- `FEISHU_APP_SECRET`
+- `FEISHU_VERIFICATION_TOKEN`（若在飞书侧配置了 token）
+- `FEISHU_ENCRYPT_KEY`（若启用了签名校验）
+- 建议配置 `SENESCHAL_GATEWAY_PUBLIC_BASE_URL`，让回传的文件链接可被飞书用户访问。
+
+启动示例（长连接）：
+
+```bash
+export FEISHU_APP_ID="cli_xxx"
+export FEISHU_APP_SECRET="xxx"
+export FEISHU_EVENT_TRANSPORT="long_conn"
+python -m seneschal.gateway_server
+```
+
+事件处理说明：
+- 网关收到飞书消息后会创建异步任务（返回 accepted 或写入日志）。
+- 任务完成后，网关会主动调用飞书消息接口回发结果文本。
+- 若包含文件，默认以下载链接形式附在结果文本中。
 
 ---
 
