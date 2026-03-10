@@ -102,12 +102,14 @@
 
 ## 2.1 模块职责
 
-对外提供统一任务入口，将请求交给 Steward Agent 执行，支持同步与异步。
+对外提供统一任务入口，将请求交给 workflow / orchestrator 层执行，支持同步与异步任务、文件下载、回调和飞书接入。
 
 ## 2.2 API 列表
 
 - `POST /api/v1/task`
 - `GET /api/v1/jobs/{job_id}`
+- `GET /api/v1/files/{job_id}/{file_name}`
+- `POST /api/v1/feishu/events`
 - `GET /health`
 
 ## 2.3 请求模型
@@ -116,12 +118,22 @@
 
 - `task: str`
 - `async_mode: bool = false`
+- `output_path: str | None`
+- `mode: str = "router"`
+- `agent_hint: str | None`
+- `skill_hint: str | None`
+- `routing_strategy: str | None`
+- `context_id: str | None`（已透传到 workflow/orchestrator；当前主要作为后续多轮上下文能力的预留字段）
+- `webhook_url: str | None`
+- `webhook_token: str | None`
+- `callback_headers: dict[str, str]`
 
 返回 `TaskResult`：
 
 - `job_id`
-- `status`（running/completed/failed）
-- `result`（回复或错误信息）
+- `status`（queued/running/completed/failed）
+- `result`（回复、routing trace、文件列表或错误信息）
+- `error`（可选）
 
 ## 2.4 异步机制
 
@@ -134,7 +146,14 @@
 - `SENESCHAL_GATEWAY_API_KEY` 设置后启用 Bearer 校验
 - 未设置时可匿名访问（仅建议内网开发环境）
 
-## 2.6 部署建议
+## 2.6 附加能力
+
+- 任务结果中的 `files` 会按 `SENESCHAL_GATEWAY_FILE_ROOT` 与 `SENESCHAL_GATEWAY_PUBLIC_BASE_URL` 生成可下载链接
+- 异步任务完成后支持回调 `webhook_url`
+- 支持飞书 webhook 事件入口
+- 支持按配置自动启动飞书长连接（`FEISHU_EVENT_TRANSPORT=long_conn/both/auto`）
+
+## 2.7 部署建议
 
 - 生产环境建议置于 API 网关后
 - 建议加超时、限流与审计日志
@@ -147,10 +166,11 @@
 典型链路：
 
 1. 外部系统调用 `seneschal/gateway_server` 提交任务
-2. Steward 在执行中调用工具
-3. 工具调用 `mobiagent_server`
-4. `mobiagent_server` 再调用真实执行器（cli/proxy/task_queue）
-5. 执行结果回流到 Steward，最终返回给外部系统
+2. gateway 调用 `run_gateway_task()`
+3. orchestrator 完成 Router / Planner / Executor / Skill Selector 编排
+4. 如需端侧执行，工具再调用 `mobiagent_server`
+5. `mobiagent_server` 再调用真实执行器（cli/proxy/task_queue）
+6. 执行结果回流到 orchestrator，最终返回给外部系统或异步回调/飞书消息
 
 ---
 
@@ -174,3 +194,4 @@
 - `mobiagent_server`：新增 mode（如 grpc、mq）
 - `seneschal/gateway_server`：支持批任务、回调、取消任务
 - 双网关统一：标准化 trace_id，贯穿全链路观测
+- 进一步增强文件暴露策略、异步任务持久化与飞书双向交互能力

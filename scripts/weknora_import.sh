@@ -12,6 +12,10 @@ KB_JSON="${KB_JSON:-$CONFIG_DIR/knowledge_bases_export.json}"
 AGENTS_JSON="${AGENTS_JSON:-$CONFIG_DIR/custom_agents_export.json}"
 TENANTS_JSON="${TENANTS_JSON:-$CONFIG_DIR/tenants_export.json}"
 USERS_JSON="${USERS_JSON:-$CONFIG_DIR/users_export.json}"
+GENERATE_API_KEY="${GENERATE_API_KEY:-0}"
+UPDATE_ENV_FILE_KEY="${UPDATE_ENV_FILE_KEY:-1}"
+WEKNORA_TENANT_ID="${WEKNORA_TENANT_ID:-}"
+GENERATED_API_KEY=""
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   cat <<'EOF'
@@ -29,6 +33,12 @@ Environment variables:
   CONTAINER_NAME  Postgres container name (default: WeKnora-postgres-dev)
   DB_NAME         Database name (default: WeKnora)
   DB_USER         Database user (default: postgres)
+  GENERATE_API_KEY  Set to 1 to generate a fresh tenant API key before import
+  UPDATE_ENV_FILE_KEY Set to 1 to write generated key back into ENV_FILE (default: 1)
+  WEKNORA_TENANT_ID  Tenant ID used for key generation (default: first tenant id from TENANTS_JSON)
+
+Required for GENERATE_API_KEY=1:
+  TENANT_AES_KEY   Must match current WeKnora runtime TENANT_AES_KEY
 EOF
   exit 0
 fi
@@ -66,6 +76,115 @@ echo "[weknora_import] KB_JSON=$KB_JSON"
 echo "[weknora_import] AGENTS_JSON=$AGENTS_JSON"
 echo "[weknora_import] TENANTS_JSON=$TENANTS_JSON"
 echo "[weknora_import] USERS_JSON=$USERS_JSON"
+echo "[weknora_import] GENERATE_API_KEY=$GENERATE_API_KEY"
+echo "[weknora_import] UPDATE_ENV_FILE_KEY=$UPDATE_ENV_FILE_KEY"
+
+if [[ "$GENERATE_API_KEY" == "1" ]]; then
+  if ! command -v go >/dev/null 2>&1; then
+    echo "go is required when GENERATE_API_KEY=1" >&2
+    exit 1
+  fi
+
+  if [[ -z "${TENANT_AES_KEY:-}" ]]; then
+    if [[ -f "$ENV_FILE" ]]; then
+      # shellcheck disable=SC2016
+      TENANT_AES_KEY="$(grep -E '^[[:space:]]*(export[[:space:]]+)?TENANT_AES_KEY=' "$ENV_FILE" | tail -n1 | sed -E 's/^[[:space:]]*(export[[:space:]]+)?TENANT_AES_KEY=//; s/^["\x27]//; s/["\x27]$//')"
+      export TENANT_AES_KEY
+    fi
+  fi
+
+  if [[ -z "${TENANT_AES_KEY:-}" ]]; then
+    echo "TENANT_AES_KEY is required for GENERATE_API_KEY=1" >&2
+    exit 1
+  fi
+
+  if [[ -z "$WEKNORA_TENANT_ID" ]]; then
+    WEKNORA_TENANT_ID="$(TENANTS_JSON="$TENANTS_JSON" python - <<'PY'
+import json
+import os
+from pathlib import Path
+path = Path(os.environ['TENANTS_JSON'])
+data = json.loads(path.read_text(encoding='utf-8'))
+if not isinstance(data, list) or not data:
+    raise SystemExit('TENANTS_JSON must contain at least one tenant object')
+tenant_id = data[0].get('id')
+if tenant_id is None:
+    raise SystemExit('TENANTS_JSON first object missing id')
+print(str(int(tenant_id)))
+PY
+)"
+  fi
+
+  gen_go_file="$(mktemp /tmp/weknora-keygen-XXXXXX.go)"
+  cat > "$gen_go_file" <<'EOF'
+package main
+
+import (
+  "crypto/aes"
+  "crypto/cipher"
+  "crypto/rand"
+  "encoding/base64"
+  "encoding/binary"
+  "fmt"
+  "io"
+  "os"
+  "strconv"
+)
+
+func main() {
+  secret := []byte(os.Getenv("TENANT_AES_KEY"))
+  tenantIDStr := os.Getenv("WEKNORA_TENANT_ID")
+  if len(secret) != 16 && len(secret) != 24 && len(secret) != 32 {
+    panic("TENANT_AES_KEY length must be 16/24/32 bytes")
+  }
+  tenantID, err := strconv.ParseUint(tenantIDStr, 10, 64)
+  if err != nil {
+    panic(err)
+  }
+
+  idBytes := make([]byte, 8)
+  binary.LittleEndian.PutUint64(idBytes, tenantID)
+
+  block, err := aes.NewCipher(secret)
+  if err != nil {
+    panic(err)
+  }
+  aesgcm, err := cipher.NewGCM(block)
+  if err != nil {
+    panic(err)
+  }
+
+  nonce := make([]byte, 12)
+  if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+    panic(err)
+  }
+
+  ciphertext := aesgcm.Seal(nil, nonce, idBytes, nil)
+  combined := append(nonce, ciphertext...)
+  fmt.Print("sk-" + base64.RawURLEncoding.EncodeToString(combined))
+}
+EOF
+
+  GENERATED_API_KEY="$(TENANT_AES_KEY="$TENANT_AES_KEY" WEKNORA_TENANT_ID="$WEKNORA_TENANT_ID" go run "$gen_go_file")"
+  rm -f "$gen_go_file"
+
+  if [[ -z "$GENERATED_API_KEY" ]]; then
+    echo "failed to generate api key" >&2
+    exit 1
+  fi
+
+  export WEKNORA_API_KEY="$GENERATED_API_KEY"
+  echo "[weknora_import] Generated API key for tenant_id=$WEKNORA_TENANT_ID"
+
+  if [[ "$UPDATE_ENV_FILE_KEY" == "1" ]]; then
+    if grep -qE '^[[:space:]]*(export[[:space:]]+)?WEKNORA_API_KEY=' "$ENV_FILE"; then
+      sed -i -E 's#^[[:space:]]*(export[[:space:]]+)?WEKNORA_API_KEY=.*#export WEKNORA_API_KEY="'"$GENERATED_API_KEY"'"#' "$ENV_FILE"
+    else
+      printf '\nexport WEKNORA_API_KEY="%s"\n' "$GENERATED_API_KEY" >> "$ENV_FILE"
+    fi
+    echo "[weknora_import] Updated WEKNORA_API_KEY in $ENV_FILE"
+  fi
+fi
 
 ROOT_DIR="$ROOT_DIR" \
 ENV_FILE="$ENV_FILE" \
@@ -372,3 +491,8 @@ agents_count=$(docker exec -i "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME"
 tenants_count=$(docker exec -i "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" -At -c "SELECT COUNT(*) FROM tenants WHERE deleted_at IS NULL;")
 users_count=$(docker exec -i "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" -At -c "SELECT COUNT(*) FROM users WHERE deleted_at IS NULL;")
 echo "Import completed. tenants=$tenants_count users=$users_count models=$models_count knowledge_bases=$kb_count custom_agents=$agents_count"
+
+if [[ -n "$GENERATED_API_KEY" ]]; then
+  echo "Generated WEKNORA_API_KEY=$GENERATED_API_KEY"
+  echo "export WEKNORA_API_KEY=$GENERATED_API_KEY" >> "$ENV_FILE"
+fi
