@@ -20,6 +20,8 @@
 - 本地工具
   - `seneschal/tools/shell.py`
   - `seneschal/tools/file.py`
+- Office 文档工具
+  - `seneschal/tools/office.py`
 
 ---
 
@@ -165,9 +167,37 @@
 
 ---
 
-## 8. 工具扩展指南
+## 8. Office 文档工具（`office.py`）
 
-## 8.1 新增工具的最小步骤
+## 8.1 当前能力
+
+- `read_docx_text`：读取 DOCX 文本，并按 `SENESCHAL_DOCX_MAX_CHARS` 做截断
+- `create_docx_from_text`：由纯文本生成 DOCX
+- `edit_docx`：对现有 DOCX 做替换、追加段落和简单表格写入
+- `create_pdf_from_text`：由纯文本生成 PDF
+- `read_xlsx_summary`：读取 XLSX/XLSM 的工作表摘要与预览
+- `write_xlsx_from_records` / `write_xlsx_from_rows`：写入 Excel 文件
+
+## 8.2 路径与安全约束
+
+- 写入型接口统一受 `SENESCHAL_FILE_WRITE_ROOT` 限制
+- `read_docx_text` 额外受 `SENESCHAL_DOCX_MAX_CHARS` 限制
+- 依赖缺失时会在 `ToolResponse.metadata.error` 中返回 `missing_dependency`
+
+## 8.3 当前接入状态
+
+这些 Office 能力已经在代码中实现，但截至当前版本：
+
+- 尚未通过 `seneschal/tools.py` 兼容导出层向外暴露
+- 尚未注册到 `create_worker_agent()` / `create_steward_agent()` 的默认工具集
+
+因此它们目前更适合被视为“已实现但未接入主链路”的工具能力。
+
+---
+
+## 9. 工具扩展指南
+
+## 9.1 新增工具的最小步骤
 
 1. 在对应文件实现 async 函数，返回 `ToolResponse`
 2. 在 `seneschal/tools/__init__.py` 导出
@@ -175,7 +205,7 @@
 4. 为工具写 `func_description`（给 LLM 的“使用说明”）
 5. 在 docs 补充工具用途与示例
 
-## 8.2 `func_description` 编写建议
+## 9.2 `func_description` 编写建议
 
 描述里至少包含：
 
@@ -186,7 +216,7 @@
 
 这样可显著降低 Agent 误用概率。
 
-## 8.3 错误处理建议
+## 9.3 错误处理建议
 
 - HTTP 错误：保留状态码与错误体摘要
 - 解析错误：返回原始片段 + parse_error 字段
@@ -194,7 +224,7 @@
 
 ---
 
-## 9. 调试与排障
+## 10. 调试与排障
 
 - 工具返回为空：检查 `ToolResponse.content` 是否构造
 - metadata 缺字段：检查下游 API 原始返回
