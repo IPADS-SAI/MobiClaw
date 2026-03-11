@@ -210,11 +210,40 @@ def _parse_json_object(text: str) -> dict[str, Any] | None:
     match = re.search(r"\{[\s\S]*\}", text)
     if not match:
         return None
+    candidate = match.group(0).strip()
     try:
-        parsed = json.loads(match.group(0))
+        parsed = json.loads(candidate)
+        return parsed if isinstance(parsed, dict) else None
     except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
+        pass
+
+    # Common LLM defect: extra closing brackets at tail, e.g. `...]]}`.
+    repaired = candidate
+    for _ in range(6):
+        repaired_next = re.sub(r"\]\s*(\})\s*$", r"\1", repaired)
+        if repaired_next == repaired:
+            break
+        repaired = repaired_next
+        try:
+            parsed = json.loads(repaired)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            continue
+
+    # Generic tail-trim fallback for malformed trailing closers.
+    trimmed = candidate
+    for _ in range(8):
+        if not trimmed or trimmed[-1] not in "]}":
+            break
+        trimmed = trimmed[:-1].rstrip()
+        try:
+            parsed = json.loads(trimmed)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            continue
+    return None
 
 
 def _skills_root() -> Path:

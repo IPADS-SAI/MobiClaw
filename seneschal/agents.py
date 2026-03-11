@@ -10,9 +10,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import asyncio
+import base64
 import logging
 import os
 import json
+from pathlib import Path
+from typing import Any
 
 from agentscope.agent import ReActAgent, UserAgent
 from agentscope.formatter import OpenAIChatFormatter
@@ -82,6 +86,201 @@ def create_openai_model(*, stream: bool = True, temperature: float | None = None
         generate_kwargs={"temperature": temp},
     )
 
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = (os.environ.get(name) or "").strip().lower()
+    if not value:
+        return default
+    return value in {"1", "true", "yes", "on", "y"}
+
+
+def _extract_text_from_model_response(resp: Any) -> str:
+    if resp is None:
+        return ""
+    getter = None
+    try:
+        getter = getattr(resp, "get_text_content", None)
+    except Exception:  # noqa: BLE001
+        getter = None
+    if callable(getter):
+        try:
+            text = getter()
+        except Exception:  # noqa: BLE001
+            text = ""
+        return text if isinstance(text, str) else ""
+    try:
+        content = getattr(resp, "content", None)
+    except Exception:  # noqa: BLE001
+        content = None
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, dict):
+            if block.get("type") == "text" and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+            continue
+        if getattr(block, "type", None) == "text" and isinstance(getattr(block, "text", None), str):
+            parts.append(block.text)
+    return "\n".join(parts).strip()
+
+
+def _parse_vlm_json(text: str) -> dict[str, Any]:
+    raw = (text or "").strip()
+    if not raw:
+        return {}
+    if "```" in raw:
+        chunks = [chunk.strip() for chunk in raw.split("```") if chunk.strip()]
+        for chunk in chunks:
+            candidate = chunk
+            if candidate.startswith("json"):
+                candidate = candidate[4:].strip()
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                continue
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        pass
+
+    left = raw.find("{")
+    right = raw.rfind("}")
+    if left >= 0 and right > left:
+        snippet = raw[left : right + 1]
+        try:
+            parsed = json.loads(snippet)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _extract_vlm_evidence(
+    metadata: dict[str, Any],
+    *,
+    last_n_images: int,
+    max_reasonings_chars: int,
+) -> dict[str, Any]:
+    execution = metadata.get("execution", {})
+    if not isinstance(execution, dict):
+        execution = {}
+    artifacts = execution.get("artifacts", {})
+    if not isinstance(artifacts, dict):
+        artifacts = {}
+    history = execution.get("history", {})
+    if not isinstance(history, dict):
+        history = {}
+    summary = execution.get("summary", {})
+    if not isinstance(summary, dict):
+        summary = {}
+
+    images_raw = artifacts.get("images", [])
+    images = [str(p) for p in images_raw if isinstance(p, str) and p.strip()]
+    selected = images[-max(1, last_n_images):] if images else []
+    image_data_urls: list[str] = []
+    for image_path in selected:
+        path = Path(image_path)
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            data = path.read_bytes()
+        except Exception:
+            continue
+        suffix = path.suffix.lower()
+        mime = "image/png" if suffix == ".png" else "image/jpeg"
+        b64 = base64.b64encode(data).decode("ascii")
+        image_data_urls.append(f"data:{mime};base64,{b64}")
+
+    reasonings_raw = history.get("reasonings", [])
+    reasonings = [str(item).strip() for item in reasonings_raw if isinstance(item, str) and item.strip()]
+    reasonings_text = "\n".join(f"{idx + 1}. {line}" for idx, line in enumerate(reasonings))
+    if len(reasonings_text) > max_reasonings_chars:
+        reasonings_text = "[truncated earlier reasonings]\n" + reasonings_text[-max_reasonings_chars:]
+
+    return {
+        "task_description": str(execution.get("task_description", "") or metadata.get("final_task", "") or ""),
+        "status_hint": str(summary.get("status_hint", "") or metadata.get("status_hint", "") or ""),
+        "step_count": int(summary.get("step_count", metadata.get("step_count", 0)) or 0),
+        "action_count": int(summary.get("action_count", metadata.get("action_count", 0)) or 0),
+        "images_selected": selected,
+        "image_data_urls": image_data_urls,
+        "reasonings_text": reasonings_text,
+        "reasonings_count": len(reasonings),
+    }
+
+
+async def _judge_completion_with_vlm(
+    *,
+    model: OpenAIChatModel,
+    task_desc: str,
+    success_criteria: str,
+    status_hint: str,
+    step_count: int,
+    action_count: int,
+    reasonings_text: str,
+    image_data_urls: list[str],
+    timeout_s: float,
+) -> dict[str, Any]:
+    prompt = (
+        f"你是手机自动化任务验证器。请根据任务描述、执行摘要、完整 reasonings 历史以及最终{len(image_data_urls)}张截图，"
+        f"task_desc: {task_desc}\n"
+        f"success_criteria: {success_criteria}\n"
+        f"status_hint: {status_hint}\n"
+        f"step_count: {step_count}, action_count: {action_count}\n"
+        "history_reasonings:\n"
+        f"{reasonings_text or '[empty]'}\n"
+        "请根据截图和操作历史，判断任务是否已经完成。\n"
+        "请只输出 JSON，不要输出其他文本。\n"
+        "JSON schema:\n"
+        '{"completed": bool, "confidence": float, "reason": str, "evidence": list[str], "missing_requirements": list[str]}\n'
+    )
+
+    user_content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    for image_url in image_data_urls:
+        user_content.append({"type": "image_url", "image_url": {"url": image_url}})
+
+    messages = [{"role": "user", "content": user_content}]
+    try:
+        response = await asyncio.wait_for(model(messages), timeout=timeout_s)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "completed": False,
+            "confidence": 0.0,
+            "reason": "",
+            "evidence": [],
+            "missing_requirements": [],
+            "error": str(exc),
+            "fallback_used": True,
+        }
+
+    raw_text = _extract_text_from_model_response(response)
+    parsed = _parse_vlm_json(raw_text)
+    if not parsed:
+        return {
+            "completed": False,
+            "confidence": 0.0,
+            "reason": "",
+            "evidence": [],
+            "missing_requirements": [],
+            "error": "vlm_non_json_output",
+            "raw_text": raw_text[:800],
+            "fallback_used": True,
+        }
+    logger.debug("vlm.parse_json_output")
+    logger.debug(parsed)
+    evidence = parsed.get("evidence", [])
+    missing = parsed.get("missing_requirements", [])
+    return {
+        "completed": bool(parsed.get("completed", False)),
+        "confidence": float(parsed.get("confidence", 0.0) or 0.0),
+        "reason": str(parsed.get("reason", "") or ""),
+        "evidence": evidence if isinstance(evidence, list) else [],
+        "missing_requirements": missing if isinstance(missing, list) else [],
+    }
 
 def _build_skill_prompt_suffix(skill_context: str | None) -> str:
     """构建技能上下文补充提示。
@@ -465,6 +664,10 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
         run_shell_command,
         func_description="运行受限的本地命令行工具（白名单约束）。",
     )
+    toolkit.register_tool_function(
+        extract_image_text_ocr,
+        func_description="从图片中提取文字。",
+    )
     
     async def call_mobi_collect_with_retry_report(task_desc: str, success_criteria: str = "") -> ToolResponse:
         """执行带重试上限的 mobi 采集，并返回结构化证据包。"""
@@ -472,6 +675,11 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
         current_task = task_desc
         criteria_matched = False
         no_criteria_mode = not bool((success_criteria or "").strip())
+        vlm_enabled = _env_bool("STEWARD_MOBI_VLM_ENABLED", True)
+        vlm_last_n = max(1, int(os.environ.get("STEWARD_MOBI_VLM_LAST_N", "5")))
+        vlm_timeout_s = max(5.0, float(os.environ.get("STEWARD_MOBI_VLM_TIMEOUT_S", "25")))
+        vlm_max_reasonings_chars = max(1000, int(os.environ.get("STEWARD_MOBI_VLM_MAX_REASONINGS_CHARS", "12000")))
+        vlm_model = create_openai_model(stream=False, temperature=0.0) if vlm_enabled else None
 
         for idx in range(1, retry_cap + 2):
             resp = await call_mobi_collect_verified(current_task, max_retries=0)
@@ -486,6 +694,61 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
                 or extracted_info
                 or md.get("raw_data")
             )
+            criteria_matched_text = False
+            criteria_matched_vlm = False
+            vlm_verdict: dict[str, Any] = {
+                "completed": False,
+                "confidence": 0.0,
+                "reason": "",
+                "evidence": [],
+                "missing_requirements": [],
+            }
+            vlm_images_used: list[str] = []
+            reasonings_count = 0
+
+            if success_criteria:
+                haystack = (
+                    ocr_text
+                    + "\n"
+                    + last_reasoning
+                    + "\n"
+                    + json.dumps(extracted_info, ensure_ascii=False)
+                )
+                criteria_matched_text = tool_success and (success_criteria in haystack)
+                if (not criteria_matched_text) and tool_success and has_evidence:
+                    generic_tokens = ("成功获取", "获取到", "收集到", "活动信息", "最近活动")
+                    if any(token in success_criteria for token in generic_tokens):
+                        criteria_matched_text = True
+            else:
+                # 无显式标准时，只要拿到可用证据即可继续由 Agent 判定。
+                criteria_matched_text = tool_success and has_evidence
+
+            if vlm_enabled and vlm_model is not None and tool_success and has_evidence:
+                vlm_evidence = _extract_vlm_evidence(
+                    md,
+                    last_n_images=vlm_last_n,
+                    max_reasonings_chars=vlm_max_reasonings_chars,
+                )
+                reasonings_count = int(vlm_evidence.get("reasonings_count", 0) or 0)
+                vlm_images_used = [
+                    str(p) for p in vlm_evidence.get("images_selected", []) if isinstance(p, str)
+                ]
+                vlm_verdict = await _judge_completion_with_vlm(
+                    model=vlm_model,
+                    task_desc=str(vlm_evidence.get("task_description", "") or current_task),
+                    success_criteria=success_criteria,
+                    status_hint=str(vlm_evidence.get("status_hint", "")),
+                    step_count=int(vlm_evidence.get("step_count", 0) or 0),
+                    action_count=int(vlm_evidence.get("action_count", 0) or 0),
+                    reasonings_text=str(vlm_evidence.get("reasonings_text", "")),
+                    image_data_urls=[
+                        str(u) for u in vlm_evidence.get("image_data_urls", []) if isinstance(u, str)
+                    ],
+                    timeout_s=vlm_timeout_s,
+                )
+                criteria_matched_vlm = bool(vlm_verdict.get("completed", False))
+
+            criteria_matched = criteria_matched_text or criteria_matched_vlm
 
             attempt_item = {
                 "attempt": idx,
@@ -500,25 +763,17 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
                 "ocr_preview": ocr_text[:300],
                 "extracted_info": extracted_info,
                 "tool_success": tool_success,
+                "criteria_matched_text": criteria_matched_text,
+                "criteria_matched_vlm": criteria_matched_vlm,
+                "vlm_completed": bool(vlm_verdict.get("completed", False)),
+                "vlm_confidence": float(vlm_verdict.get("confidence", 0.0) or 0.0),
+                "vlm_reason": str(vlm_verdict.get("reason", "") or ""),
+                "vlm_error": str(vlm_verdict.get("error", "") or ""),
+                "vlm_images_used": vlm_images_used,
+                "reasonings_count": reasonings_count,
+                "vlm_missing_requirements": vlm_verdict.get("missing_requirements", []),
             }
             attempts.append(attempt_item)
-
-            if success_criteria:
-                haystack = (
-                    ocr_text
-                    + "\n"
-                    + last_reasoning
-                    + "\n"
-                    + json.dumps(extracted_info, ensure_ascii=False)
-                )
-                criteria_matched = tool_success and (success_criteria in haystack)
-                if (not criteria_matched) and tool_success and has_evidence:
-                    generic_tokens = ("成功获取", "获取到", "收集到", "活动信息", "最近活动")
-                    if any(token in success_criteria for token in generic_tokens):
-                        criteria_matched = True
-            else:
-                # 无显式标准时，只要拿到可用证据即可继续由 Agent 判定。
-                criteria_matched = tool_success and has_evidence
 
             if criteria_matched:
                 break
@@ -541,6 +796,9 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
             "attempt_count": len(attempts),
             "criteria_matched": criteria_matched,
             "needs_agent_judgement": True,
+            "validation_mode": "text_or_vlm",
+            "vlm_enabled": vlm_enabled,
+            "vlm_last_n": vlm_last_n,
             "attempts": attempts,
         }
 
@@ -552,6 +810,8 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
                 "latest_screenshot_path": final_attempt.get("screenshot_path", ""),
                 "latest_reasoning": final_attempt.get("last_reasoning", ""),
                 "latest_ocr_preview": final_attempt.get("ocr_preview", ""),
+                "latest_vlm_reason": final_attempt.get("vlm_reason", ""),
+                "vlm_missing_requirements": final_attempt.get("vlm_missing_requirements", []),
                 "next_action_recommendation": "agent_decide_retry_or_handoff",
             }
 
@@ -604,8 +864,6 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
         delegate_to_worker,
         func_description="将子任务委派给 Worker Agent 并汇总返回结果。",
     )
-
-    plan_notebook=PlanNotebook(),
 
     sys_prompt = """你是 Seneschal 智能管家系统的核心 Agent，负责帮助用户管理个人数据和日常事务。
 
@@ -682,6 +940,7 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
         toolkit=toolkit,
         memory=InMemoryMemory(),
         max_iters=10,
+        plan_notebook=PlanNotebook(),
     )
 
 
