@@ -260,6 +260,7 @@ dependencies = [
     "tiktoken==0.12.0",
     "tldextract==5.3.1",
     "tokenizers==0.22.2",
+    "torch>=2.10.0",
     "tqdm==4.67.1",
     "transformers==5.0.0",
     "twisted==25.5.0",
@@ -283,18 +284,6 @@ dependencies = [
     "markitdown",
 ]
 
-[project.optional-dependencies]
-cpu = ["torch>=2.10.0"]
-gpu = ["torch>=2.10.0"]
-
-[tool.uv]
-conflicts = [
-    [
-        { extra = "cpu" },
-        { extra = "gpu" },
-    ],
-]
-
 [tool.uv.workspace]
 members = [
     "agentscope",
@@ -302,17 +291,3 @@ members = [
 
 [tool.uv.sources]
 agentscope = { workspace = true }
-torch = [
-    { index = "pytorch-cpu", extra = "cpu" },
-    { index = "pytorch-gpu", extra = "gpu" },
-]
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-
-[[tool.uv.index]]
-name = "pytorch-gpu"
-url = "https://pypi.org/simple"
-explicit = true
