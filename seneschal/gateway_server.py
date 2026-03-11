@@ -18,14 +18,15 @@ import json
 import mimetypes
 import os
 from pathlib import Path
+from contextlib import asynccontextmanager
 import threading
 import time
 import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Request, status
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Header, HTTPException, Request, Response, status
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 import requests
 
@@ -118,6 +119,20 @@ class TaskResult(BaseModel):
     error: str | None = None
 
 
+class EnvContentRequest(BaseModel):
+    """`.env` 文件更新请求体。"""
+
+    content: str = Field(default="")
+
+
+class EnvStructuredRequest(BaseModel):
+    """结构化 `.env` 配置更新请求体。"""
+
+    values: dict[str, str] = Field(default_factory=dict)
+    unmanaged: dict[str, str] | None = None
+    preserve_unmanaged: bool = Field(default=True)
+
+
 @dataclass
 class JobContext:
     """异步任务上下文（回调地址与飞书投递信息）。"""
@@ -131,13 +146,151 @@ class JobContext:
     feishu_receive_id_type: str = "chat_id"
 
 
-app = FastAPI(title="Seneschal Gateway", version="0.1.0")
-
 _JOB_STORE: dict[str, TaskResult] = {}
 _JOB_CONTEXT: dict[str, JobContext] = {}
 _JOB_LOCK = asyncio.Lock()
 _MAIN_LOOP: asyncio.AbstractEventLoop | None = None
 _FEISHU_WS_THREAD: threading.Thread | None = None
+_WEBUI_INDEX = Path(__file__).resolve().parent / "webui" / "gateway_console.html"
+_WEBUI_SETTINGS = Path(__file__).resolve().parent / "webui" / "gateway_settings.html"
+_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+_ENV_SETTINGS_SCHEMA: list[dict[str, Any]] = [
+    {
+        "id": "runtime",
+        "title": "Runtime",
+        "items": [
+            {"key": "SENESCHAL_LOG_LEVEL", "label": "日志级别", "type": "select", "options": ["DEBUG", "INFO", "WARNING", "ERROR"]},
+            {"key": "SENESCHAL_FILE_WRITE_ROOT", "label": "文件输出根目录", "type": "text"},
+        ],
+    },
+    {
+        "id": "gateway",
+        "title": "Gateway",
+        "items": [
+            {"key": "SENESCHAL_GATEWAY_HOST", "label": "监听主机", "type": "text"},
+            {"key": "SENESCHAL_GATEWAY_PORT", "label": "监听端口", "type": "number"},
+            {"key": "SENESCHAL_GATEWAY_API_KEY", "label": "API Key", "type": "password"},
+            {"key": "SENESCHAL_GATEWAY_PUBLIC_BASE_URL", "label": "公网访问地址", "type": "text"},
+            {"key": "SENESCHAL_GATEWAY_FILE_ROOT", "label": "可下载文件根目录", "type": "text"},
+            {"key": "SENESCHAL_GATEWAY_CALLBACK_TIMEOUT", "label": "回调超时(s)", "type": "number"},
+            {"key": "SENESCHAL_GATEWAY_CALLBACK_RETRY", "label": "回调重试次数", "type": "number"},
+            {"key": "SENESCHAL_GATEWAY_CALLBACK_BACKOFF", "label": "回调退避(s)", "type": "number"},
+        ],
+    },
+    {
+        "id": "llm",
+        "title": "LLM Provider",
+        "items": [
+            {"key": "OPENROUTER_API_KEY", "label": "OpenRouter API Key", "type": "password"},
+            {"key": "OPENROUTER_BASE_URL", "label": "OpenRouter Base URL", "type": "text"},
+            {"key": "OPENROUTER_MODEL", "label": "OpenRouter Model", "type": "text"},
+        ],
+    },
+    {
+        "id": "weknora",
+        "title": "WeKnora",
+        "items": [
+            {"key": "WEKNORA_BASE_URL", "label": "WeKnora Base URL", "type": "text"},
+            {"key": "WEKNORA_API_KEY", "label": "WeKnora API Key", "type": "password"},
+            {"key": "WEKNORA_KB_NAME", "label": "知识库名称", "type": "text"},
+            {"key": "WEKNORA_AGENT_NAME", "label": "Agent 名称", "type": "text"},
+            {"key": "WEKNORA_SESSION_ID", "label": "Session ID", "type": "text"},
+        ],
+    },
+    {
+        "id": "brave",
+        "title": "Brave Search",
+        "items": [
+            {"key": "BRAVE_API_KEY", "label": "Brave API Key", "type": "password"},
+            {"key": "BRAVE_SEARCH_BASE_URL", "label": "Brave Search Base URL", "type": "text"},
+            {"key": "BRAVE_SEARCH_MAX_RESULTS", "label": "最大结果数", "type": "number"},
+        ],
+    },
+    {
+        "id": "mobiagent",
+        "title": "MobiAgent",
+        "items": [
+            {"key": "MOBI_AGENT_BASE_URL", "label": "MobiAgent Base URL", "type": "text"},
+            {"key": "MOBI_AGENT_API_KEY", "label": "MobiAgent API Key", "type": "password"},
+            {"key": "MOBIAGENT_SERVER_MODE", "label": "服务模式", "type": "select", "options": ["cli", "api"]},
+            {"key": "MOBIAGENT_SERVER_IP", "label": "服务 IP", "type": "text"},
+            {"key": "MOBIAGENT_SERVER_DECIDER_PORT", "label": "Decider 端口", "type": "number"},
+            {"key": "MOBIAGENT_SERVER_GROUNDER_PORT", "label": "Grounder 端口", "type": "number"},
+            {"key": "MOBIAGENT_SERVER_PLANNER_PORT", "label": "Planner 端口", "type": "number"},
+            {"key": "DEVICE", "label": "设备平台", "type": "select", "options": ["Android", "Harmony"]},
+            {"key": "MOBIAGENT_CLI_CMD", "label": "CLI 命令模板", "type": "textarea", "raw": True},
+            {"key": "MOBIAGENT_TASK_DIR", "label": "任务目录", "type": "text"},
+            {"key": "MOBIAGENT_DATA_DIR", "label": "数据目录", "type": "text"},
+            {"key": "MOBIAGENT_QUEUE_DIR", "label": "队列目录", "type": "text"},
+            {"key": "MOBIAGENT_RESULT_DIR", "label": "结果目录", "type": "text"},
+            {"key": "MOBIAGENT_GATEWAY_PORT", "label": "MobiAgent 网关端口", "type": "number"},
+        ],
+    },
+    {
+        "id": "routing",
+        "title": "Routing",
+        "items": [
+            {"key": "SENESCHAL_ROUTING_DEFAULT_MODE", "label": "默认模式", "type": "select", "options": ["router", "intelligent", "worker", "steward", "auto"]},
+            {"key": "SENESCHAL_ROUTING_STRATEGY", "label": "路由策略", "type": "text"},
+            {"key": "SENESCHAL_ALLOW_LEGACY_MODE", "label": "允许 legacy 模式(0/1)", "type": "text"},
+            {"key": "SENESCHAL_ROUTING_MAX_SUBTASKS", "label": "最大子任务数", "type": "number"},
+            {"key": "SENESCHAL_ROUTING_MAX_DEPTH", "label": "最大深度", "type": "number"},
+            {"key": "SENESCHAL_ROUTER_TIMEOUT_S", "label": "Router 超时(s)", "type": "number"},
+            {"key": "SENESCHAL_PLANNER_TIMEOUT_S", "label": "Planner 超时(s)", "type": "number"},
+            {"key": "SENESCHAL_SUBTASK_TIMEOUT_S", "label": "子任务超时(s)", "type": "number"},
+            {"key": "SENESCHAL_SKILL_SELECTOR_TIMEOUT_S", "label": "Skill Selector 超时(s)", "type": "number"},
+        ],
+    },
+    {
+        "id": "feishu",
+        "title": "Feishu",
+        "items": [
+            {"key": "FEISHU_EVENT_TRANSPORT", "label": "事件接入模式", "type": "select", "options": ["both", "webhook", "long_conn", "off", "auto"]},
+            {"key": "FEISHU_APP_ID", "label": "App ID", "type": "text"},
+            {"key": "FEISHU_APP_SECRET", "label": "App Secret", "type": "password"},
+            {"key": "FEISHU_VERIFICATION_TOKEN", "label": "Verification Token", "type": "text"},
+            {"key": "FEISHU_ENCRYPT_KEY", "label": "Encrypt Key", "type": "text"},
+        ],
+    },
+    {
+        "id": "weknora_models",
+        "title": "WeKnora Models",
+        "items": [
+            {"key": "WEKNORA_MODEL_RERANK_ID", "label": "Rerank ID", "type": "text"},
+            {"key": "WEKNORA_MODEL_RERANK_NAME", "label": "Rerank Name", "type": "text"},
+            {"key": "WEKNORA_MODEL_RERANK_API_KEY", "label": "Rerank API Key", "type": "password"},
+            {"key": "WEKNORA_MODEL_RERANK_BASE_URL", "label": "Rerank Base URL", "type": "text"},
+            {"key": "WEKNORA_MODEL_KNOWLEDGE_QA_ID", "label": "KnowledgeQA ID", "type": "text"},
+            {"key": "WEKNORA_MODEL_KNOWLEDGE_QA_NAME", "label": "KnowledgeQA Name", "type": "text"},
+            {"key": "WEKNORA_MODEL_KNOWLEDGE_QA_ALT_ID", "label": "KnowledgeQA Alt ID", "type": "text"},
+            {"key": "WEKNORA_MODEL_KNOWLEDGE_QA_ALT_NAME", "label": "KnowledgeQA Alt Name", "type": "text"},
+            {"key": "WEKNORA_MODEL_VLM_ID", "label": "VLM ID", "type": "text"},
+            {"key": "WEKNORA_MODEL_VLM_NAME", "label": "VLM Name", "type": "text"},
+            {"key": "WEKNORA_MODEL_EMBEDDING_ID", "label": "Embedding ID", "type": "text"},
+            {"key": "WEKNORA_MODEL_EMBEDDING_NAME", "label": "Embedding Name", "type": "text"},
+            {"key": "WEKNORA_MODEL_EMBEDDING_API_KEY", "label": "Embedding API Key/表达式", "type": "text", "raw": True},
+            {"key": "WEKNORA_MODEL_EMBEDDING_BASE_URL", "label": "Embedding Base URL", "type": "text"},
+        ],
+    },
+]
+
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    """应用生命周期：初始化主事件循环并按配置启动飞书长连接。"""
+    global _MAIN_LOOP
+    _MAIN_LOOP = asyncio.get_running_loop()
+    cfg = load_config()
+
+    logger.info("Feishu transport mode: %s", cfg.feishu_event_transport)
+    if _should_start_feishu_long_conn(cfg):
+        _start_feishu_long_connection(cfg)
+    else:
+        logger.info("Feishu long connection disabled by FEISHU_EVENT_TRANSPORT")
+    yield
+
+
+app = FastAPI(title="Seneschal Gateway", version="0.1.0", lifespan=_lifespan)
 
 
 def _ensure_auth(authorization: str | None, cfg: GatewayConfig) -> None:
@@ -152,6 +305,126 @@ def _ensure_auth(authorization: str | None, cfg: GatewayConfig) -> None:
     token = authorization[len(prefix):]
     if token != cfg.api_key:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+
+
+def _env_file_path() -> Path:
+    """返回项目根目录 `.env` 文件路径。"""
+    return _ENV_FILE
+
+
+def _read_env_content() -> str:
+    """读取 `.env` 文件原始内容。"""
+    env_path = _env_file_path()
+    if not env_path.exists():
+        return ""
+    return env_path.read_text(encoding="utf-8")
+
+
+def _parse_env_variables(content: str) -> dict[str, str]:
+    """从 `.env` 文本解析键值对。"""
+    variables: dict[str, str] = {}
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        if len(value) >= 2 and (
+            (value.startswith('"') and value.endswith('"'))
+            or (value.startswith("'") and value.endswith("'"))
+        ):
+            value = value[1:-1]
+        variables[key] = value
+    return variables
+
+
+def _write_env_content(content: str) -> None:
+    """覆盖写入 `.env` 文件。"""
+    env_path = _env_file_path()
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text(content, encoding="utf-8")
+
+
+def _managed_env_keys() -> list[str]:
+    """返回结构化设置管理的环境变量键列表（按 schema 顺序）。"""
+    keys: list[str] = []
+    for category in _ENV_SETTINGS_SCHEMA:
+        for item in category.get("items", []):
+            key = str(item.get("key") or "").strip()
+            if key:
+                keys.append(key)
+    return keys
+
+
+def _split_env_variables(variables: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
+    """按 schema 拆分受管变量与未纳入 schema 的变量。"""
+    managed_key_set = set(_managed_env_keys())
+    managed: dict[str, str] = {}
+    unmanaged: dict[str, str] = {}
+    for key, value in variables.items():
+        if key in managed_key_set:
+            managed[key] = value
+        else:
+            unmanaged[key] = value
+    return managed, unmanaged
+
+
+def _sanitize_structured_values(values: dict[str, Any] | None) -> dict[str, str]:
+    """清洗结构化表单提交值。"""
+    if not isinstance(values, dict):
+        return {}
+    sanitized: dict[str, str] = {}
+    for key, value in values.items():
+        key_text = str(key or "").strip()
+        if not key_text:
+            continue
+        value_text = str(value) if value is not None else ""
+        sanitized[key_text] = value_text.strip()
+    return sanitized
+
+
+def _format_env_value(value: str) -> str:
+    """格式化 `.env` 赋值为 `\"...\"` 双引号形式。"""
+    text = str(value or "")
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    return f"\"{escaped}\""
+
+
+def _render_structured_env_content(values: dict[str, str], unmanaged: dict[str, str]) -> str:
+    """按分类 schema 渲染 `.env` 文本。"""
+    lines: list[str] = [
+        "# Auto-generated by Seneschal Gateway Console",
+        "# Edit via /console settings page or update manually if needed.",
+        "",
+    ]
+
+    for category in _ENV_SETTINGS_SCHEMA:
+        title = str(category.get("title") or "Settings")
+        lines.append(f"# ===== {title} =====")
+        for item in category.get("items", []):
+            key = str(item.get("key") or "").strip()
+            if not key:
+                continue
+            value = values.get(key, "")
+            formatted = _format_env_value(value)
+            lines.append(f"export {key}={formatted}")
+        lines.append("")
+
+    if unmanaged:
+        lines.append("# ===== Unmanaged Variables =====")
+        for key in sorted(unmanaged.keys()):
+            formatted = _format_env_value(unmanaged[key])
+            lines.append(f"export {key}={formatted}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _resolve_file_root(cfg: GatewayConfig) -> Path | None:
@@ -532,19 +805,38 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.on_event("startup")
-async def on_startup() -> None:
-    """应用启动钩子：记录主事件循环并按配置启动飞书长连接。"""
-    global _MAIN_LOOP
-    _MAIN_LOOP = asyncio.get_running_loop()
-    cfg = load_config()
+@app.get("/", include_in_schema=False)
+async def root() -> RedirectResponse:
+    """根路径默认跳转到控制台页面。"""
+    return RedirectResponse(url="/console", status_code=307)
 
-    logger.info("Feishu transport mode: %s", cfg.feishu_event_transport)
 
-    if _should_start_feishu_long_conn(cfg):
-        _start_feishu_long_connection(cfg)
-    else:
-        logger.info("Feishu long connection disabled by FEISHU_EVENT_TRANSPORT")
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> Response:
+    """避免浏览器默认 favicon 请求导致 404 噪音。"""
+    return Response(status_code=204)
+
+
+@app.get("/console", response_class=HTMLResponse, include_in_schema=False)
+async def gateway_console() -> HTMLResponse:
+    """返回内置网关控制台页面。"""
+    if not _WEBUI_INDEX.exists():
+        return HTMLResponse(
+            content="<h1>Gateway Console Not Found</h1><p>missing seneschal/webui/gateway_console.html</p>",
+            status_code=404,
+        )
+    return HTMLResponse(content=_WEBUI_INDEX.read_text(encoding="utf-8"))
+
+
+@app.get("/console/settings", response_class=HTMLResponse, include_in_schema=False)
+async def gateway_settings() -> HTMLResponse:
+    """返回内置网关设置页面。"""
+    if not _WEBUI_SETTINGS.exists():
+        return HTMLResponse(
+            content="<h1>Gateway Settings Not Found</h1><p>missing seneschal/webui/gateway_settings.html</p>",
+            status_code=404,
+        )
+    return HTMLResponse(content=_WEBUI_SETTINGS.read_text(encoding="utf-8"))
 
 
 def _verify_feishu_signature(
@@ -629,6 +921,99 @@ async def get_job(job_id: str) -> TaskResult:
     if job.result:
         job.result = _decorate_result_with_files(job_id, job.result, request=None, cfg=cfg)
     return job
+
+
+@app.get("/api/v1/env")
+async def get_env(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    """读取项目 `.env` 内容与解析结果。"""
+    cfg = load_config()
+    _ensure_auth(authorization, cfg)
+
+    content = _read_env_content()
+    return {
+        "path": str(_env_file_path()),
+        "content": content,
+        "variables": _parse_env_variables(content),
+    }
+
+
+@app.put("/api/v1/env")
+async def put_env(
+    request: EnvContentRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """覆盖更新项目 `.env` 文件内容。"""
+    cfg = load_config()
+    _ensure_auth(authorization, cfg)
+
+    _write_env_content(request.content)
+    content = _read_env_content()
+    return {
+        "ok": True,
+        "path": str(_env_file_path()),
+        "content": content,
+        "variables": _parse_env_variables(content),
+    }
+
+
+@app.get("/api/v1/env/schema")
+async def get_env_schema(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    """获取分类 `.env` 设置 schema 与当前变量值。"""
+    cfg = load_config()
+    _ensure_auth(authorization, cfg)
+
+    content = _read_env_content()
+    variables = _parse_env_variables(content)
+    managed, unmanaged = _split_env_variables(variables)
+
+    return {
+        "path": str(_env_file_path()),
+        "schema": _ENV_SETTINGS_SCHEMA,
+        "values": managed,
+        "unmanaged": unmanaged,
+        "variables": variables,
+        "content": content,
+    }
+
+
+@app.put("/api/v1/env/schema")
+async def put_env_schema(
+    request: EnvStructuredRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """按分类变量覆盖更新 `.env`（可选保留未纳入分类的变量）。"""
+    cfg = load_config()
+    _ensure_auth(authorization, cfg)
+
+    incoming_values = _sanitize_structured_values(request.values)
+    managed_keys = _managed_env_keys()
+    merged_values: dict[str, str] = {}
+    for key in managed_keys:
+        merged_values[key] = incoming_values.get(key, "")
+
+    if request.unmanaged is not None:
+        unmanaged = _sanitize_structured_values(request.unmanaged)
+    elif request.preserve_unmanaged:
+        current_variables = _parse_env_variables(_read_env_content())
+        _, unmanaged = _split_env_variables(current_variables)
+    else:
+        unmanaged = {}
+
+    new_content = _render_structured_env_content(merged_values, unmanaged)
+    _write_env_content(new_content)
+
+    content = _read_env_content()
+    variables = _parse_env_variables(content)
+    managed, unmanaged_saved = _split_env_variables(variables)
+    return {
+        "ok": True,
+        "path": str(_env_file_path()),
+        "schema": _ENV_SETTINGS_SCHEMA,
+        "values": managed,
+        "unmanaged": unmanaged_saved,
+        "variables": variables,
+        "content": content,
+    }
 
 
 @app.get("/api/v1/files/{job_id}/{file_name}")
