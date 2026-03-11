@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 # Two separate singletons: task_history (system-managed) and knowledge (agent-managed)
 _task_history_kb: SimpleKnowledge | None = None
 _knowledge_kb: SimpleKnowledge | None = None
+_init_lock = asyncio.Lock()
 
 
 def _create_embedding_model() -> OpenAITextEmbedding:
@@ -40,49 +42,53 @@ def _create_embedding_model() -> OpenAITextEmbedding:
     )
 
 
-def _init_task_history() -> SimpleKnowledge:
+async def _init_task_history() -> SimpleKnowledge:
     """Lazy-init singleton for task history (system writes, agent reads)."""
     global _task_history_kb
-    if _task_history_kb is not None:
-        return _task_history_kb
 
-    store_path = Path(RAG_CONFIG["store_path"]).expanduser().resolve()
-    store_path.mkdir(parents=True, exist_ok=True)
+    async with _init_lock:
+        if _task_history_kb is not None:
+            return _task_history_kb
 
-    store = QdrantStore(
-        location=None,  # type: ignore[arg-type] — use path for local storage
-        collection_name=RAG_CONFIG["collection_name"] + "_history",
-        dimensions=RAG_CONFIG["embedding_dimensions"],
-        client_kwargs={"path": str(store_path)},
-    )
-    _task_history_kb = SimpleKnowledge(
-        embedding_store=store,
-        embedding_model=_create_embedding_model(),
-    )
-    logger.info("RAG task_history initialized: %s", store_path)
+        store_path = Path(RAG_CONFIG["store_path"]).expanduser().resolve()
+        store_path.mkdir(parents=True, exist_ok=True)
+
+        store = QdrantStore(
+            location=None,  # type: ignore[arg-type] — use path for local storage
+            collection_name=RAG_CONFIG["collection_name"] + "_history",
+            dimensions=RAG_CONFIG["embedding_dimensions"],
+            client_kwargs={"path": str(store_path)},
+        )
+        _task_history_kb = SimpleKnowledge(
+            embedding_store=store,
+            embedding_model=_create_embedding_model(),
+        )
+        logger.info("RAG task_history initialized: %s", store_path)
     return _task_history_kb
 
 
-def _init_knowledge() -> SimpleKnowledge:
+async def _init_knowledge() -> SimpleKnowledge:
     """Lazy-init singleton for agent knowledge (agent reads and writes)."""
     global _knowledge_kb
-    if _knowledge_kb is not None:
-        return _knowledge_kb
 
-    store_path = Path(RAG_CONFIG["store_path"]).expanduser().resolve()
-    store_path.mkdir(parents=True, exist_ok=True)
+    async with _init_lock:
+        if _knowledge_kb is not None:
+            return _knowledge_kb
 
-    store = QdrantStore(
-        location=None,  # type: ignore[arg-type] — use path for local storage
-        collection_name=RAG_CONFIG["collection_name"] + "_knowledge",
-        dimensions=RAG_CONFIG["embedding_dimensions"],
-        client_kwargs={"path": str(store_path)},
-    )
-    _knowledge_kb = SimpleKnowledge(
-        embedding_store=store,
-        embedding_model=_create_embedding_model(),
-    )
-    logger.info("RAG knowledge initialized: %s", store_path)
+        store_path = Path(RAG_CONFIG["store_path"]).expanduser().resolve()
+        store_path.mkdir(parents=True, exist_ok=True)
+
+        store = QdrantStore(
+            location=None,  # type: ignore[arg-type] — use path for local storage
+            collection_name=RAG_CONFIG["collection_name"] + "_knowledge",
+            dimensions=RAG_CONFIG["embedding_dimensions"],
+            client_kwargs={"path": str(store_path)},
+        )
+        _knowledge_kb = SimpleKnowledge(
+            embedding_store=store,
+            embedding_model=_create_embedding_model(),
+        )
+        logger.info("RAG knowledge initialized: %s", store_path)
     return _knowledge_kb
 
 
@@ -113,7 +119,7 @@ async def store_task_result(
 
     Called by gateway_server._run_job() after successful completion.
     """
-    kb = _init_task_history()
+    kb = await _init_task_history()
     ts = timestamp or datetime.now(timezone.utc).isoformat()
     chunk_size = RAG_CONFIG["chunk_size"]
     reader = TextReader(chunk_size=chunk_size, split_by="char")
@@ -179,7 +185,7 @@ async def search_task_history(query: str, limit: int = 5) -> ToolResponse:
         ToolResponse 包含检索到的历史任务片段。
     """
     try:
-        kb = _init_task_history()
+        kb = await _init_task_history()
     except Exception as exc:
         logger.warning("RAG task_history not available: %s", exc)
         return ToolResponse(
@@ -236,7 +242,7 @@ async def store_steward_knowledge(content: str, title: str = "") -> ToolResponse
         )
 
     try:
-        kb = _init_knowledge()
+        kb = await _init_knowledge()
     except Exception as exc:
         logger.warning("RAG knowledge not available: %s", exc)
         return ToolResponse(
@@ -274,7 +280,7 @@ async def search_steward_knowledge(query: str, limit: int = 5) -> ToolResponse:
         ToolResponse 包含检索到的知识片段。
     """
     try:
-        kb = _init_knowledge()
+        kb = await _init_knowledge()
     except Exception as exc:
         logger.warning("RAG knowledge not available: %s", exc)
         return ToolResponse(
