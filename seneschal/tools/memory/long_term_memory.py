@@ -14,7 +14,7 @@ from ...config import MEMORY_CONFIG
 
 def _resolve_path() -> Path:
     """解析并返回记忆文件的绝对路径。"""
-    return Path(os.path.expanduser(MEMORY_CONFIG["file_path"]))
+    return Path(os.path.expanduser(MEMORY_CONFIG["file_path"])).resolve()
 
 
 def read_memory() -> str:
