@@ -15,8 +15,9 @@ import base64
 import logging
 import os
 import json
+import random
 import re
-import uuid
+import string
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -979,29 +980,30 @@ def create_user_agent() -> UserAgent:
     return UserAgent(name="User")
 
 
-def create_chat_agent() -> ReActAgent:
-    """创建网关 chat 模式使用的基础对话 Agent（联网工具集）。"""
+def create_chat_agent(*, web_search_enabled: bool = True) -> ReActAgent:
+    """创建网关 chat 模式使用的基础对话 Agent。"""
     toolkit = Toolkit()
 
-    toolkit.register_tool_function(
-        brave_search,
-        func_description="通过 Brave Search API 联网检索新闻与网页来源链接。",
-    )
-    
-    toolkit.register_tool_function(
-        fetch_url_text,
-        func_description="抓取指定 URL 的文本内容用于快速检索。",
-    )
+    if web_search_enabled:
+        toolkit.register_tool_function(
+            brave_search,
+            func_description="通过 Brave Search API 联网检索新闻与网页来源链接。",
+        )
 
-    toolkit.register_tool_function(
-        fetch_url_readable_text,
-        func_description="抓取并提取网页可读文本，用于快速理解页面内容。",
-    )
+        toolkit.register_tool_function(
+            fetch_url_text,
+            func_description="抓取指定 URL 的文本内容用于快速检索。",
+        )
 
-    toolkit.register_tool_function(
-        fetch_url_links,
-        func_description="抓取网页并提取链接，用于发现相关来源并继续检索。",
-    )
+        toolkit.register_tool_function(
+            fetch_url_readable_text,
+            func_description="抓取并提取网页可读文本，用于快速理解页面内容。",
+        )
+
+        toolkit.register_tool_function(
+            fetch_url_links,
+            func_description="抓取网页并提取链接，用于发现相关来源并继续检索。",
+        )
 
     sys_prompt = """你是 Seneschal 的基础对话助手,名字是 MobiChatBot。
 
@@ -1017,6 +1019,7 @@ def create_chat_agent() -> ReActAgent:
         formatter=OpenAIChatFormatter(),
         toolkit=toolkit,
         memory=InMemoryMemory(),
+        plan_notebook=PlanNotebook(),
         max_iters=8,
     )
 
@@ -1035,7 +1038,8 @@ class ChatSessionHandle:
 class ChatSessionManager:
     """管理 chat 模式会话状态、历史与中断。"""
 
-    _SESSION_DIR_RE = re.compile(r"^(?P<prefix>.+)-chat-(?P<session_id>.+)$")
+    _SESSION_DIR_RE = re.compile(r"^(?P<prefix>\d{8}_\d{6}_\d{6})-(?P<storage_session_id>.+)$")
+    _STORAGE_SESSION_ID_RE = re.compile(r"^(?P<mode>[0-9A-Za-z]+)_(?P<stamp>\d{14,20})_(?P<session_id>.+)$")
 
     def __init__(self, root_dir: str | Path | None = None) -> None:
         configured = str(root_dir or os.environ.get("SENESCHAL_CHAT_SESSION_ROOT", "")).strip()
@@ -1058,6 +1062,12 @@ class ChatSessionManager:
             return ""
         text = re.sub(r"[^0-9A-Za-z._-]+", "-", text)
         return text.strip("-")
+
+    @staticmethod
+    def _generate_session_id() -> str:
+        stamp = datetime.now().strftime("%Y%m%d%H%M%S%f")[:17]
+        suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+        return f"chat_{stamp}_{suffix}"
 
     def _ensure_root(self) -> None:
         self.root_dir.mkdir(parents=True, exist_ok=True)
@@ -1087,15 +1097,29 @@ class ChatSessionManager:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    def _parse_session_dir_name(self, name: str) -> tuple[str, str] | None:
-        matched = self._SESSION_DIR_RE.match(name.strip())
+    @staticmethod
+    def _compact_stamp(stamp: str) -> str:
+        return re.sub(r"[^0-9]+", "", str(stamp or "").strip())
+
+    def _parse_session_dir_name(self, name: str) -> tuple[str, str, str] | None:
+        candidate = str(name or "").strip()
+        if not candidate:
+            return None
+
+        matched = self._SESSION_DIR_RE.match(candidate)
         if not matched:
             return None
         prefix = str(matched.group("prefix") or "").strip()
-        session_id = self._normalize_session_id(matched.group("session_id"))
-        if not prefix or not session_id:
+        storage_session_id = self._normalize_session_id(matched.group("storage_session_id"))
+        if not prefix or not storage_session_id:
             return None
-        return prefix, session_id
+        storage_parts = self._STORAGE_SESSION_ID_RE.match(storage_session_id)
+        if not storage_parts:
+            return None
+        session_id = self._normalize_session_id(storage_parts.group("session_id"))
+        if not session_id:
+            return None
+        return prefix, storage_session_id, session_id
 
     def _list_session_dirs(self) -> list[dict[str, Any]]:
         self._ensure_root()
@@ -1106,7 +1130,7 @@ class ChatSessionManager:
             parsed = self._parse_session_dir_name(child.name)
             if parsed is None:
                 continue
-            _, session_id = parsed
+            _, storage_session_id, session_id = parsed
             try:
                 stat = child.stat()
             except OSError:
@@ -1114,6 +1138,7 @@ class ChatSessionManager:
             records.append(
                 {
                     "session_id": session_id,
+                    "storage_session_id": storage_session_id,
                     "path": child,
                     "updated_ts": float(stat.st_mtime),
                 }
@@ -1126,30 +1151,45 @@ class ChatSessionManager:
         if not normalized:
             return None
         for item in self._list_session_dirs():
-            if item.get("session_id") == normalized:
+            if item.get("session_id") == normalized or item.get("storage_session_id") == normalized:
                 target = item.get("path")
                 if isinstance(target, Path):
                     return target
         return None
 
     def _create_session_dir(self, session_id: str) -> Path:
-        normalized = self._normalize_session_id(session_id)
-        if not normalized:
+        storage_session_id = self._build_storage_session_id(session_id)
+        if not storage_session_id:
             raise ValueError("session_id is empty")
         self._ensure_root()
-        dir_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}-chat-{normalized}"
+        dir_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}-{storage_session_id}"
         session_dir = self.root_dir / dir_name
         session_dir.mkdir(parents=True, exist_ok=True)
         return session_dir
+
+    def _build_storage_session_id(self, session_id: str) -> str:
+        normalized = self._normalize_session_id(session_id)
+        if self._STORAGE_SESSION_ID_RE.match(normalized):
+            return normalized
+        if not normalized:
+            return ""
+        stamp = datetime.now().strftime("%Y%m%d%H%M%S%f")[:17]
+        return f"chat_{stamp}_{normalized}"
+
+    @staticmethod
+    def _session_state_path(session_dir: Path, session_id: str) -> Path:
+        return session_dir / f"{session_id}.json"
 
     def _read_latest_pointer(self) -> dict[str, Any]:
         return self._read_json(self.latest_pointer)
 
     def _write_latest_pointer(self, *, session_id: str, session_dir: Path) -> None:
+        parsed = self._parse_session_dir_name(session_dir.name)
         self._write_json(
             self.latest_pointer,
             {
                 "session_id": session_id,
+                "storage_session_id": parsed[1] if parsed is not None else self._build_storage_session_id(session_id),
                 "session_dir": str(session_dir.resolve()),
                 "updated_at": self._utc_now_iso(),
             },
@@ -1162,7 +1202,7 @@ class ChatSessionManager:
         is_new_session = False
 
         if force_new:
-            session_id = uuid.uuid4().hex
+            session_id = normalized_context or self._generate_session_id()
             session_dir = self._create_session_dir(session_id)
             is_new_session = True
         elif normalized_context:
@@ -1183,7 +1223,7 @@ class ChatSessionManager:
                 session_dir = latest_path
                 resumed_from_latest = True
             else:
-                session_id = uuid.uuid4().hex
+                session_id = self._generate_session_id()
                 session_dir = self._create_session_dir(session_id)
                 is_new_session = True
 
@@ -1199,12 +1239,35 @@ class ChatSessionManager:
 
     async def load_agent_state(self, handle: ChatSessionHandle, agent: ReActAgent) -> None:
         """加载会话中的 agent 状态。"""
-        session = JSONSession(save_dir=str(handle.session_dir))
-        await session.load_session_state(
-            session_id=handle.session_id,
-            allow_not_exist=True,
-            agent=agent,
-        )
+        storage_session_id = str(handle.meta.get("storage_session_id") or "").strip()
+        if not storage_session_id:
+            parsed = self._parse_session_dir_name(handle.session_dir.name)
+            if parsed is not None:
+                storage_session_id = parsed[1]
+        if not storage_session_id:
+            storage_session_id = self._build_storage_session_id(handle.session_id)
+        if not storage_session_id:
+            logger.info("Skip loading chat state: empty storage_session_id")
+            return
+
+        state_path = self._session_state_path(handle.session_dir, storage_session_id)
+        if not state_path.exists() or not state_path.is_file():
+            logger.info("Session state file not found: %s", state_path)
+            return
+        data = self._read_json(state_path)
+        agent_state = data.get("agent") if isinstance(data, dict) else None
+        if not isinstance(agent_state, dict):
+            logger.warning("Invalid agent state file: %s", state_path)
+            return
+        try:
+            # Align with AgentScope task_state tutorial: delegate state
+            # restore to agent.load_state_dict so nested StateModule
+            # attributes (memory/toolkit/long_term_memory/plan_notebook)
+            # are restored uniformly.
+            agent.load_state_dict(agent_state, strict=False)
+            logger.info("Loaded chat agent state from %s", state_path)
+        except Exception:
+            logger.warning("Failed to load chat agent state from %s", state_path, exc_info=True)
 
     async def save_agent_state(
         self,
@@ -1216,14 +1279,22 @@ class ChatSessionManager:
     ) -> None:
         """保存会话中的 agent 状态与元数据。"""
         session = JSONSession(save_dir=str(handle.session_dir))
+        storage_session_id = str(handle.meta.get("storage_session_id") or "").strip()
+        if not storage_session_id:
+            parsed = self._parse_session_dir_name(handle.session_dir.name)
+            if parsed is not None:
+                storage_session_id = parsed[1]
+        if not storage_session_id:
+            storage_session_id = self._build_storage_session_id(handle.session_id)
         await session.save_session_state(
-            session_id=handle.session_id,
+            session_id=storage_session_id,
             agent=agent,
         )
         current_meta = self._read_json(self._session_meta_path(handle.session_dir))
         current_meta.update(
             {
                 "session_id": handle.session_id,
+                "storage_session_id": storage_session_id,
                 "session_dir": str(handle.session_dir.resolve()),
                 "updated_at": self._utc_now_iso(),
                 "last_command": command,

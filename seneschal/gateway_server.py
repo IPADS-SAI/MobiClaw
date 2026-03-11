@@ -109,6 +109,7 @@ class TaskRequest(BaseModel):
     skill_hint: str | None = None
     routing_strategy: str | None = None
     context_id: str | None = None
+    web_search_enabled: bool = Field(default=True)
     webhook_url: str | None = None
     webhook_token: str | None = None
     callback_headers: dict[str, str] = Field(default_factory=dict)
@@ -159,7 +160,8 @@ _WEBUI_CHAT = Path(__file__).resolve().parent / "webui" / "gateway_chat.html"
 _WEBUI_INDEX = Path(__file__).resolve().parent / "webui" / "gateway_console.html"
 _WEBUI_SETTINGS = Path(__file__).resolve().parent / "webui" / "gateway_settings.html"
 _ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
-_CHAT_SESSION_NAME_RE = re.compile(r"^(?P<prefix>.+)-chat-(?P<context_id>.+)$")
+_CHAT_SESSION_NAME_RE = re.compile(r"^(?P<prefix>\d{8}_\d{6}_\d{6})-(?P<storage_context_id>.+)$")
+_STORAGE_CONTEXT_ID_RE = re.compile(r"^(?P<mode>[0-9A-Za-z]+)_(?P<stamp>\d{14,20})_(?P<context_id>.+)$")
 _ENV_SETTINGS_SCHEMA: list[dict[str, Any]] = [
     {
         "id": "runtime",
@@ -304,16 +306,42 @@ def _normalize_context_id(raw: str | None) -> str:
     return text.strip("-")
 
 
+def _build_storage_context_id(context_id: str) -> str:
+    normalized = _normalize_context_id(context_id)
+    if not normalized:
+        return ""
+    if _STORAGE_CONTEXT_ID_RE.match(normalized):
+        return normalized
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S%f")[:17]
+    return f"chat_{stamp}_{normalized}"
+
+
+def _extract_context_alias(storage_context_id: str) -> str:
+    normalized = _normalize_context_id(storage_context_id)
+    if not normalized:
+        return ""
+    matched = _STORAGE_CONTEXT_ID_RE.match(normalized)
+    if not matched:
+        return normalized
+    return _normalize_context_id(matched.group("context_id"))
+
+
 def _parse_chat_session_dir_name(name: str) -> tuple[str, str] | None:
     """从目录名解析时间前缀与 context_id。"""
-    matched = _CHAT_SESSION_NAME_RE.match(name.strip())
+    candidate = str(name or "").strip()
+    if not candidate:
+        return None
+
+    matched = _CHAT_SESSION_NAME_RE.match(candidate)
     if not matched:
         return None
     prefix = str(matched.group("prefix") or "").strip()
-    context_id = _normalize_context_id(matched.group("context_id"))
-    if not prefix or not context_id:
+    storage_context_id = _normalize_context_id(matched.group("storage_context_id"))
+    if not prefix or not storage_context_id:
         return None
-    return prefix, context_id
+    if not _STORAGE_CONTEXT_ID_RE.match(storage_context_id):
+        return None
+    return prefix, storage_context_id
 
 
 def _scan_chat_session_dirs() -> list[dict[str, Any]]:
@@ -340,6 +368,7 @@ def _scan_chat_session_dirs() -> list[dict[str, Any]]:
             {
                 "context_id": context_id,
                 "session_id": context_id,
+                "context_alias": _extract_context_alias(context_id),
                 "dir_name": child.name,
                 "path": str(child.resolve()),
                 "updated_ts": updated_ts,
@@ -356,7 +385,11 @@ def _latest_session_dir_for_context(context_id: str) -> Path | None:
     normalized = _normalize_context_id(context_id)
     if not normalized:
         return None
-    candidates = [item for item in _scan_chat_session_dirs() if item.get("context_id") == normalized]
+    candidates = [
+        item
+        for item in _scan_chat_session_dirs()
+        if item.get("context_id") == normalized or item.get("context_alias") == normalized
+    ]
     if not candidates:
         return None
     path = str(candidates[0].get("path") or "").strip()
@@ -380,7 +413,10 @@ def _ensure_session_dir_for_context(context_id: str) -> Path:
 
     root = _chat_session_root_dir()
     root.mkdir(parents=True, exist_ok=True)
-    dir_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}-chat-{normalized}"
+    storage_context_id = _build_storage_context_id(normalized)
+    if not storage_context_id:
+        raise ValueError("context_id is empty")
+    dir_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}-{storage_context_id}"
     session_dir = root / dir_name
     session_dir.mkdir(parents=True, exist_ok=True)
     return session_dir
@@ -981,11 +1017,50 @@ async def _run_job(
     skill_hint: str | None,
     routing_strategy: str | None,
     context_id: str | None,
+    web_search_enabled: bool,
 ) -> None:
     """执行异步任务并更新任务状态。"""
     cfg = load_config()
     async with _JOB_LOCK:
-        _JOB_STORE[job_id] = TaskResult(job_id=job_id, status="running")
+        _JOB_STORE[job_id] = TaskResult(
+            job_id=job_id,
+            status="running",
+            result={
+                "progress": {
+                    "updated_at": _utc_now_iso(),
+                    "planner_monitor": {
+                        "enabled": False,
+                        "events": [],
+                        "current_plan": None,
+                    },
+                },
+            },
+        )
+
+    async def _update_job_progress(payload: dict[str, Any]) -> None:
+        if not isinstance(payload, dict):
+            return
+        async with _JOB_LOCK:
+            current = _JOB_STORE.get(job_id)
+            if current is None or current.status != "running":
+                return
+            current_result = current.result if isinstance(current.result, dict) else {}
+            progress = current_result.get("progress")
+            if not isinstance(progress, dict):
+                progress = {}
+            progress["updated_at"] = _utc_now_iso()
+            channel = str(payload.get("channel") or "").strip().lower()
+            if channel == "planner_monitor":
+                planner = payload.get("planner")
+                if isinstance(planner, dict):
+                    progress["planner_monitor"] = planner
+                progress["session_id"] = str(payload.get("session_id") or "")
+                progress["mode"] = str(payload.get("mode") or mode or "")
+            else:
+                progress.update(payload)
+            current_result["progress"] = progress
+            current.result = current_result
+            _JOB_STORE[job_id] = current
     try:
         result = await run_gateway_task(
             task=task,
@@ -995,6 +1070,8 @@ async def _run_job(
             skill_hint=skill_hint,
             routing_strategy=routing_strategy,
             context_id=context_id,
+            web_search_enabled=web_search_enabled,
+            progress_callback=_update_job_progress,
         )
         resolved_context_id = _resolve_context_id(context_id, result)
         if resolved_context_id:
@@ -1166,6 +1243,7 @@ async def submit_task(
                 request.skill_hint,
                 request.routing_strategy,
                 request.context_id,
+                request.web_search_enabled,
             )
         )
         return _JOB_STORE[job_id]
@@ -1179,6 +1257,7 @@ async def submit_task(
         skill_hint=request.skill_hint,
         routing_strategy=request.routing_strategy,
         context_id=request.context_id,
+        web_search_enabled=request.web_search_enabled,
     )
     resolved_context_id = _resolve_context_id(request.context_id, result)
     if resolved_context_id:
@@ -1206,6 +1285,7 @@ async def list_chat_sessions(authorization: str | None = Header(default=None)) -
     sessions = _scan_chat_session_dirs()
     for item in sessions:
         item.pop("updated_ts", None)
+        item.pop("context_alias", None)
     return {"sessions": sessions}
 
 
