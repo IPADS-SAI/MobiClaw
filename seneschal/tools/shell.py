@@ -3,12 +3,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shlex
 import subprocess
 
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
+
+logger = logging.getLogger(__name__)
 
 
 def _load_allowlist() -> set[str]:
@@ -70,6 +73,7 @@ async def run_shell_command(command: str) -> ToolResponse:
         )
 
     timeout_s = float(os.environ.get("SENESCHAL_SHELL_TIMEOUT", "20"))
+    logger.info("shell.run command=%s", command)
 
     try:
         proc = subprocess.run(
@@ -92,6 +96,7 @@ async def run_shell_command(command: str) -> ToolResponse:
     stderr = (proc.stderr or "").strip()
     stdout = stdout[:4000]
     stderr = stderr[:2000]
+    logger.info("shell.result returncode=%d command=%s", proc.returncode, command)
 
     message = f"[Shell] Exit code: {proc.returncode}"
     if stdout:

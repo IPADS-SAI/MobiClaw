@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import textwrap
 from pathlib import Path
@@ -10,6 +11,8 @@ from typing import Any
 
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_write_path(path: str) -> tuple[Path | None, str | None]:
@@ -175,6 +178,7 @@ async def create_docx_from_text(
             metadata={"error": str(exc)},
         )
 
+    logger.info("office.create_docx path=%s", target)
     return ToolResponse(
         content=[TextBlock(type="text", text=f"[DOCX] Wrote: {target}")],
         metadata={"path": str(target)},

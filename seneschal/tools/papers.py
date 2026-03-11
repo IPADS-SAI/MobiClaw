@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,8 @@ import requests
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
+
+logger = logging.getLogger(__name__)
 
 _ARXIV_API_URL = "https://export.arxiv.org/api/query"
 _DBLP_API_URL = "https://dblp.org/search/publ/api"
@@ -195,6 +198,7 @@ async def arxiv_search(
         sort_order: asc/desc.
     """
     normalized_query = (query or "").strip()
+    logger.info("papers.arxiv_search query=%s max_results=%s", normalized_query, max_results)
     if not normalized_query:
         return ToolResponse(
             content=[TextBlock(type="text", text="[arXiv] query is required")],
@@ -260,6 +264,7 @@ async def dblp_conference_search(
 ) -> ToolResponse:
     """Search DBLP for conference papers by name and year hints."""
     normalized_conf = (conference or "").strip()
+    logger.info("papers.dblp_search conference=%s years=%s keyword=%s", normalized_conf, years, keyword_query)
     if not normalized_conf:
         return ToolResponse(
             content=[TextBlock(type="text", text="[DBLP] conference name is required")],

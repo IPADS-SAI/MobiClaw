@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import html
+import logging
 import os
 import re
 
@@ -14,6 +15,8 @@ from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
 from ..config import BRAVE_SEARCH_CONFIG
+
+logger = logging.getLogger(__name__)
 
 
 def _fetch_url_text(url: str) -> tuple[str, int] | tuple[None, int]:
@@ -176,6 +179,7 @@ def _extract_links(base_url: str, raw_html: str, max_links: int) -> list[str]:
 async def fetch_url_text(url: str) -> ToolResponse:
     """Fetch a URL and return trimmed raw text content."""
     url = (url or "").strip()
+    logger.info("web.fetch url=%s", url)
     if not url.startswith("http://") and not url.startswith("https://"):
         return ToolResponse(
             content=[TextBlock(type="text", text="[Web] URL must start with http:// or https://")],
@@ -197,6 +201,7 @@ async def fetch_url_text(url: str) -> ToolResponse:
 async def fetch_url_readable_text(url: str) -> ToolResponse:
     """Fetch a URL and return HTML-stripped readable text content."""
     url = (url or "").strip()
+    logger.info("web.fetch_readable url=%s", url)
     if not url.startswith("http://") and not url.startswith("https://"):
         return ToolResponse(
             content=[TextBlock(type="text", text="[Web] URL must start with http:// or https://")],
@@ -247,6 +252,7 @@ async def fetch_url_links(url: str, max_links: int = 20, same_domain_only: bool 
 async def brave_search(query: str, max_results: int | None = None) -> ToolResponse:
     """Search the web via Brave Search API and return concise result snippets."""
     normalized_query = (query or "").strip()
+    logger.info("web.brave_search query=%s max_results=%s", normalized_query, max_results)
     if not normalized_query:
         return ToolResponse(
             content=[TextBlock(type="text", text="[BraveSearch] query is required")],

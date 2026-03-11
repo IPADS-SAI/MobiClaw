@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
+
+logger = logging.getLogger(__name__)
 
 
 def write_text_file(
@@ -66,6 +69,7 @@ def write_text_file(
             metadata={"error": str(exc)},
         )
 
+    logger.info("file.write path=%s mode=%s size=%d", target, normalized_mode, len(content or ""))
     return ToolResponse(
         content=[TextBlock(type="text", text=f"[File] Wrote: {target}")],
         metadata={"path": str(target), "mode": normalized_mode},

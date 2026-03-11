@@ -57,6 +57,10 @@ git submodule update --init --recursive
 
 ```bash
 uv sync
+
+# 安装 tesseract 中文包，用于后续可能的 OCR 需求（可选）
+sudo apt-get update
+sudo apt-get install -y tesseract-ocr-chi-sim
 ```
 
 项目要求 Python 3.12+。
@@ -222,7 +226,7 @@ python app.py --daily --daily-trigger daily
 
 #### Agent Task 模式
 
-通过`--mode`指定具体的Agen：t
+通过`--mode`指定具体的Agen：
 ```bash
 python app.py --agent-task "从 arXiv 搜索今天的 Agent 论文并总结" --mode worker
 ```
@@ -365,9 +369,9 @@ python app.py --agent-task "生成一个前端页面原型" --skill-hint web-art
 - 若提供了绝对路径：出于目录隔离，当前实现会仅保留文件名并落到 job 目录下（不会写到外部绝对路径）。
 
 
-### 7) Gateway模式（类似OpenClaw Core 入口）
+## Gateway模式（类似OpenClaw Core 入口）
 
-## Gateway 模式
+
 
 启动命令：
 
