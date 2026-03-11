@@ -17,44 +17,30 @@ import hmac
 import json
 import mimetypes
 import os
+import re
+import shutil
+from collections import deque
 from pathlib import Path
+from contextlib import asynccontextmanager
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Request, status
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Header, HTTPException, Request, Response, status
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 import requests
 
-from .workflows import run_gateway_task
-
+from .env import load_project_env
 
 logger = logging.getLogger(__name__)
 
+load_project_env()
 
-def _load_env_file(env_path: Path) -> None:
-    """从 `.env` 文件加载环境变量（仅补充未存在的键）。"""
-    if not env_path.exists():
-        return
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export "):].strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
-            os.environ[key] = value
-
-
-_load_env_file(Path(__file__).resolve().parents[1] / ".env")
+from .workflows import run_gateway_task
 
 
 def _configure_logging() -> None:
@@ -118,11 +104,12 @@ class TaskRequest(BaseModel):
     task: str
     async_mode: bool = Field(default=False)
     output_path: str | None = None
-    mode: str = Field(default="router")
+    mode: str = Field(default="chat")
     agent_hint: str | None = None
     skill_hint: str | None = None
     routing_strategy: str | None = None
     context_id: str | None = None
+    web_search_enabled: bool = Field(default=True)
     webhook_url: str | None = None
     webhook_token: str | None = None
     callback_headers: dict[str, str] = Field(default_factory=dict)
@@ -135,6 +122,20 @@ class TaskResult(BaseModel):
     status: str
     result: dict[str, Any] | None = None
     error: str | None = None
+
+
+class EnvContentRequest(BaseModel):
+    """`.env` 文件更新请求体。"""
+
+    content: str = Field(default="")
+
+
+class EnvStructuredRequest(BaseModel):
+    """结构化 `.env` 配置更新请求体。"""
+
+    values: dict[str, str] = Field(default_factory=dict)
+    unmanaged: dict[str, str] | None = None
+    preserve_unmanaged: bool = Field(default=True)
 
 
 @dataclass
@@ -150,13 +151,417 @@ class JobContext:
     feishu_receive_id_type: str = "chat_id"
 
 
-app = FastAPI(title="Seneschal Gateway", version="0.1.0")
-
 _JOB_STORE: dict[str, TaskResult] = {}
 _JOB_CONTEXT: dict[str, JobContext] = {}
 _JOB_LOCK = asyncio.Lock()
 _MAIN_LOOP: asyncio.AbstractEventLoop | None = None
 _FEISHU_WS_THREAD: threading.Thread | None = None
+_WEBUI_CHAT = Path(__file__).resolve().parent / "webui" / "gateway_chat.html"
+_WEBUI_INDEX = Path(__file__).resolve().parent / "webui" / "gateway_console.html"
+_WEBUI_SETTINGS = Path(__file__).resolve().parent / "webui" / "gateway_settings.html"
+_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+_CHAT_SESSION_NAME_RE = re.compile(r"^(?P<prefix>\d{8}_\d{6}_\d{6})-(?P<storage_context_id>.+)$")
+_STORAGE_CONTEXT_ID_RE = re.compile(r"^(?P<mode>[0-9A-Za-z]+)_(?P<stamp>\d{14,20})_(?P<context_id>.+)$")
+_ENV_SETTINGS_SCHEMA: list[dict[str, Any]] = [
+    {
+        "id": "runtime",
+        "title": "Runtime",
+        "items": [
+            {"key": "SENESCHAL_LOG_LEVEL", "label": "日志级别", "type": "select", "options": ["DEBUG", "INFO", "WARNING", "ERROR"]},
+            {"key": "SENESCHAL_FILE_WRITE_ROOT", "label": "文件输出根目录", "type": "text"},
+            {"key": "SENESCHAL_CHAT_SESSION_ROOT", "label": "Chat 会话目录", "type": "text"},
+        ],
+    },
+    {
+        "id": "gateway",
+        "title": "Gateway",
+        "items": [
+            {"key": "SENESCHAL_GATEWAY_HOST", "label": "监听主机", "type": "text"},
+            {"key": "SENESCHAL_GATEWAY_PORT", "label": "监听端口", "type": "number"},
+            {"key": "SENESCHAL_GATEWAY_API_KEY", "label": "API Key", "type": "password"},
+            {"key": "SENESCHAL_GATEWAY_PUBLIC_BASE_URL", "label": "公网访问地址", "type": "text"},
+            {"key": "SENESCHAL_GATEWAY_FILE_ROOT", "label": "可下载文件根目录", "type": "text"},
+            {"key": "SENESCHAL_GATEWAY_CALLBACK_TIMEOUT", "label": "回调超时(s)", "type": "number"},
+            {"key": "SENESCHAL_GATEWAY_CALLBACK_RETRY", "label": "回调重试次数", "type": "number"},
+            {"key": "SENESCHAL_GATEWAY_CALLBACK_BACKOFF", "label": "回调退避(s)", "type": "number"},
+        ],
+    },
+    {
+        "id": "llm",
+        "title": "LLM Provider",
+        "items": [
+            {"key": "OPENROUTER_API_KEY", "label": "OpenRouter API Key", "type": "password"},
+            {"key": "OPENROUTER_BASE_URL", "label": "OpenRouter Base URL", "type": "text"},
+            {"key": "OPENROUTER_MODEL", "label": "OpenRouter Model", "type": "text"},
+        ],
+    },
+    {
+        "id": "weknora",
+        "title": "WeKnora",
+        "items": [
+            {"key": "WEKNORA_BASE_URL", "label": "WeKnora Base URL", "type": "text"},
+            {"key": "WEKNORA_API_KEY", "label": "WeKnora API Key", "type": "password"},
+            {"key": "WEKNORA_KB_NAME", "label": "知识库名称", "type": "text"},
+            {"key": "WEKNORA_AGENT_NAME", "label": "Agent 名称", "type": "text"},
+            {"key": "WEKNORA_SESSION_ID", "label": "Session ID", "type": "text"},
+        ],
+    },
+    {
+        "id": "brave",
+        "title": "Brave Search",
+        "items": [
+            {"key": "BRAVE_API_KEY", "label": "Brave API Key", "type": "password"},
+            {"key": "BRAVE_SEARCH_BASE_URL", "label": "Brave Search Base URL", "type": "text"},
+            {"key": "BRAVE_SEARCH_MAX_RESULTS", "label": "最大结果数", "type": "number"},
+        ],
+    },
+    {
+        "id": "mobiagent",
+        "title": "MobiAgent",
+        "items": [
+            {"key": "MOBI_AGENT_BASE_URL", "label": "MobiAgent Base URL", "type": "text"},
+            {"key": "MOBI_AGENT_API_KEY", "label": "MobiAgent API Key", "type": "password"},
+            {"key": "MOBIAGENT_SERVER_MODE", "label": "服务模式", "type": "select", "options": ["cli", "api"]},
+            {"key": "MOBIAGENT_SERVER_IP", "label": "服务 IP", "type": "text"},
+            {"key": "MOBIAGENT_SERVER_DECIDER_PORT", "label": "Decider 端口", "type": "number"},
+            {"key": "MOBIAGENT_SERVER_GROUNDER_PORT", "label": "Grounder 端口", "type": "number"},
+            {"key": "MOBIAGENT_SERVER_PLANNER_PORT", "label": "Planner 端口", "type": "number"},
+            {"key": "DEVICE", "label": "设备平台", "type": "select", "options": ["Android", "Harmony"]},
+            {"key": "MOBIAGENT_CLI_CMD", "label": "CLI 命令模板", "type": "textarea", "raw": True},
+            {"key": "MOBIAGENT_TASK_DIR", "label": "任务目录", "type": "text"},
+            {"key": "MOBIAGENT_DATA_DIR", "label": "数据目录", "type": "text"},
+            {"key": "MOBIAGENT_QUEUE_DIR", "label": "队列目录", "type": "text"},
+            {"key": "MOBIAGENT_RESULT_DIR", "label": "结果目录", "type": "text"},
+            {"key": "MOBIAGENT_GATEWAY_PORT", "label": "MobiAgent 网关端口", "type": "number"},
+        ],
+    },
+    {
+        "id": "routing",
+        "title": "Routing",
+        "items": [
+            {"key": "SENESCHAL_ROUTING_DEFAULT_MODE", "label": "默认模式", "type": "select", "options": ["chat", "router", "intelligent", "worker", "steward", "auto"]},
+            {"key": "SENESCHAL_ROUTING_STRATEGY", "label": "路由策略", "type": "text"},
+            {"key": "SENESCHAL_ALLOW_LEGACY_MODE", "label": "允许 legacy 模式(0/1)", "type": "text"},
+            {"key": "SENESCHAL_ROUTING_MAX_SUBTASKS", "label": "最大子任务数", "type": "number"},
+            {"key": "SENESCHAL_ROUTING_MAX_DEPTH", "label": "最大深度", "type": "number"},
+            {"key": "SENESCHAL_ROUTER_TIMEOUT_S", "label": "Router 超时(s)", "type": "number"},
+            {"key": "SENESCHAL_PLANNER_TIMEOUT_S", "label": "Planner 超时(s)", "type": "number"},
+            {"key": "SENESCHAL_SUBTASK_TIMEOUT_S", "label": "子任务超时(s)", "type": "number"},
+            {"key": "SENESCHAL_SKILL_SELECTOR_TIMEOUT_S", "label": "Skill Selector 超时(s)", "type": "number"},
+        ],
+    },
+    {
+        "id": "feishu",
+        "title": "Feishu",
+        "items": [
+            {"key": "FEISHU_EVENT_TRANSPORT", "label": "事件接入模式", "type": "select", "options": ["both", "webhook", "long_conn", "off", "auto"]},
+            {"key": "FEISHU_APP_ID", "label": "App ID", "type": "text"},
+            {"key": "FEISHU_APP_SECRET", "label": "App Secret", "type": "password"},
+            {"key": "FEISHU_VERIFICATION_TOKEN", "label": "Verification Token", "type": "text"},
+            {"key": "FEISHU_ENCRYPT_KEY", "label": "Encrypt Key", "type": "text"},
+        ],
+    },
+    {
+        "id": "weknora_models",
+        "title": "WeKnora Models",
+        "items": [
+            {"key": "WEKNORA_MODEL_RERANK_ID", "label": "Rerank ID", "type": "text"},
+            {"key": "WEKNORA_MODEL_RERANK_NAME", "label": "Rerank Name", "type": "text"},
+            {"key": "WEKNORA_MODEL_RERANK_API_KEY", "label": "Rerank API Key", "type": "password"},
+            {"key": "WEKNORA_MODEL_RERANK_BASE_URL", "label": "Rerank Base URL", "type": "text"},
+            {"key": "WEKNORA_MODEL_KNOWLEDGE_QA_ID", "label": "KnowledgeQA ID", "type": "text"},
+            {"key": "WEKNORA_MODEL_KNOWLEDGE_QA_NAME", "label": "KnowledgeQA Name", "type": "text"},
+            {"key": "WEKNORA_MODEL_KNOWLEDGE_QA_ALT_ID", "label": "KnowledgeQA Alt ID", "type": "text"},
+            {"key": "WEKNORA_MODEL_KNOWLEDGE_QA_ALT_NAME", "label": "KnowledgeQA Alt Name", "type": "text"},
+            {"key": "WEKNORA_MODEL_VLM_ID", "label": "VLM ID", "type": "text"},
+            {"key": "WEKNORA_MODEL_VLM_NAME", "label": "VLM Name", "type": "text"},
+            {"key": "WEKNORA_MODEL_EMBEDDING_ID", "label": "Embedding ID", "type": "text"},
+            {"key": "WEKNORA_MODEL_EMBEDDING_NAME", "label": "Embedding Name", "type": "text"},
+            {"key": "WEKNORA_MODEL_EMBEDDING_API_KEY", "label": "Embedding API Key/表达式", "type": "text", "raw": True},
+            {"key": "WEKNORA_MODEL_EMBEDDING_BASE_URL", "label": "Embedding Base URL", "type": "text"},
+        ],
+    },
+]
+
+
+def _utc_now_iso() -> str:
+    """返回 UTC 时间 ISO 字符串。"""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _chat_session_root_dir() -> Path:
+    """返回 chat session 根目录。"""
+    configured = (os.environ.get("SENESCHAL_CHAT_SESSION_ROOT") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path(__file__).resolve().parents[1] / ".mobiclaw" / "session"
+
+
+def _normalize_context_id(raw: str | None) -> str:
+    """规范化 context_id，避免非法路径字符。"""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"[^0-9A-Za-z._-]+", "-", text)
+    return text.strip("-")
+
+
+def _build_storage_context_id(context_id: str) -> str:
+    normalized = _normalize_context_id(context_id)
+    if not normalized:
+        return ""
+    if _STORAGE_CONTEXT_ID_RE.match(normalized):
+        return normalized
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S%f")[:17]
+    return f"chat_{stamp}_{normalized}"
+
+
+def _extract_context_alias(storage_context_id: str) -> str:
+    normalized = _normalize_context_id(storage_context_id)
+    if not normalized:
+        return ""
+    matched = _STORAGE_CONTEXT_ID_RE.match(normalized)
+    if not matched:
+        return normalized
+    return _normalize_context_id(matched.group("context_id"))
+
+
+def _parse_chat_session_dir_name(name: str) -> tuple[str, str] | None:
+    """从目录名解析时间前缀与 context_id。"""
+    candidate = str(name or "").strip()
+    if not candidate:
+        return None
+
+    matched = _CHAT_SESSION_NAME_RE.match(candidate)
+    if not matched:
+        return None
+    prefix = str(matched.group("prefix") or "").strip()
+    storage_context_id = _normalize_context_id(matched.group("storage_context_id"))
+    if not prefix or not storage_context_id:
+        return None
+    if not _STORAGE_CONTEXT_ID_RE.match(storage_context_id):
+        return None
+    return prefix, storage_context_id
+
+
+def _scan_chat_session_dirs() -> list[dict[str, Any]]:
+    """扫描 session 根目录，按目录名解析会话并按更新时间倒序返回。"""
+    root = _chat_session_root_dir()
+    if not root.exists() or not root.is_dir():
+        return []
+
+    records: list[dict[str, Any]] = []
+    for child in root.iterdir():
+        if not child.is_dir():
+            continue
+        parsed = _parse_chat_session_dir_name(child.name)
+        if parsed is None:
+            continue
+        _, context_id = parsed
+        try:
+            stat = child.stat()
+        except OSError:
+            continue
+        updated_ts = float(stat.st_mtime)
+        updated_at = datetime.fromtimestamp(updated_ts, tz=timezone.utc).isoformat()
+        records.append(
+            {
+                "context_id": context_id,
+                "session_id": context_id,
+                "context_alias": _extract_context_alias(context_id),
+                "dir_name": child.name,
+                "path": str(child.resolve()),
+                "updated_ts": updated_ts,
+                "updated_at": updated_at,
+            }
+        )
+
+    records.sort(key=lambda item: float(item.get("updated_ts", 0.0)), reverse=True)
+    return records
+
+
+def _latest_session_dir_for_context(context_id: str) -> Path | None:
+    """返回指定 context_id 最新会话目录。"""
+    normalized = _normalize_context_id(context_id)
+    if not normalized:
+        return None
+    candidates = [
+        item
+        for item in _scan_chat_session_dirs()
+        if item.get("context_id") == normalized or item.get("context_alias") == normalized
+    ]
+    if not candidates:
+        return None
+    path = str(candidates[0].get("path") or "").strip()
+    if not path:
+        return None
+    target = Path(path)
+    if not target.exists() or not target.is_dir():
+        return None
+    return target
+
+
+def _ensure_session_dir_for_context(context_id: str) -> Path:
+    """确保 context_id 对应目录存在；不存在则按约定命名创建。"""
+    normalized = _normalize_context_id(context_id)
+    if not normalized:
+        raise ValueError("context_id is empty")
+
+    existing = _latest_session_dir_for_context(normalized)
+    if existing is not None:
+        return existing
+
+    root = _chat_session_root_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    storage_context_id = _build_storage_context_id(normalized)
+    if not storage_context_id:
+        raise ValueError("context_id is empty")
+    dir_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}-{storage_context_id}"
+    session_dir = root / dir_name
+    session_dir.mkdir(parents=True, exist_ok=True)
+    return session_dir
+
+
+def _resolve_context_id(explicit_context_id: str | None, result: dict[str, Any] | None = None) -> str | None:
+    """从显式参数或结果对象中解析 context_id。"""
+    explicit = _normalize_context_id(explicit_context_id)
+    if explicit:
+        return explicit
+    if not isinstance(result, dict):
+        return None
+    for key in ("context_id", "session_id"):
+        value = _normalize_context_id(result.get(key))
+        if value:
+            return value
+    session_obj = result.get("session")
+    if isinstance(session_obj, dict):
+        for key in ("context_id", "session_id"):
+            value = _normalize_context_id(session_obj.get(key))
+            if value:
+                return value
+    return None
+
+
+def _append_history_line(history_path: Path, record: dict[str, Any]) -> None:
+    """追加写入单条 JSONL 记录。"""
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    with history_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def _append_chat_history(
+    *,
+    context_id: str | None,
+    mode: str,
+    job_id: str,
+    user_text: str,
+    assistant_text: str,
+    status: str,
+) -> None:
+    """按约定写入 session 目录下 history.jsonl。"""
+    resolved = _normalize_context_id(context_id)
+    if not resolved:
+        return
+    try:
+        session_dir = _ensure_session_dir_for_context(resolved)
+    except Exception:
+        logger.exception("Failed to ensure session directory for context_id=%s", resolved)
+        return
+
+    history_file = session_dir / "history.jsonl"
+    ts = _utc_now_iso()
+    shared_meta = {
+        "job_id": job_id,
+        "mode": str(mode or ""),
+        "status": str(status or ""),
+        "context_id": resolved,
+    }
+
+    user_message = str(user_text or "").strip()
+    if user_message:
+        _append_history_line(
+            history_file,
+            {
+                "ts": ts,
+                "role": "user",
+                "name": "user",
+                "text": user_message,
+                "meta": shared_meta,
+            },
+        )
+
+    assistant_message = str(assistant_text or "").strip()
+    if assistant_message:
+        _append_history_line(
+            history_file,
+            {
+                "ts": ts,
+                "role": "assistant",
+                "name": "assistant",
+                "text": assistant_message,
+                "meta": shared_meta,
+            },
+        )
+
+
+def _read_recent_session_messages(session_dir: Path, limit: int) -> list[dict[str, Any]]:
+    """读取会话目录中 history.jsonl 最近 N 条消息。"""
+    history_file = session_dir / "history.jsonl"
+    if not history_file.exists() or not history_file.is_file():
+        return []
+
+    max_items = max(1, int(limit or 20))
+    items: deque[dict[str, Any]] = deque(maxlen=max_items)
+    try:
+        with history_file.open("r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    parsed = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(parsed, dict):
+                    continue
+                text = str(parsed.get("text") or "").strip()
+                if not text:
+                    continue
+                role = str(parsed.get("role") or "assistant").strip().lower() or "assistant"
+                if role not in {"user", "assistant", "system", "error"}:
+                    role = "assistant"
+                meta = parsed.get("meta")
+                items.append(
+                    {
+                        "ts": str(parsed.get("ts") or ""),
+                        "role": role,
+                        "name": str(parsed.get("name") or role),
+                        "text": text,
+                        "meta": meta if isinstance(meta, dict) else {},
+                    }
+                )
+    except OSError:
+        logger.exception("Failed to read history.jsonl from session dir: %s", session_dir)
+        return []
+    return list(items)
+
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    """应用生命周期：初始化主事件循环并按配置启动飞书长连接。"""
+    global _MAIN_LOOP
+    _MAIN_LOOP = asyncio.get_running_loop()
+    cfg = load_config()
+
+    logger.info("Feishu transport mode: %s", cfg.feishu_event_transport)
+    if _should_start_feishu_long_conn(cfg):
+        _start_feishu_long_connection(cfg)
+    else:
+        logger.info("Feishu long connection disabled by FEISHU_EVENT_TRANSPORT")
+    yield
+
+
+app = FastAPI(title="Seneschal Gateway", version="0.1.0", lifespan=_lifespan)
 
 
 def _ensure_auth(authorization: str | None, cfg: GatewayConfig) -> None:
@@ -171,6 +576,126 @@ def _ensure_auth(authorization: str | None, cfg: GatewayConfig) -> None:
     token = authorization[len(prefix):]
     if token != cfg.api_key:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+
+
+def _env_file_path() -> Path:
+    """返回项目根目录 `.env` 文件路径。"""
+    return _ENV_FILE
+
+
+def _read_env_content() -> str:
+    """读取 `.env` 文件原始内容。"""
+    env_path = _env_file_path()
+    if not env_path.exists():
+        return ""
+    return env_path.read_text(encoding="utf-8")
+
+
+def _parse_env_variables(content: str) -> dict[str, str]:
+    """从 `.env` 文本解析键值对。"""
+    variables: dict[str, str] = {}
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        if len(value) >= 2 and (
+            (value.startswith('"') and value.endswith('"'))
+            or (value.startswith("'") and value.endswith("'"))
+        ):
+            value = value[1:-1]
+        variables[key] = value
+    return variables
+
+
+def _write_env_content(content: str) -> None:
+    """覆盖写入 `.env` 文件。"""
+    env_path = _env_file_path()
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text(content, encoding="utf-8")
+
+
+def _managed_env_keys() -> list[str]:
+    """返回结构化设置管理的环境变量键列表（按 schema 顺序）。"""
+    keys: list[str] = []
+    for category in _ENV_SETTINGS_SCHEMA:
+        for item in category.get("items", []):
+            key = str(item.get("key") or "").strip()
+            if key:
+                keys.append(key)
+    return keys
+
+
+def _split_env_variables(variables: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
+    """按 schema 拆分受管变量与未纳入 schema 的变量。"""
+    managed_key_set = set(_managed_env_keys())
+    managed: dict[str, str] = {}
+    unmanaged: dict[str, str] = {}
+    for key, value in variables.items():
+        if key in managed_key_set:
+            managed[key] = value
+        else:
+            unmanaged[key] = value
+    return managed, unmanaged
+
+
+def _sanitize_structured_values(values: dict[str, Any] | None) -> dict[str, str]:
+    """清洗结构化表单提交值。"""
+    if not isinstance(values, dict):
+        return {}
+    sanitized: dict[str, str] = {}
+    for key, value in values.items():
+        key_text = str(key or "").strip()
+        if not key_text:
+            continue
+        value_text = str(value) if value is not None else ""
+        sanitized[key_text] = value_text.strip()
+    return sanitized
+
+
+def _format_env_value(value: str) -> str:
+    """格式化 `.env` 赋值为 `\"...\"` 双引号形式。"""
+    text = str(value or "")
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    return f"\"{escaped}\""
+
+
+def _render_structured_env_content(values: dict[str, str], unmanaged: dict[str, str]) -> str:
+    """按分类 schema 渲染 `.env` 文本。"""
+    lines: list[str] = [
+        "# Auto-generated by Seneschal Gateway Console",
+        "# Edit via /console settings page or update manually if needed.",
+        "",
+    ]
+
+    for category in _ENV_SETTINGS_SCHEMA:
+        title = str(category.get("title") or "Settings")
+        lines.append(f"# ===== {title} =====")
+        for item in category.get("items", []):
+            key = str(item.get("key") or "").strip()
+            if not key:
+                continue
+            value = values.get(key, "")
+            formatted = _format_env_value(value)
+            lines.append(f"export {key}={formatted}")
+        lines.append("")
+
+    if unmanaged:
+        lines.append("# ===== Unmanaged Variables =====")
+        for key in sorted(unmanaged.keys()):
+            formatted = _format_env_value(unmanaged[key])
+            lines.append(f"export {key}={formatted}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _resolve_file_root(cfg: GatewayConfig) -> Path | None:
@@ -492,11 +1017,50 @@ async def _run_job(
     skill_hint: str | None,
     routing_strategy: str | None,
     context_id: str | None,
+    web_search_enabled: bool,
 ) -> None:
     """执行异步任务并更新任务状态。"""
     cfg = load_config()
     async with _JOB_LOCK:
-        _JOB_STORE[job_id] = TaskResult(job_id=job_id, status="running")
+        _JOB_STORE[job_id] = TaskResult(
+            job_id=job_id,
+            status="running",
+            result={
+                "progress": {
+                    "updated_at": _utc_now_iso(),
+                    "planner_monitor": {
+                        "enabled": False,
+                        "events": [],
+                        "current_plan": None,
+                    },
+                },
+            },
+        )
+
+    async def _update_job_progress(payload: dict[str, Any]) -> None:
+        if not isinstance(payload, dict):
+            return
+        async with _JOB_LOCK:
+            current = _JOB_STORE.get(job_id)
+            if current is None or current.status != "running":
+                return
+            current_result = current.result if isinstance(current.result, dict) else {}
+            progress = current_result.get("progress")
+            if not isinstance(progress, dict):
+                progress = {}
+            progress["updated_at"] = _utc_now_iso()
+            channel = str(payload.get("channel") or "").strip().lower()
+            if channel == "planner_monitor":
+                planner = payload.get("planner")
+                if isinstance(planner, dict):
+                    progress["planner_monitor"] = planner
+                progress["session_id"] = str(payload.get("session_id") or "")
+                progress["mode"] = str(payload.get("mode") or mode or "")
+            else:
+                progress.update(payload)
+            current_result["progress"] = progress
+            current.result = current_result
+            _JOB_STORE[job_id] = current
     try:
         result = await run_gateway_task(
             task=task,
@@ -506,7 +1070,23 @@ async def _run_job(
             skill_hint=skill_hint,
             routing_strategy=routing_strategy,
             context_id=context_id,
+            web_search_enabled=web_search_enabled,
+            progress_callback=_update_job_progress,
         )
+        resolved_context_id = _resolve_context_id(context_id, result)
+        if resolved_context_id:
+            result = dict(result or {})
+            result.setdefault("context_id", resolved_context_id)
+            result.setdefault("session_id", resolved_context_id)
+        if (mode or "").strip().lower() != "chat":
+            _append_chat_history(
+                context_id=resolved_context_id,
+                mode=mode,
+                job_id=job_id,
+                user_text=task,
+                assistant_text=str((result or {}).get("reply", "")),
+                status="completed",
+            )
         result = _decorate_result_with_files(job_id, result, request=None, cfg=cfg)
         completed = TaskResult(job_id=job_id, status="completed", result=result)
         async with _JOB_LOCK:
@@ -531,10 +1111,24 @@ async def _run_job(
                 if current and current.status == "completed":
                     current.error = f"callback_failed: {exc}"
     except Exception as exc:
+        resolved_context_id = _resolve_context_id(context_id, None)
+        if (mode or "").strip().lower() != "chat":
+            _append_chat_history(
+                context_id=resolved_context_id,
+                mode=mode,
+                job_id=job_id,
+                user_text=task,
+                assistant_text=str(exc),
+                status="failed",
+            )
         failed = TaskResult(
             job_id=job_id,
             status="failed",
-            result={"error": str(exc)},
+            result={
+                "error": str(exc),
+                "context_id": resolved_context_id,
+                "session_id": resolved_context_id,
+            },
             error=str(exc),
         )
         async with _JOB_LOCK:
@@ -551,19 +1145,49 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.on_event("startup")
-async def on_startup() -> None:
-    """应用启动钩子：记录主事件循环并按配置启动飞书长连接。"""
-    global _MAIN_LOOP
-    _MAIN_LOOP = asyncio.get_running_loop()
-    cfg = load_config()
+@app.get("/", include_in_schema=False)
+async def root() -> RedirectResponse:
+    """根路径默认跳转到控制台页面。"""
+    return RedirectResponse(url="/console/chat", status_code=307)
 
-    logger.info("Feishu transport mode: %s", cfg.feishu_event_transport)
 
-    if _should_start_feishu_long_conn(cfg):
-        _start_feishu_long_connection(cfg)
-    else:
-        logger.info("Feishu long connection disabled by FEISHU_EVENT_TRANSPORT")
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> Response:
+    """避免浏览器默认 favicon 请求导致 404 噪音。"""
+    return Response(status_code=204)
+
+
+@app.get("/console", response_class=HTMLResponse, include_in_schema=False)
+async def gateway_console() -> HTMLResponse:
+    """返回内置网关控制台页面。"""
+    if not _WEBUI_INDEX.exists():
+        return HTMLResponse(
+            content="<h1>Gateway Console Not Found</h1><p>missing seneschal/webui/gateway_console.html</p>",
+            status_code=404,
+        )
+    return HTMLResponse(content=_WEBUI_INDEX.read_text(encoding="utf-8"))
+
+
+@app.get("/console/chat", response_class=HTMLResponse, include_in_schema=False)
+async def gateway_chat() -> HTMLResponse:
+    """返回内置网关聊天页面。"""
+    if not _WEBUI_CHAT.exists():
+        return HTMLResponse(
+            content="<h1>Gateway Chat Not Found</h1><p>missing seneschal/webui/gateway_chat.html</p>",
+            status_code=404,
+        )
+    return HTMLResponse(content=_WEBUI_CHAT.read_text(encoding="utf-8"))
+
+
+@app.get("/console/settings", response_class=HTMLResponse, include_in_schema=False)
+async def gateway_settings() -> HTMLResponse:
+    """返回内置网关设置页面。"""
+    if not _WEBUI_SETTINGS.exists():
+        return HTMLResponse(
+            content="<h1>Gateway Settings Not Found</h1><p>missing seneschal/webui/gateway_settings.html</p>",
+            status_code=404,
+        )
+    return HTMLResponse(content=_WEBUI_SETTINGS.read_text(encoding="utf-8"))
 
 
 def _verify_feishu_signature(
@@ -619,6 +1243,7 @@ async def submit_task(
                 request.skill_hint,
                 request.routing_strategy,
                 request.context_id,
+                request.web_search_enabled,
             )
         )
         return _JOB_STORE[job_id]
@@ -632,9 +1257,114 @@ async def submit_task(
         skill_hint=request.skill_hint,
         routing_strategy=request.routing_strategy,
         context_id=request.context_id,
+        web_search_enabled=request.web_search_enabled,
     )
+    resolved_context_id = _resolve_context_id(request.context_id, result)
+    if resolved_context_id:
+        result = dict(result or {})
+        result.setdefault("context_id", resolved_context_id)
+        result.setdefault("session_id", resolved_context_id)
+    if (request.mode or "").strip().lower() != "chat":
+        _append_chat_history(
+            context_id=resolved_context_id,
+            mode=request.mode,
+            job_id=job_id,
+            user_text=request.task,
+            assistant_text=str((result or {}).get("reply", "")),
+            status="completed",
+        )
     result = _decorate_result_with_files(job_id, result, request=raw_request, cfg=cfg)
     return TaskResult(job_id=job_id, status="completed", result=result)
+
+
+@app.get("/api/v1/chat/sessions")
+async def list_chat_sessions(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    """列出历史 chat session（按更新时间倒序）。"""
+    cfg = load_config()
+    _ensure_auth(authorization, cfg)
+    sessions = _scan_chat_session_dirs()
+    for item in sessions:
+        item.pop("updated_ts", None)
+        item.pop("context_alias", None)
+    return {"sessions": sessions}
+
+
+@app.get("/api/v1/chat/sessions/{context_id}")
+async def get_chat_session(
+    context_id: str,
+    limit: int = 20,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """加载指定 chat session 的摘要与最近消息。"""
+    cfg = load_config()
+    _ensure_auth(authorization, cfg)
+
+    normalized = _normalize_context_id(context_id)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="context_id is empty")
+
+    session_dir = _latest_session_dir_for_context(normalized)
+    if session_dir is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    try:
+        stat = session_dir.stat()
+        updated_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+    except OSError:
+        updated_at = ""
+
+    recent_messages = _read_recent_session_messages(session_dir, limit=max(1, min(limit, 200)))
+    return {
+        "context_id": normalized,
+        "session_id": normalized,
+        "summary": {
+            "context_id": normalized,
+            "session_id": normalized,
+            "dir_name": session_dir.name,
+            "path": str(session_dir.resolve()),
+            "updated_at": updated_at,
+            "message_count": len(recent_messages),
+        },
+        "messages": recent_messages,
+    }
+
+
+@app.delete("/api/v1/chat/sessions/{context_id}")
+async def delete_chat_session(
+    context_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """删除指定 context_id 关联的 chat session 目录。"""
+    cfg = load_config()
+    _ensure_auth(authorization, cfg)
+
+    normalized = _normalize_context_id(context_id)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="context_id is empty")
+
+    matched_dirs: list[Path] = []
+    for item in _scan_chat_session_dirs():
+        item_context_id = _normalize_context_id(str(item.get("context_id") or ""))
+        path_str = str(item.get("path") or "").strip()
+        if item_context_id != normalized or not path_str:
+            continue
+        matched_dirs.append(Path(path_str))
+
+    if not matched_dirs:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    deleted = 0
+    for directory in matched_dirs:
+        if not directory.exists():
+            continue
+        shutil.rmtree(directory, ignore_errors=False)
+        deleted += 1
+
+    return {
+        "ok": True,
+        "context_id": normalized,
+        "deleted": deleted,
+    }
 
 
 @app.get("/api/v1/jobs/{job_id}", response_model=TaskResult)
@@ -648,6 +1378,99 @@ async def get_job(job_id: str) -> TaskResult:
     if job.result:
         job.result = _decorate_result_with_files(job_id, job.result, request=None, cfg=cfg)
     return job
+
+
+@app.get("/api/v1/env")
+async def get_env(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    """读取项目 `.env` 内容与解析结果。"""
+    cfg = load_config()
+    _ensure_auth(authorization, cfg)
+
+    content = _read_env_content()
+    return {
+        "path": str(_env_file_path()),
+        "content": content,
+        "variables": _parse_env_variables(content),
+    }
+
+
+@app.put("/api/v1/env")
+async def put_env(
+    request: EnvContentRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """覆盖更新项目 `.env` 文件内容。"""
+    cfg = load_config()
+    _ensure_auth(authorization, cfg)
+
+    _write_env_content(request.content)
+    content = _read_env_content()
+    return {
+        "ok": True,
+        "path": str(_env_file_path()),
+        "content": content,
+        "variables": _parse_env_variables(content),
+    }
+
+
+@app.get("/api/v1/env/schema")
+async def get_env_schema(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    """获取分类 `.env` 设置 schema 与当前变量值。"""
+    cfg = load_config()
+    _ensure_auth(authorization, cfg)
+
+    content = _read_env_content()
+    variables = _parse_env_variables(content)
+    managed, unmanaged = _split_env_variables(variables)
+
+    return {
+        "path": str(_env_file_path()),
+        "schema": _ENV_SETTINGS_SCHEMA,
+        "values": managed,
+        "unmanaged": unmanaged,
+        "variables": variables,
+        "content": content,
+    }
+
+
+@app.put("/api/v1/env/schema")
+async def put_env_schema(
+    request: EnvStructuredRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """按分类变量覆盖更新 `.env`（可选保留未纳入分类的变量）。"""
+    cfg = load_config()
+    _ensure_auth(authorization, cfg)
+
+    incoming_values = _sanitize_structured_values(request.values)
+    managed_keys = _managed_env_keys()
+    merged_values: dict[str, str] = {}
+    for key in managed_keys:
+        merged_values[key] = incoming_values.get(key, "")
+
+    if request.unmanaged is not None:
+        unmanaged = _sanitize_structured_values(request.unmanaged)
+    elif request.preserve_unmanaged:
+        current_variables = _parse_env_variables(_read_env_content())
+        _, unmanaged = _split_env_variables(current_variables)
+    else:
+        unmanaged = {}
+
+    new_content = _render_structured_env_content(merged_values, unmanaged)
+    _write_env_content(new_content)
+
+    content = _read_env_content()
+    variables = _parse_env_variables(content)
+    managed, unmanaged_saved = _split_env_variables(variables)
+    return {
+        "ok": True,
+        "path": str(_env_file_path()),
+        "schema": _ENV_SETTINGS_SCHEMA,
+        "values": managed,
+        "unmanaged": unmanaged_saved,
+        "variables": variables,
+        "content": content,
+    }
 
 
 @app.get("/api/v1/files/{job_id}/{file_name}")
