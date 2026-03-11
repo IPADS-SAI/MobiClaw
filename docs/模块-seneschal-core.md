@@ -13,6 +13,8 @@
   - `seneschal/agents.py`
 - 运行配置
   - `seneschal/config.py`
+- 多智能体编排
+  - `seneschal/orchestrator.py`
 - 运行上下文与日志
   - `seneschal/run_context.py`
 
@@ -33,6 +35,7 @@
 4. 输出运行日志（run_id + jsonl）用于复盘
 
 5. 为每个子任务选择可选技能（Skill），并按需注入到目标 Agent 的执行上下文
+6. 输出带高亮前缀的阶段日志，并在结果中保留更完整的 routing trace 以便复盘
 
 ---
 
@@ -51,9 +54,9 @@
 - 无参数：`run_demo_conversation()`
 - `--interactive`：`run_interactive_mode()`
 - `--daily --daily-trigger xxx`：`run_daily_tasks(trigger)`
-- `--agent-task "..." [--output path]`：`run_agent_task()`
+- `--agent-task "..." [--output path]`：`run_agent_task()`，默认走 orchestrator 多智能体编排
 
-> 关键认知：`--agent-task` 走 Worker，不走 Steward。
+> 关键认知：当前 `--agent-task` 默认走 `router` 模式，由 `seneschal/orchestrator.py` 负责 Router / Planner / Executor / Skill Selector 协同；仅在显式传入 `--mode worker|steward|auto` 时才走 legacy 兼容路径。
 
 ---
 
@@ -74,12 +77,13 @@
 - 支持 `skill_hint` 人工覆盖（优先级高于自动选择）。
 - 每个子任务最多挂载 N 个 skill（默认 2）。
 - routing trace 中会记录 skill 选择来源、候选与最终结果，便于复盘。
+- Planner 当前会受 `planner_allowed_agents` 约束，只在 Router 已允许的 Agent 集合中规划子任务。
 
 ## 4.1 `create_openai_model`
 
 统一构建 OpenAI 兼容模型实例，来源于 `MODEL_CONFIG`：
 
-- `model_name`
+- `model_name`（默认回退为 `google/gemini-3-flash-preview`）
 - `api_key`
 - `api_base`（自动补 `http://` 前缀）
 - `temperature`
@@ -100,9 +104,10 @@ Prompt 约束强调：
 
 - 优先获取候选来源，再抓正文
 - 任务结束必须给出最终文本结果
-- 默认输出 Markdown（除非用户另有要求）
+- 典型工具：`brave_search`, `arxiv_search`, `dblp_conference_search`, `fetch_url_*`, `download_file`, `extract_pdf_text`, `write_text_file`, `run_shell_command`, `weknora_knowledge_search`
+- 注意：仓库中虽已新增 `seneschal/tools/office.py`，但这些 Office 工具尚未接入当前 Worker 默认工具注册
 
-## 4.3 `create_steward_agent`
+Prompt 约束强调：
 
 Steward 目标：执行核心闭环 `Collect -> Store -> Analyze -> Execute`。
 
@@ -138,8 +143,10 @@ python app.py
 
 行为：
 
-- 自动构造一条预置消息
-- 由 Steward 执行并输出最终回复
+- 自动构造一条预置消息：`开始今日的数据整理和分析，给出最近活动的总结和待办事项。`
+- 创建 `Steward` 与 `User`
+- 由 `Steward` 执行一次单轮回复并直接打印结果
+- 适合验证主链路、模型配置和基础工具链是否正常
 
 ## 5.2 Interactive 模式
 
@@ -179,9 +186,12 @@ python app.py --agent-task "检索今天的 AI 新闻并生成摘要" --output "
 行为：
 
 - 默认走 orchestrator（Router + Planner + Executor + Skill Selector）
-- 如果给 `--output`，会附加“输出路径提示”到最后一个子任务
+- 如果给 `--output`，会把“输出路径提示”附加到最后一个子任务
+- 可选 `--mode` 控制执行模式：`router/intelligent` 或 legacy `worker/steward/auto`
 - 可选 `--agent-hint` 控制目标 agent
 - 可选 `--skill-hint` 控制 skill 选择（支持逗号分隔）
+- 结果中可返回 `routing_trace`，便于复盘路由、规划、skill 选择与子任务执行明细
+- `--context-id` 已预留到 CLI 与 orchestrator 入口，当前版本主要用于未来多轮编排扩展，暂不改变当前单次任务执行逻辑
 
 ---
 

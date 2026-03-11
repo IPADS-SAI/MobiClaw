@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Seneschal Agent 构建模块。"""
+"""Seneschal Agent 构建与能力注册模块。
+
+核心功能：
+- 统一创建 Router/Planner/SkillSelector/Worker/Steward/User 等 Agent；
+- 注册各类工具能力并注入系统提示词；
+- 提供路由层可消费的 Agent 能力描述。
+"""
 
 from __future__ import annotations
 
@@ -65,6 +71,13 @@ def create_openai_model(*, stream: bool = True, temperature: float | None = None
 
 
 def _build_skill_prompt_suffix(skill_context: str | None) -> str:
+    """构建技能上下文补充提示。
+
+    参数说明：
+        skill_context: 技能选择阶段输出的技能说明文本。
+    返回值说明：
+        str: 可直接拼接到系统提示词末尾的约束文本；无输入时返回空字符串。
+    """
     text = (skill_context or "").strip()
     if not text:
         return ""
@@ -78,6 +91,8 @@ def _build_skill_prompt_suffix(skill_context: str | None) -> str:
 
 @dataclass
 class AgentCapability:
+    """描述单个 Agent 能力边界的结构化模型。"""
+
     name: str
     role: str
     strengths: list[str]
@@ -86,6 +101,11 @@ class AgentCapability:
 
 
 def get_agent_capability_descriptions() -> dict[str, dict[str, object]]:
+    """返回路由可用的 Agent 能力描述字典。
+
+    返回值说明：
+        dict[str, dict[str, object]]: 以 agent 名称为键、能力画像为值的映射。
+    """
     registry = [
         AgentCapability(
             name="steward",
@@ -432,6 +452,7 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
         attempts: list[dict[str, object]] = []
         current_task = task_desc
         criteria_matched = False
+        no_criteria_mode = not bool((success_criteria or "").strip())
 
         for idx in range(1, retry_cap + 2):
             resp = await call_mobi_collect_verified(current_task, max_retries=0)
@@ -439,6 +460,13 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
             ocr_text = str(md.get("ocr_text", "") or "")
             last_reasoning = str(md.get("last_reasoning", "") or "")
             extracted_info = md.get("extracted_info", {}) if isinstance(md.get("extracted_info"), dict) else {}
+            tool_success = bool(md.get("success", False))
+            has_evidence = bool(
+                ocr_text.strip()
+                or last_reasoning.strip()
+                or extracted_info
+                or md.get("raw_data")
+            )
 
             attempt_item = {
                 "attempt": idx,
@@ -452,7 +480,7 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
                 "last_reasoning": last_reasoning,
                 "ocr_preview": ocr_text[:300],
                 "extracted_info": extracted_info,
-                "tool_success": md.get("success", False),
+                "tool_success": tool_success,
             }
             attempts.append(attempt_item)
 
@@ -464,16 +492,20 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
                     + "\n"
                     + json.dumps(extracted_info, ensure_ascii=False)
                 )
-                criteria_matched = success_criteria in haystack
+                criteria_matched = tool_success and (success_criteria in haystack)
+                if (not criteria_matched) and tool_success and has_evidence:
+                    generic_tokens = ("成功获取", "获取到", "收集到", "活动信息", "最近活动")
+                    if any(token in success_criteria for token in generic_tokens):
+                        criteria_matched = True
             else:
-                # 无显式标准时仅表示“已拿到证据”，不代表任务完成
-                criteria_matched = False
+                # 无显式标准时，只要拿到可用证据即可继续由 Agent 判定。
+                criteria_matched = tool_success and has_evidence
 
             if criteria_matched:
                 break
 
             if idx <= retry_cap:
-                failure_reason = "criteria_not_matched"
+                failure_reason = "criteria_not_matched" if success_criteria else "no_evidence_collected"
                 current_task = (
                     f"{task_desc}\n"
                     f"重试要求(第{idx}次失败，原因:{failure_reason})："
@@ -485,6 +517,7 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
             "report_type": "mobi_retry_evidence_pack_v1",
             "original_task": task_desc,
             "success_criteria": success_criteria,
+            "no_criteria_mode": no_criteria_mode,
             "retry_limit": retry_cap,
             "attempt_count": len(attempts),
             "criteria_matched": criteria_matched,
@@ -513,6 +546,8 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
                         f"重试上限: {retry_cap}\n"
                         f"尝试次数: {len(attempts)}\n"
                         f"criteria_matched: {criteria_matched}\n"
+                        f"最后状态提示: {final_attempt.get('status_hint', '')}\n"
+                        f"OCR摘要: {str(final_attempt.get('ocr_preview', '') or '')[:500]}\n"
                         "注意：该结果仅为证据汇总，最终完成判定必须由 Agent 自主做出。"
                     ),
                 ),

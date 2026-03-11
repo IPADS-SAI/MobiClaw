@@ -77,7 +77,7 @@ DailyTasks 用于把“可重复的周期任务”配置化执行，并统一沉
 
 执行方式：
 
-- 由 Worker Agent 处理
+- 由 Worker Agent 直接处理，不经过 orchestrator 的 Router / Planner / Skill Selector 链路
 - 支持 `output_path` 提示输出路径
 
 ---

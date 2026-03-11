@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Multi-agent task orchestration: router + planner + executor."""
+"""Seneschal 多智能体编排模块（Router + Planner + Executor）。
+
+核心流程：
+1. 路由：按规则与 LLM 混合决策选择执行 Agent；
+2. 规划：对复合任务拆分串并行阶段；
+3. 执行：按阶段调度 Agent，并汇总回复与文件产出。
+"""
 
 from __future__ import annotations
 
@@ -38,6 +44,7 @@ ANSI_RED = "\033[91m"
 
 
 def _highlight_log(message: str, color: str = ANSI_CYAN) -> str:
+    """格式化彩色高亮日志文本，便于终端观察关键编排节点。"""
     return f"{ANSI_BOLD}{color}{message}{ANSI_RESET}"
 
 
@@ -47,6 +54,7 @@ ROUTER_MODES = {"router", "intelligent"}
 
 @dataclass
 class RouteDecision:
+    """路由阶段产出的标准决策结构。"""
     target_agents: list[str]
     reason: str
     confidence: float
@@ -56,6 +64,7 @@ class RouteDecision:
 
 @dataclass
 class SkillProfile:
+    """技能元数据抽象，用于候选筛选与提示词构建。"""
     name: str
     description: str
     content_hint: str
@@ -65,6 +74,7 @@ class SkillProfile:
 
 @dataclass
 class SkillDecision:
+    """单个子任务的技能选择结果与依据。"""
     selected_skills: list[str]
     source: str
     reason: str
@@ -74,6 +84,7 @@ class SkillDecision:
 
 
 def _extract_response_text(response: Any) -> str:
+    """从 Agent 响应对象中提取可读文本。"""
     if response is None:
         return ""
     text = response.get_text_content() if hasattr(response, "get_text_content") else ""
@@ -88,6 +99,7 @@ def _extract_response_text(response: Any) -> str:
 
 
 def _collect_file_paths(text: str, output_path: str | None = None) -> list[Path]:
+    """从模型回复与显式输出参数中收集文件路径。"""
     paths: list[Path] = []
     if output_path:
         paths.append(Path(output_path).expanduser())
@@ -109,6 +121,7 @@ def _collect_file_paths(text: str, output_path: str | None = None) -> list[Path]
 
 
 def _build_file_entries(paths: list[Path]) -> list[dict[str, Any]]:
+    """将文件路径转换为可序列化的文件信息。"""
     entries: list[dict[str, Any]] = []
     for path in paths:
         try:
@@ -129,6 +142,7 @@ def _build_file_entries(paths: list[Path]) -> list[dict[str, Any]]:
 
 
 def _merge_file_paths(existing: list[Path], incoming: list[Path]) -> list[Path]:
+    """合并文件路径并保持顺序去重。"""
     merged: list[Path] = []
     seen: set[str] = set()
     for path in [*(existing or []), *(incoming or [])]:
@@ -141,6 +155,7 @@ def _merge_file_paths(existing: list[Path], incoming: list[Path]) -> list[Path]:
 
 
 def _trim_for_prompt(text: str, max_chars: int) -> str:
+    """压缩空白并按长度截断，避免提示词过长。"""
     cleaned = re.sub(r"\s+", " ", (text or "").strip())
     if max_chars <= 0 or len(cleaned) <= max_chars:
         return cleaned
@@ -154,6 +169,7 @@ def _build_upstream_context(
     max_chars: int = 4000,
     max_steps: int = 20,
 ) -> str:
+    """构建上游子任务摘要，供后续子任务引用。"""
     if not executions and not file_paths:
         return ""
 
@@ -181,6 +197,7 @@ def _build_upstream_context(
 
 
 def _parse_json_object(text: str) -> dict[str, Any] | None:
+    """从文本中解析首个可用 JSON 对象。"""
     if not text:
         return None
     try:
@@ -201,6 +218,7 @@ def _parse_json_object(text: str) -> dict[str, Any] | None:
 
 
 def _skills_root() -> Path:
+    """确定技能目录根路径（优先使用环境配置）。"""
     configured = str(ROUTING_CONFIG.get("skill_root_dir") or "").strip()
     if configured:
         return Path(configured).expanduser()
@@ -208,6 +226,7 @@ def _skills_root() -> Path:
 
 
 def _parse_skill_frontmatter(text: str) -> dict[str, str]:
+    """解析技能 Markdown 的 frontmatter 元数据。"""
     if not text:
         return {}
     match = re.match(r"\s*---\s*\n([\s\S]*?)\n---\s*(?:\n|$)", text)
@@ -228,10 +247,12 @@ def _parse_skill_frontmatter(text: str) -> dict[str, str]:
 
 
 def _strip_frontmatter(text: str) -> str:
+    """移除技能文档中的 frontmatter 区块。"""
     return re.sub(r"\A\s*---\s*\n[\s\S]*?\n---\s*(?:\n|$)", "", text, count=1)
 
 
 def _skill_content_hint(markdown: str) -> str:
+    """提取技能正文中的精简提示片段。"""
     content = _strip_frontmatter(markdown)
     lines = [line.strip() for line in content.splitlines() if line.strip()]
     if not lines:
@@ -247,6 +268,7 @@ def _skill_content_hint(markdown: str) -> str:
 
 
 def _tokenize_query(text: str) -> list[str]:
+    """对任务文本做中英文关键词切分并去重。"""
     if not text:
         return []
     lowered = text.lower()
@@ -256,6 +278,7 @@ def _tokenize_query(text: str) -> list[str]:
 
 @lru_cache(maxsize=1)
 def _available_skill_profiles() -> tuple[SkillProfile, ...]:
+    """扫描技能目录并缓存可用技能画像。"""
     root = _skills_root()
     if not root.exists() or not root.is_dir():
         return tuple()
@@ -290,6 +313,7 @@ def _available_skill_profiles() -> tuple[SkillProfile, ...]:
 
 
 def _rule_select_skills(task: str, agent_name: str, max_candidates: int) -> list[dict[str, Any]]:
+    """按规则从技能画像中筛选候选技能。"""
     task_tokens = _tokenize_query(task)
     agent_token = (agent_name or "").strip().lower()
     candidates: list[dict[str, Any]] = []
@@ -323,6 +347,7 @@ def _rule_select_skills(task: str, agent_name: str, max_candidates: int) -> list
 
 
 def _all_skill_candidates(max_candidates: int) -> list[dict[str, Any]]:
+    """返回有限数量的全量技能候选。"""
     candidates: list[dict[str, Any]] = []
     for profile in _available_skill_profiles()[:max_candidates]:
         candidates.append(
@@ -343,6 +368,7 @@ async def _llm_rerank_skills(
     candidates: list[dict[str, Any]],
     max_skills: int,
 ) -> tuple[list[str], str]:
+    """调用 Skill Selector 对规则候选进行重排。"""
     if not candidates:
         return [], "empty_candidates"
 
@@ -398,6 +424,7 @@ async def _llm_rerank_skills(
 
 
 def _skill_hint_items(skill_hint: str | None) -> list[str]:
+    """解析并标准化用户传入的技能提示。"""
     if not skill_hint:
         return []
     parts = [item.strip().lower() for item in re.split(r"[,;，；\s]+", skill_hint) if item and item.strip()]
@@ -405,6 +432,7 @@ def _skill_hint_items(skill_hint: str | None) -> list[str]:
 
 
 def _skill_prompt_context(selected_skills: list[str]) -> str:
+    """根据选中技能拼接提示词上下文。"""
     if not selected_skills:
         return ""
     profile_map = {profile.name: profile for profile in _available_skill_profiles()}
@@ -437,6 +465,7 @@ async def _select_skills_for_subtask(
     strategy: str,
     skill_hint: str | None,
 ) -> SkillDecision:
+    """为子任务执行“提示覆盖 + 规则筛选 + LLM重排”的组合选技。"""
     if not bool(ROUTING_CONFIG.get("skill_enabled", True)):
         return SkillDecision([], "disabled", "skill selection disabled", [], [], [])
 
@@ -543,6 +572,7 @@ async def _select_skills_for_subtask(
 
 @lru_cache(maxsize=1)
 def _available_agent_names() -> tuple[str, ...]:
+    """读取当前可用 Agent 名称集合。"""
     profiles = get_agent_capability_descriptions() or {}
     names: list[str] = []
     if isinstance(profiles, dict):
@@ -556,6 +586,7 @@ def _available_agent_names() -> tuple[str, ...]:
 
 
 def _default_agent_name() -> str:
+    """返回默认 Agent 名称。"""
     names = list(_available_agent_names())
     if "worker" in names:
         return "worker"
@@ -567,6 +598,7 @@ def _normalize_agent_name(
     allowed_agents: set[str] | None = None,
     default_agent: str | None = None,
 ) -> str:
+    """标准化并校验 Agent 名称。"""
     allowed = allowed_agents or set(_available_agent_names())
     fallback = default_agent or _default_agent_name()
     value = (raw or "").strip().lower()
@@ -579,6 +611,7 @@ def _normalize_agent_name(
 
 
 def _planner_allowed_agents(decision: RouteDecision) -> list[str]:
+    """根据路由结果限制规划器可选 Agent。"""
     if decision.target_agents:
         return list(dict.fromkeys([name for name in decision.target_agents if name]))
     return list(_available_agent_names())
@@ -589,6 +622,7 @@ def _normalize_planner_agent(
     allowed_agents: list[str],
     default_agent: str,
 ) -> str:
+    """标准化规划器输出的 Agent 字段。"""
     allowed_set = set(allowed_agents)
     return _normalize_agent_name(
         raw,
@@ -598,6 +632,7 @@ def _normalize_planner_agent(
 
 
 def _rule_route(task: str) -> RouteDecision:
+    """基于启发式规则做快速路由决策。"""
     text = (task or "").lower()
     split_signals = ["并且", "同时", "然后", "再", ";", "；"]
     plan_required = any(token in task for token in split_signals)
@@ -658,6 +693,7 @@ def _compact_agent_profiles_for_route(
     profiles: Any,
     max_desc_chars: int,
 ) -> list[dict[str, str]]:
+    """压缩 Agent 能力画像，减少路由提示长度。"""
     if not isinstance(profiles, dict):
         return []
     compact: list[dict[str, str]] = []
@@ -674,6 +710,7 @@ def _compact_agent_profiles_for_route(
 
 
 def _compact_task_for_route(task: str, max_chars: int) -> str:
+    """压缩任务文本并控制长度。"""
     text = re.sub(r"\s+", " ", (task or "").strip())
     if max_chars <= 0 or len(text) <= max_chars:
         return text
@@ -681,6 +718,7 @@ def _compact_task_for_route(task: str, max_chars: int) -> str:
 
 
 async def _llm_route(task: str, strategy: str) -> RouteDecision:
+    """调用 Router Agent 生成路由决策。"""
     profiles = get_agent_capability_descriptions()
     available_agents = list(_available_agent_names())
     route_default_agent = _default_agent_name()
@@ -772,6 +810,7 @@ async def _llm_route(task: str, strategy: str) -> RouteDecision:
 
 
 def _force_legacy_route(mode: str) -> RouteDecision | None:
+    """当模式显式指定 legacy 时返回固定路由。"""
     normalized_mode = (mode or "").strip().lower()
     if normalized_mode == "worker":
         return RouteDecision(["worker"], "legacy mode=worker", 1.0, False, "legacy")
@@ -781,17 +820,20 @@ def _force_legacy_route(mode: str) -> RouteDecision | None:
 
 
 def _split_task_by_connectors(task: str) -> list[str]:
+    """按连接词粗粒度拆分子任务片段。"""
     raw_parts = re.split(r"(?:并且|然后|再|同时|;|；|\n)", task)
     parts = [part.strip() for part in raw_parts if part and part.strip()]
     return parts or [task.strip()]
 
 
 def _subtask_agent_by_rule(subtask: str) -> str:
+    """按规则为子任务选择默认执行 Agent。"""
     decision = _rule_route(subtask)
     return decision.target_agents[0] if decision.target_agents else _default_agent_name()
 
 
 async def _llm_plan(task: str, decision: RouteDecision, max_subtasks: int) -> list[list[dict[str, str]]]:
+    """调用 Planner Agent 将任务拆解为阶段化计划。"""
     planner_allowed = _planner_allowed_agents(decision)
     default_plan_agent = planner_allowed[0] if planner_allowed else _default_agent_name()
     prompt = (
@@ -863,6 +905,7 @@ async def _llm_plan(task: str, decision: RouteDecision, max_subtasks: int) -> li
 
 
 def _fallback_plan(task: str, decision: RouteDecision, max_subtasks: int) -> list[list[dict[str, str]]]:
+    """当规划失败时生成规则回退计划。"""
     planner_allowed = _planner_allowed_agents(decision)
     default_plan_agent = planner_allowed[0] if planner_allowed else _default_agent_name()
     if not decision.plan_required and len(decision.target_agents) == 1:
@@ -888,6 +931,7 @@ def _fallback_plan(task: str, decision: RouteDecision, max_subtasks: int) -> lis
 
 
 def _build_agent(agent_name: str, skill_context: str | None = None):
+    """按名称构建对应执行 Agent。"""
     normalized = (agent_name or "").strip().lower()
     factory = getattr(agents_module, f"create_{normalized}_agent", None)
     if callable(factory):
@@ -920,6 +964,7 @@ async def _run_one_agent(
     selected_skills: list[str] | None = None,
     prior_context: str | None = None,
 ) -> dict[str, Any]:
+    """执行单个子任务并返回结构化结果。"""
     skill_list = selected_skills or []
     skill_context = _skill_prompt_context(skill_list)
     agent = _build_agent(agent_name, skill_context=skill_context)
@@ -950,6 +995,7 @@ async def _run_one_agent(
 
 
 def _aggregate_replies(executions: list[dict[str, Any]]) -> str:
+    """聚合多子任务回复文本为最终回复。"""
     if not executions:
         return ""
     if len(executions) == 1:
@@ -974,6 +1020,21 @@ async def run_orchestrated_task(
     routing_strategy: str | None = None,
     context_id: str | None = None,
 ) -> dict[str, Any]:
+    """执行完整的多智能体编排任务。
+
+    功能描述：
+        对输入任务执行“路由决策 -> 任务规划 -> 子任务执行 -> 结果聚合”，并返回统一结构化结果。
+    参数说明：
+        task: 用户原始任务文本。
+        output_path: 可选输出文件路径提示。
+        mode: 执行模式（router/intelligent 或 legacy 模式）。
+        agent_hint: 可选强制 Agent 提示。
+        skill_hint: 可选技能提示（支持逗号分隔）。
+        routing_strategy: 可选路由策略覆盖值。
+        context_id: 预留的多轮上下文标识。
+    返回值说明：
+        dict[str, Any]: 含最终回复、路由轨迹、执行明细与文件信息。
+    """
     del context_id  # Reserved for future multi-turn persistence identifier.
 
     task_start = time.perf_counter()

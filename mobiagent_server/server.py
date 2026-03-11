@@ -45,6 +45,8 @@ class GatewayConfig:
     vl_api_key: str | None
     vl_model: str | None
     timeout_s: float
+    task_timeout_s: float
+    task_max_retries: int
 
 
 def load_config() -> GatewayConfig:
@@ -64,6 +66,8 @@ def load_config() -> GatewayConfig:
         vl_api_key=os.environ.get("OPENROUTER_API_KEY", os.environ.get("OPENAI_API_KEY")),
         vl_model=os.environ.get("OPENROUTER_MODEL", os.environ.get("OPENAI_MODEL", "google/gemini-2.5-flash")),
         timeout_s=float(os.environ.get("MOBIAGENT_TIMEOUT", "30")),
+        task_timeout_s=max(1.0, float(os.environ.get("MOBIAGENT_TASK_TIMEOUT", "120"))),
+        task_max_retries=max(0, int(os.environ.get("MOBIAGENT_TASK_MAX_RETRIES", "2"))),
     )
 
 
@@ -72,7 +76,7 @@ app = FastAPI(title="MobiAgent Gateway", version="0.1.0")
 
 class CollectOptions(BaseModel):
     ocr_enabled: bool = True
-    timeout: int = 30
+    timeout: int = 120
 
 
 class CollectRequest(BaseModel):
@@ -82,7 +86,7 @@ class CollectRequest(BaseModel):
 
 class ActionOptions(BaseModel):
     wait_for_completion: bool = True
-    timeout: int = 30
+    timeout: int = 120
 
 
 class ActionRequest(BaseModel):
@@ -553,13 +557,52 @@ def _run_cli_job(cfg: GatewayConfig, task: str, output_schema: dict[str, Any] | 
     return result
 
 
+def _run_cli_job_with_retry(
+    cfg: GatewayConfig,
+    task: str,
+    output_schema: dict[str, Any] | None,
+    requested_timeout_s: float,
+) -> dict[str, Any]:
+    requested = float(requested_timeout_s) if requested_timeout_s and requested_timeout_s > 0 else cfg.task_timeout_s
+    per_attempt_timeout_s = min(requested, cfg.task_timeout_s)
+    max_retries = cfg.task_max_retries
+
+    attempt_results: list[dict[str, Any]] = []
+    final_result: dict[str, Any] | None = None
+    for attempt in range(1, max_retries + 2):
+        result = _run_cli_job(cfg, task, output_schema, per_attempt_timeout_s)
+        final_result = result
+        attempt_results.append(
+            {
+                "attempt": attempt,
+                "status": result.get("status"),
+                "returncode": result.get("returncode"),
+                "task_file": result.get("task_file"),
+                "data_dir": result.get("data_dir"),
+                "stdout": result.get("stdout", ""),
+                "stderr": result.get("stderr", ""),
+            }
+        )
+        if result.get("status") == "ok":
+            break
+
+    if final_result is None:
+        final_result = {"status": "failed", "stderr": "no execution result"}
+
+    final_result["attempt_count"] = len(attempt_results)
+    final_result["max_retries"] = max_retries
+    final_result["timeout_per_attempt_s"] = per_attempt_timeout_s
+    final_result["attempts"] = attempt_results
+    return final_result
+
+
 @app.post("/api/v1/collect", response_model=GatewayResponse)
 async def collect(request: CollectRequest, authorization: Optional[str] = Header(default=None)) -> GatewayResponse:
     cfg = load_config()
     _ensure_auth(authorization, cfg)
 
     if cfg.mode == "cli":
-        result = _run_cli_job(cfg, request.task, None, request.options.timeout or cfg.timeout_s)
+        result = _run_cli_job_with_retry(cfg, request.task, None, request.options.timeout or cfg.task_timeout_s)
         return GatewayResponse(success=result.get("status") == "ok", message=result["status"], data=result)
 
     if cfg.mode == "proxy":
@@ -607,7 +650,7 @@ async def action(request: ActionRequest, authorization: Optional[str] = Header(d
     if cfg.mode == "cli":
         task = _build_task_from_action(request.action_type, request.params)
         output_schema = request.params.get("output_schema") if isinstance(request.params, dict) else None
-        result = _run_cli_job(cfg, task, output_schema, request.options.timeout or cfg.timeout_s)
+        result = _run_cli_job_with_retry(cfg, task, output_schema, request.options.timeout or cfg.task_timeout_s)
         parsed = None
         if result.get("status") == "ok" and result.get("data_dir"):
             parsed = await _extract_output_schema(cfg, Path(result["data_dir"]), output_schema)

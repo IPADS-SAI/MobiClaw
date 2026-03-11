@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Seneschal gateway server for task intake."""
+"""Seneschal 对外任务网关服务。
+
+核心功能：
+- 提供任务提交、异步任务查询、结果文件下载接口；
+- 支持 webhook 回调与飞书消息回传；
+- 支持飞书 webhook 与长连接两种事件接入方式。
+"""
 
 from __future__ import annotations
 
@@ -30,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 def _load_env_file(env_path: Path) -> None:
+    """从 `.env` 文件加载环境变量（仅补充未存在的键）。"""
     if not env_path.exists():
         return
     for raw_line in env_path.read_text(encoding="utf-8").splitlines():
@@ -73,6 +80,8 @@ _configure_logging()
 
 @dataclass
 class GatewayConfig:
+    """网关运行配置。"""
+
     api_key: str
     callback_timeout_s: float
     callback_retry: int
@@ -87,6 +96,7 @@ class GatewayConfig:
 
 
 def load_config() -> GatewayConfig:
+    """从环境变量读取网关配置并构建配置对象。"""
     return GatewayConfig(
         api_key=os.environ.get("SENESCHAL_GATEWAY_API_KEY", ""),
         callback_timeout_s=float(os.environ.get("SENESCHAL_GATEWAY_CALLBACK_TIMEOUT", "10")),
@@ -103,6 +113,8 @@ def load_config() -> GatewayConfig:
 
 
 class TaskRequest(BaseModel):
+    """任务提交请求体。"""
+
     task: str
     async_mode: bool = Field(default=False)
     output_path: str | None = None
@@ -117,6 +129,8 @@ class TaskRequest(BaseModel):
 
 
 class TaskResult(BaseModel):
+    """任务状态与结果响应体。"""
+
     job_id: str
     status: str
     result: dict[str, Any] | None = None
@@ -125,6 +139,8 @@ class TaskResult(BaseModel):
 
 @dataclass
 class JobContext:
+    """异步任务上下文（回调地址与飞书投递信息）。"""
+
     webhook_url: str | None = None
     webhook_token: str | None = None
     callback_headers: dict[str, str] | None = None
@@ -144,6 +160,7 @@ _FEISHU_WS_THREAD: threading.Thread | None = None
 
 
 def _ensure_auth(authorization: str | None, cfg: GatewayConfig) -> None:
+    """校验 Bearer Token 鉴权信息。"""
     if not cfg.api_key:
         return
     if not authorization:
@@ -157,12 +174,14 @@ def _ensure_auth(authorization: str | None, cfg: GatewayConfig) -> None:
 
 
 def _resolve_file_root(cfg: GatewayConfig) -> Path | None:
+    """解析允许暴露下载文件的根目录。"""
     if not cfg.file_root:
         return None
     return Path(cfg.file_root).expanduser().resolve()
 
 
 def _can_expose_file(path: str, cfg: GatewayConfig) -> bool:
+    """判断文件是否允许通过下载接口暴露。"""
     root = _resolve_file_root(cfg)
     target = Path(path).expanduser()
     try:
@@ -177,6 +196,7 @@ def _can_expose_file(path: str, cfg: GatewayConfig) -> bool:
 
 
 def _build_download_url(job_id: str, file_name: str, request: Request | None, cfg: GatewayConfig) -> str:
+    """构建文件下载 URL。"""
     base = cfg.public_base_url
     if not base and request is not None:
         base = str(request.base_url).rstrip("/")
@@ -186,6 +206,7 @@ def _build_download_url(job_id: str, file_name: str, request: Request | None, cf
 
 
 def _decorate_result_with_files(job_id: str, result: dict[str, Any], request: Request | None, cfg: GatewayConfig) -> dict[str, Any]:
+    """为结果中的文件条目补充安全过滤后的下载链接。"""
     files = result.get("files") if isinstance(result, dict) else None
     if not isinstance(files, list):
         return result
@@ -208,6 +229,7 @@ def _decorate_result_with_files(job_id: str, result: dict[str, Any], request: Re
 
 
 def _parse_feishu_text_from_content(content: str) -> str:
+    """解析飞书消息内容并提取文本字段。"""
     parsed = (content or "").strip()
     if not parsed:
         return ""
@@ -225,6 +247,7 @@ async def _enqueue_feishu_job(
     open_id: str | None,
     message_id: str | None,
 ) -> str:
+    """创建飞书触发的异步任务并入队执行。"""
     job_id = uuid.uuid4().hex
     async with _JOB_LOCK:
         _JOB_STORE[job_id] = TaskResult(job_id=job_id, status="queued")
@@ -256,6 +279,7 @@ async def _accept_feishu_message(
     open_id: str | None,
     message_id: str | None,
 ) -> dict[str, Any]:
+    """接收飞书消息并转换为网关任务。"""
     task = _parse_feishu_text_from_content(content)
     if not task:
         return {"ok": True, "accepted": False, "reason": "empty_task"}
@@ -271,6 +295,7 @@ async def _accept_feishu_message(
 
 
 def _should_start_feishu_long_conn(cfg: GatewayConfig) -> bool:
+    """根据配置判断是否启用飞书长连接监听。"""
     mode = (cfg.feishu_event_transport or "both").strip().lower()
     if mode in {"off", "disabled", "none", "webhook"}:
         return False
@@ -283,6 +308,7 @@ def _should_start_feishu_long_conn(cfg: GatewayConfig) -> bool:
 
 
 def _start_feishu_long_connection(cfg: GatewayConfig) -> None:
+    """启动飞书长连接监听线程。"""
     global _FEISHU_WS_THREAD
 
     if _FEISHU_WS_THREAD and _FEISHU_WS_THREAD.is_alive():
@@ -362,6 +388,7 @@ def _start_feishu_long_connection(cfg: GatewayConfig) -> None:
 
 
 def _build_callback_headers(ctx: JobContext) -> dict[str, str]:
+    """构建回调请求头。"""
     headers = {"Content-Type": "application/json"}
     if ctx.webhook_token:
         headers["Authorization"] = f"Bearer {ctx.webhook_token}"
@@ -372,6 +399,7 @@ def _build_callback_headers(ctx: JobContext) -> dict[str, str]:
 
 
 def _post_callback(url: str, payload: dict[str, Any], headers: dict[str, str], cfg: GatewayConfig) -> None:
+    """投递回调并按配置执行指数退避重试。"""
     retry = cfg.callback_retry
     last_error = None
     for attempt in range(retry):
@@ -388,6 +416,7 @@ def _post_callback(url: str, payload: dict[str, Any], headers: dict[str, str], c
 
 
 def _build_feishu_text(result: TaskResult) -> str:
+    """将任务结果转换为适合飞书发送的文本。"""
     if result.status == "failed":
         return f"任务执行失败: {result.error or 'unknown error'}"
     output = result.result or {}
@@ -406,6 +435,7 @@ def _build_feishu_text(result: TaskResult) -> str:
 
 
 def _get_feishu_tenant_token(cfg: GatewayConfig) -> str | None:
+    """获取飞书租户访问令牌。"""
     if not cfg.feishu_app_id or not cfg.feishu_app_secret:
         return None
     resp = requests.post(
@@ -421,6 +451,7 @@ def _get_feishu_tenant_token(cfg: GatewayConfig) -> str | None:
 
 
 def _send_feishu_text(cfg: GatewayConfig, receive_id: str, receive_id_type: str, text: str) -> None:
+    """发送飞书文本消息。"""
     token = _get_feishu_tenant_token(cfg)
     if not token:
         return
@@ -435,6 +466,7 @@ def _send_feishu_text(cfg: GatewayConfig, receive_id: str, receive_id_type: str,
 
 
 async def _deliver_result(job_id: str, result: TaskResult, cfg: GatewayConfig) -> None:
+    """将异步任务结果投递到 webhook 或飞书。"""
     async with _JOB_LOCK:
         ctx = _JOB_CONTEXT.get(job_id)
     if ctx is None:
@@ -461,6 +493,7 @@ async def _run_job(
     routing_strategy: str | None,
     context_id: str | None,
 ) -> None:
+    """执行异步任务并更新任务状态。"""
     cfg = load_config()
     async with _JOB_LOCK:
         _JOB_STORE[job_id] = TaskResult(job_id=job_id, status="running")
@@ -502,11 +535,13 @@ async def _run_job(
 
 @app.get("/health")
 async def health() -> dict[str, str]:
+    """健康检查接口。"""
     return {"status": "ok"}
 
 
 @app.on_event("startup")
 async def on_startup() -> None:
+    """应用启动钩子：记录主事件循环并按配置启动飞书长连接。"""
     global _MAIN_LOOP
     _MAIN_LOOP = asyncio.get_running_loop()
     cfg = load_config()
@@ -526,6 +561,7 @@ def _verify_feishu_signature(
     signature: str | None,
     cfg: GatewayConfig,
 ) -> bool:
+    """校验飞书请求签名。"""
     if not cfg.feishu_encrypt_key:
         return True
     if not timestamp or not nonce or not signature:
@@ -545,6 +581,7 @@ async def submit_task(
     raw_request: Request,
     authorization: str | None = Header(default=None),
 ) -> TaskResult:
+    """提交任务接口，支持同步与异步两种执行模式。"""
     cfg = load_config()
     _ensure_auth(authorization, cfg)
 
@@ -590,6 +627,7 @@ async def submit_task(
 
 @app.get("/api/v1/jobs/{job_id}", response_model=TaskResult)
 async def get_job(job_id: str) -> TaskResult:
+    """查询异步任务状态与结果。"""
     cfg = load_config()
     async with _JOB_LOCK:
         job = _JOB_STORE.get(job_id)
@@ -602,6 +640,7 @@ async def get_job(job_id: str) -> TaskResult:
 
 @app.get("/api/v1/files/{job_id}/{file_name}")
 async def get_file(job_id: str, file_name: str, authorization: str | None = Header(default=None)) -> FileResponse:
+    """下载任务产出文件（需通过白名单路径校验）。"""
     cfg = load_config()
     _ensure_auth(authorization, cfg)
 
@@ -638,6 +677,7 @@ async def feishu_events(
     x_lark_request_nonce: str | None = Header(default=None),
     x_lark_signature: str | None = Header(default=None),
 ) -> dict[str, Any]:
+    """飞书事件回调入口，支持 URL 校验与消息事件处理。"""
     cfg = load_config()
     raw = await request.body()
     if not _verify_feishu_signature(
