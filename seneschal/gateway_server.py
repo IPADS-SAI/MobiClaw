@@ -29,32 +29,13 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 import requests
 
-from .workflows import run_gateway_task
-
+from .env import load_project_env
 
 logger = logging.getLogger(__name__)
 
+load_project_env()
 
-def _load_env_file(env_path: Path) -> None:
-    """从 `.env` 文件加载环境变量（仅补充未存在的键）。"""
-    if not env_path.exists():
-        return
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export "):].strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
-            os.environ[key] = value
-
-
-_load_env_file(Path(__file__).resolve().parents[1] / ".env")
+from .workflows import run_gateway_task
 
 
 def _configure_logging() -> None:

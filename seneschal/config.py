@@ -4,6 +4,10 @@
 from __future__ import annotations
 
 import os
+from .env import load_project_env
+
+
+load_project_env()
 
 # LLM 模型配置 - 优先从环境变量读取，否则使用默认值
 MODEL_CONFIG = {
