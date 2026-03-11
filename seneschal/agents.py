@@ -31,10 +31,16 @@ from .tools import (
     create_pdf_from_text,
     read_docx_text,
     read_xlsx_summary,
+    run_skill_script,
     run_shell_command,
     write_xlsx_from_records,
     write_xlsx_from_rows,
     write_text_file,
+    create_pptx_from_outline,
+    edit_pptx,
+    insert_pptx_image,
+    read_pptx_summary,
+    set_pptx_text_style,
     weknora_add_knowledge,
     weknora_knowledge_search,
     weknora_list_knowledge_bases,
@@ -190,6 +196,14 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
     )
 
     toolkit.register_tool_function(
+        run_skill_script,
+        func_description=(
+            "在指定 execution_dir 中执行skill中定义的命令。"
+            "调用时请传入完整可执行命令字符串和执行目录。"
+        ),
+    )
+
+    toolkit.register_tool_function(
         brave_search,
         func_description="通过 Brave Search API 联网检索新闻与网页来源链接。",
     )
@@ -273,11 +287,52 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
         func_description="在 WeKnora 知识库中检索已有信息（不做 LLM 总结）。",
     )
 
+    toolkit.register_tool_function(
+        read_pptx_summary,
+        func_description="读取 PPTX/PPT 文件，返回每张幻灯片的标题、正文文本、备注、形状数量和图片数量的结构化摘要。",
+    )
+
+    toolkit.register_tool_function(
+        create_pptx_from_outline,
+        func_description=(
+            "从幻灯片大纲列表创建新 PPTX 文件。"
+            "每张幻灯片支持：标题、正文（字符串或列表）、演讲者备注、布局索引、"
+            "嵌入图片（路径+位置+尺寸）、字号、字体颜色（#RRGGBB）、粗体、斜体。"
+            "支持可选模板文件与全局默认字体大小/颜色。"
+        ),
+    )
+
+    toolkit.register_tool_function(
+        edit_pptx,
+        func_description=(
+            "综合编辑已有 PPTX：跨所有幻灯片全局文本替换、追加新幻灯片、"
+            "按 1-based 索引删除幻灯片。三种操作可在一次调用中组合使用。"
+        ),
+    )
+
+    toolkit.register_tool_function(
+        insert_pptx_image,
+        func_description=(
+            "向指定幻灯片（1-based 索引）插入本地图片。"
+            "支持英寸单位的定位（left/top）和尺寸（width/height），省略宽高时保持原始比例。"
+        ),
+    )
+
+    toolkit.register_tool_function(
+        set_pptx_text_style,
+        func_description=(
+            "在指定幻灯片中搜索文本子串，对所有匹配的 run 应用字体样式："
+            "字号（pt）、颜色（#RRGGBB）、粗体、斜体、下划线。省略的属性保持原样。"
+        ),
+    )
+
     sys_prompt = """你是 Seneschal 的 Worker Agent，负责处理通用问题与单一子任务。
 
 工作准则：
 - 只聚焦当前任务，给出简明直接的结果。
 - 必要时使用工具检索或执行本地命令。
+- 如果提供了相应的skill，请优先使用skill中指定的工具和方法，运行skill中的脚本，请务必使用 "run_skill_script"，而非"run_shell_command"。
+- 使用 "run_skill_script" 时，必须提供 command 和 execution_dir；优先使用 Activated Skills 中给出的 execution_dir。
 - 如果需要联网搜索新闻或网页来源，优先使用 "brave_search" 获取候选链接与摘要。
 - 如果检索学术论文，优先使用 "arxiv_search" 获取元数据与 PDF 链接。
 - 如果检索会议论文，优先使用 "dblp_conference_search" 获取论文清单与链接，然后去arxiv上搜索对应的论文。
@@ -289,8 +344,7 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
 - 需要输出文件时，可用 "write_text_file" 落盘。
 - 输出格式遵循用户要求；未指定时默认使用 Markdown。
 - 必须输出最终文本结论或可执行结果；不要输出空的工具调用。
-- 不做多步长对话，输出最终结论或可执行结果。
-"""
+- 不做多步长对话，输出最终结论或可执行结果。"""
     sys_prompt += _build_skill_prompt_suffix(skill_context)
 
     return ReActAgent(

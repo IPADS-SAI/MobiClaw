@@ -191,6 +191,36 @@ Skill 自动选择说明：
 Shell 工具默认受白名单限制，若你设置了 `SENESCHAL_SHELL_ALLOWLIST`，请按需加入允许的命令。
 如需限制写文件路径，可设置 `SENESCHAL_FILE_WRITE_ROOT`。
 
+#### Skill 脚本执行（运行时）
+
+除了固定工具外，Worker 还支持通过 `run_skill_script` 在运行时调用 skill 目录中的脚本。
+
+脚本发现规则：
+- `run_skill_script` 接口参数：
+  - `command`：完整可执行命令字符串
+  - `execution_dir`：命令执行目录
+  - `timeout_s`：超时时间（可选）
+- 执行逻辑：
+  - 先进入 `execution_dir`
+  - 执行 `command`
+  - 执行完成后返回之前目录
+
+运行时示例（由 Agent 内部调用）：
+- `run_skill_script(command="python scripts/thumbnail.py input.pptx outputs/thumbs", execution_dir="/workspace/Seneschal/seneschal/skills/pptx")`
+- `run_skill_script(command="python scripts/office/unpack.py input.docx tmp/unpacked", execution_dir="/workspace/Seneschal/seneschal/skills/docx")`
+
+相关环境变量：
+- `SENESCHAL_SKILL_SCRIPT_TIMEOUT_S`：脚本超时秒数（默认 `120`）
+- `SENESCHAL_SKILL_SCRIPT_PYTHON`：Python 脚本运行时（默认当前解释器）
+- `SENESCHAL_SKILL_SCRIPT_NODE`：Node 脚本运行时（默认 `node`）
+- `SENESCHAL_SKILL_SCRIPT_BASH`：Shell 脚本运行时（默认 `bash`）
+
+说明：
+- `run_skill_script` 与 `run_shell_command` 的白名单机制独立。
+- `run_skill_script` 在运行时会读取 `execution_dir` 下的 `SKILL.md`，仅允许执行其中提到的命令。
+- `execution_dir` 必须位于 `seneschal/skills` 目录下。
+- 若 `SKILL.md` 缺失、无法提取命令，或命令不在白名单中，调用会被拒绝。
+
 ### 7) Gateway模式（类似OpenClaw Core 入口）
 
 网关用于接收任务并交给 workflow 层决策执行，支持同步和异步任务查询。
@@ -219,7 +249,7 @@ python -m seneschal.gateway_server
 - `SENESCHAL_SKILL_ROOT_DIR`：skill 根目录（默认 `seneschal/skills`）
 - `SENESCHAL_SKILL_MAX_PER_SUBTASK`：每个子任务最多挂载的 skill 数（默认 `2`）
 - `SENESCHAL_SKILL_SELECTOR_TIMEOUT_S`：skill LLM 重排超时秒数（默认 `20`）
-- `SENESCHAL_SKILL_LLM_RERANK`：是否启用 LLM 重排（默认 `0`）
+- `SENESCHAL_SKILL_LLM_RERANK`：是否启用 LLM 重排（默认 `1`）
 - `SENESCHAL_SKILL_RULE_MAX_CANDIDATES`：规则召回候选上限（默认 `8`）
 - `SENESCHAL_SKILL_HINT_OVERRIDE`：是否允许 `skill_hint` 覆盖自动选择（默认 `1`）
 - `SENESCHAL_GATEWAY_PUBLIC_BASE_URL`：生成文件下载链接时使用的公网前缀

@@ -59,6 +59,8 @@ class SkillProfile:
     name: str
     description: str
     content_hint: str
+    full_content: str
+    skill_dir: str
 
 
 @dataclass
@@ -280,6 +282,8 @@ def _available_skill_profiles() -> tuple[SkillProfile, ...]:
                 name=name,
                 description=description,
                 content_hint=_skill_content_hint(raw),
+                full_content=raw.strip(),
+                skill_dir=str(child.resolve()),
             )
         )
     return tuple(profiles)
@@ -404,17 +408,26 @@ def _skill_prompt_context(selected_skills: list[str]) -> str:
     if not selected_skills:
         return ""
     profile_map = {profile.name: profile for profile in _available_skill_profiles()}
-    lines: list[str] = []
+    blocks: list[str] = []
     for name in selected_skills:
         profile = profile_map.get(name)
         if not profile:
             continue
-        summary = profile.description or profile.content_hint
-        summary = (summary or "").replace("\n", " ").strip()
-        if len(summary) > 260:
-            summary = summary[:260].rstrip() + "..."
-        lines.append(f"- {profile.name}: {summary}")
-    return "\n".join(lines)
+        content = (profile.full_content or "").strip()
+        if not content:
+            content = (profile.description or profile.content_hint or "").strip()
+        if not content:
+            continue
+        blocks.append(
+            "\n".join(
+                [
+                    f"[Skill: {profile.name}]",
+                    f"execution_dir: {profile.skill_dir}",
+                    content,
+                ]
+            )
+        )
+    return "\n\n".join(blocks)
 
 
 async def _select_skills_for_subtask(
