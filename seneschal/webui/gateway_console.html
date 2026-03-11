@@ -147,6 +147,7 @@
           <div class="sub">任务下发与 Gateway 通信</div>
         </div>
         <div class="nav">
+          <a href="/console/chat">聊天</a>
           <a class="active" href="/console">控制台</a>
           <a href="/console/settings">设置</a>
         </div>
@@ -187,6 +188,7 @@
             <label>
               mode
               <select id="task-mode">
+                <option value="chat" selected>chat</option>
                 <option value="router">router</option>
                 <option value="intelligent">intelligent</option>
                 <option value="worker">worker</option>
@@ -209,6 +211,12 @@
             <label>
               context_id
               <input id="task-context-id" placeholder="可选" />
+              <div class="row" style="margin-top: 6px;">
+                <select id="task-context-history" class="mono" style="flex: 1 1 auto;">
+                  <option value="">选择历史 session/context</option>
+                </select>
+                <button id="btn-refresh-contexts" class="alt" type="button">刷新</button>
+              </div>
             </label>
             <label>
               webhook_url
@@ -268,6 +276,7 @@
       let pollingTimer = null;
       const renderedResultJobs = new Set();
       const chatMessages = [];
+      let contextSessions = [];
 
       const el = {
         cfgStatus: document.getElementById("cfg-status"),
@@ -278,6 +287,8 @@
         taskSkillHint: document.getElementById("task-skill-hint"),
         taskRoutingStrategy: document.getElementById("task-routing-strategy"),
         taskContextId: document.getElementById("task-context-id"),
+        taskContextHistory: document.getElementById("task-context-history"),
+        btnRefreshContexts: document.getElementById("btn-refresh-contexts"),
         taskWebhookUrl: document.getElementById("task-webhook-url"),
         taskWebhookToken: document.getElementById("task-webhook-token"),
         taskCallbackHeaders: document.getElementById("task-callback-headers"),
@@ -343,6 +354,95 @@
       function pushChatMessage(role, text, meta = "") {
         chatMessages.push({ role, text: String(text || ""), meta: meta || nowTime() });
         renderChat();
+      }
+
+      function normalizeChatRole(role) {
+        const r = String(role || "").trim().toLowerCase();
+        if (r === "assistant" || r === "agent" || r === "bot") return "agent";
+        if (r === "user") return "user";
+        if (r === "error") return "error";
+        return "system";
+      }
+
+      function extractContextIdFromTaskResult(taskResult) {
+        if (!taskResult || typeof taskResult !== "object") return "";
+        const result = taskResult.result && typeof taskResult.result === "object" ? taskResult.result : {};
+        const direct = String(result.context_id || result.session_id || "").trim();
+        if (direct) return direct;
+        const session = result.session && typeof result.session === "object" ? result.session : {};
+        return String(session.context_id || session.session_id || "").trim();
+      }
+
+      function setContextSessionOptions(selected = "") {
+        const selectedValue = String(selected || "").trim() || String(el.taskContextId.value || "").trim();
+        el.taskContextHistory.innerHTML = "";
+
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "选择历史 session/context";
+        el.taskContextHistory.appendChild(placeholder);
+
+        contextSessions.forEach((item) => {
+          const contextId = String(item.context_id || item.session_id || "").trim();
+          if (!contextId) return;
+          const option = document.createElement("option");
+          option.value = contextId;
+          const updatedAt = String(item.updated_at || "").trim();
+          option.textContent = updatedAt ? `${contextId} · ${updatedAt}` : contextId;
+          el.taskContextHistory.appendChild(option);
+        });
+
+        if (selectedValue) {
+          el.taskContextHistory.value = selectedValue;
+        }
+      }
+
+      function upsertContextSession(contextId) {
+        const value = String(contextId || "").trim();
+        if (!value) return;
+        const nowIso = new Date().toISOString();
+        contextSessions = contextSessions.filter((s) => String(s.context_id || s.session_id || "").trim() !== value);
+        contextSessions.unshift({ context_id: value, session_id: value, updated_at: nowIso });
+        setContextSessionOptions(value);
+      }
+
+      function renderLoadedSessionMessages(messages) {
+        chatMessages.length = 0;
+        renderedResultJobs.clear();
+        (Array.isArray(messages) ? messages : []).forEach((item) => {
+          if (!item || typeof item !== "object") return;
+          const role = normalizeChatRole(item.role);
+          const text = String(item.text || "").trim();
+          if (!text) return;
+          const ts = String(item.ts || "").trim();
+          const meta = ts ? `LOADED · ${ts}` : `LOADED · ${nowTime()}`;
+          chatMessages.push({ role, text, meta });
+        });
+        renderChat();
+      }
+
+      async function refreshContextSessions(selected = "") {
+        const resp = await requestJson("/api/v1/chat/sessions", {
+          method: "GET",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+        });
+        contextSessions = Array.isArray(resp.sessions) ? resp.sessions : [];
+        setContextSessionOptions(selected);
+        return contextSessions;
+      }
+
+      async function loadContextSession(contextId) {
+        const value = String(contextId || "").trim();
+        if (!value) return;
+        const resp = await requestJson(`/api/v1/chat/sessions/${encodeURIComponent(value)}?limit=20`, {
+          method: "GET",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+        });
+        const messages = Array.isArray(resp.messages) ? resp.messages : [];
+        renderLoadedSessionMessages(messages);
+        el.taskContextId.value = value;
+        upsertContextSession(value);
+        pushChatMessage("system", `已加载指定会话: ${value}（最近 ${messages.length} 条消息）`, `SYSTEM · ${nowTime()}`);
       }
 
       function renderChat() {
@@ -465,7 +565,7 @@
           task: (el.taskText.value || "").trim(),
           async_mode: !!el.taskAsync.checked,
           output_path: (el.taskOutputPath.value || "").trim() || null,
-          mode: (el.taskMode.value || "router").trim() || "router",
+          mode: (el.taskMode.value || "chat").trim() || "chat",
           agent_hint: (el.taskAgentHint.value || "").trim() || null,
           skill_hint: (el.taskSkillHint.value || "").trim() || null,
           routing_strategy: (el.taskRoutingStrategy.value || "").trim() || null,
@@ -548,6 +648,11 @@
         );
         const files = resp.result && Array.isArray(resp.result.files) ? resp.result.files : [];
         renderFiles(files);
+        const contextId = extractContextIdFromTaskResult(resp);
+        if (contextId) {
+          el.taskContextId.value = contextId;
+          upsertContextSession(contextId);
+        }
         if (resp.status === "completed" || resp.status === "failed") {
           appendAgentConversation(resp);
         }
@@ -595,6 +700,11 @@
 
           const files = resp.result && Array.isArray(resp.result.files) ? resp.result.files : [];
           renderFiles(files);
+          const contextId = extractContextIdFromTaskResult(resp);
+          if (contextId) {
+            el.taskContextId.value = contextId;
+            upsertContextSession(contextId);
+          }
 
           if (payload.async_mode && resp.job_id) {
             pushChatMessage("system", `异步任务已入队，job_id=${resp.job_id}`, `SYSTEM · ${nowTime()}`);
@@ -610,6 +720,26 @@
       }
 
       el.btnSubmitTask.addEventListener("click", submitTask);
+      el.btnRefreshContexts.addEventListener("click", async () => {
+        try {
+          await refreshContextSessions(el.taskContextId.value || "");
+          setTaskStatus("会话列表已刷新", "ok");
+        } catch (err) {
+          setTaskStatus(`刷新会话列表失败: ${err.message || err}`, "error");
+          pushChatMessage("error", String(err.message || err), `ERROR · ${nowTime()}`);
+        }
+      });
+      el.taskContextHistory.addEventListener("change", async (event) => {
+        const selected = String(event.target.value || "").trim();
+        if (!selected) return;
+        try {
+          await loadContextSession(selected);
+          setTaskStatus(`已加载会话 ${selected}`, "ok");
+        } catch (err) {
+          setTaskStatus(`加载会话失败: ${err.message || err}`, "error");
+          pushChatMessage("error", String(err.message || err), `ERROR · ${nowTime()}`);
+        }
+      });
       el.btnStopPoll.addEventListener("click", () => {
         stopPolling();
         setTaskStatus("已停止轮询", "ok");
@@ -630,6 +760,9 @@
       });
 
       renderConfigStatus();
+      refreshContextSessions().catch(() => {
+        // Ignore list loading failures at startup; user can retry manually.
+      });
       setTaskStatus("就绪", "ok");
       renderChat();
     </script>

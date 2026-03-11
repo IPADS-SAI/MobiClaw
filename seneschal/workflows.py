@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from pathlib import Path
@@ -21,11 +22,209 @@ from typing import Any
 
 from agentscope.message import Msg
 
-from .agents import create_steward_agent, create_user_agent, create_worker_agent
+from .agents import (
+    ChatSessionManager,
+    create_chat_agent,
+    create_steward_agent,
+    create_user_agent,
+    create_worker_agent,
+)
 from .dailytasks.runner import run_daily_tasks
 from .orchestrator import run_orchestrated_task
 
 logger = logging.getLogger(__name__)
+_CHAT_SESSION_MANAGER = ChatSessionManager()
+
+
+def _parse_chat_command(task: str) -> tuple[str, str]:
+    """解析 chat 指令与正文。"""
+    raw = (task or "").strip()
+    if not raw:
+        return "message", ""
+    parts = raw.split(maxsplit=1)
+    head = parts[0].strip().lower()
+    tail = parts[1].strip() if len(parts) > 1 else ""
+
+    if head in {"/new", "new"}:
+        return "new", tail
+    if head in {"/interrupt", "interrupt", "/stop", "stop"}:
+        return "interrupt", tail
+    if head in {"/exit", "exit", "/quit", "quit", "退出"}:
+        return "exit", tail
+    return "message", raw
+
+
+async def _run_gateway_chat_task(task: str, context_id: str | None = None) -> dict[str, Any]:
+    """执行 gateway chat 模式单轮任务。"""
+    command, content = _parse_chat_command(task)
+    handle = await _CHAT_SESSION_MANAGER.resolve_session(
+        context_id,
+        force_new=(command == "new"),
+    )
+
+    agent = create_chat_agent()
+    await _CHAT_SESSION_MANAGER.load_agent_state(handle, agent)
+    introduced = bool(handle.meta.get("introduced", False))
+
+    # /interrupt：优先中断当前活跃任务；如果没有活跃任务，走默认中断处理回复。
+    if command == "interrupt":
+        interrupted = await _CHAT_SESSION_MANAGER.interrupt_session(handle.session_id)
+        if interrupted:
+            assistant_text = "已收到中断指令，正在尝试中断当前回复。"
+        else:
+            interrupt_msg = await agent.handle_interrupt()
+            assistant_text = _extract_response_text(interrupt_msg) or "已收到中断指令。"
+        _CHAT_SESSION_MANAGER.append_turn_history(
+            handle=handle,
+            user_text=task,
+            assistant_text=assistant_text,
+            command="interrupt",
+        )
+        await _CHAT_SESSION_MANAGER.save_agent_state(
+            handle,
+            agent,
+            command="interrupt",
+            introduced=introduced,
+        )
+        return {
+            "reply": assistant_text,
+            "mode": "chat",
+            "files": [],
+            "context_id": handle.session_id,
+            "session_id": handle.session_id,
+            "session": {
+                "session_id": handle.session_id,
+                "session_dir": str(handle.session_dir.resolve()),
+                "is_new_session": handle.is_new_session,
+                "resumed_from_latest": handle.resumed_from_latest,
+                "command": "interrupt",
+            },
+        }
+
+    # /exit|quit|退出：保存状态并返回告别文本。
+    if command == "exit":
+        assistant_text = "会话状态已保存。你可以稍后继续，或输入 /new 开启新会话。"
+        _CHAT_SESSION_MANAGER.append_turn_history(
+            handle=handle,
+            user_text=task,
+            assistant_text=assistant_text,
+            command="exit",
+        )
+        await _CHAT_SESSION_MANAGER.save_agent_state(
+            handle,
+            agent,
+            command="exit",
+            introduced=introduced,
+        )
+        return {
+            "reply": assistant_text,
+            "mode": "chat",
+            "files": [],
+            "context_id": handle.session_id,
+            "session_id": handle.session_id,
+            "session": {
+                "session_id": handle.session_id,
+                "session_dir": str(handle.session_dir.resolve()),
+                "is_new_session": handle.is_new_session,
+                "resumed_from_latest": handle.resumed_from_latest,
+                "command": "exit",
+            },
+        }
+
+    user_visible_text = task
+    effective_content = content if command == "new" else (content or task)
+    if command == "new" and not effective_content:
+        effective_content = ""
+
+    auto_intro_text = ""
+    if not introduced:
+        auto_intro_text = "你好，我是 Seneschal 的 chat 助手 MobiChatBot，很高兴为你服务。"
+        memory = getattr(agent, "memory", None)
+        if memory is not None and hasattr(memory, "add"):
+            await memory.add(
+                Msg(
+                    name="ChatAssistant",
+                    content=auto_intro_text,
+                    role="assistant",
+                ),
+            )
+        _CHAT_SESSION_MANAGER.append_turn_history(
+            handle=handle,
+            user_text="",
+            assistant_text=auto_intro_text,
+            command="auto_intro",
+        )
+
+    # /new 且没有额外内容时，直接返回首条自动欢迎消息。
+    if command == "new" and not effective_content:
+        await _CHAT_SESSION_MANAGER.save_agent_state(
+            handle,
+            agent,
+            command="new",
+            introduced=True,
+        )
+        return {
+            "reply": auto_intro_text or "你好，我是 Seneschal 的 chat 助手 MobiChatBot，很高兴为你服务。",
+            "mode": "chat",
+            "files": [],
+            "context_id": handle.session_id,
+            "session_id": handle.session_id,
+            "session": {
+                "session_id": handle.session_id,
+                "session_dir": str(handle.session_dir.resolve()),
+                "is_new_session": handle.is_new_session,
+                "resumed_from_latest": handle.resumed_from_latest,
+                "command": "new",
+            },
+        }
+
+    msg = Msg(
+        name="User",
+        content=effective_content,
+        role="user",
+    )
+
+    reply_task = asyncio.create_task(agent(msg))
+    await _CHAT_SESSION_MANAGER.register_active_reply(handle.session_id, agent, reply_task)
+    try:
+        response = await reply_task
+    finally:
+        await _CHAT_SESSION_MANAGER.unregister_active_reply(handle.session_id, reply_task)
+
+    assistant_text = _extract_response_text(response)
+    introduced_after = introduced or bool(auto_intro_text) or bool(assistant_text)
+    final_reply = assistant_text
+    if auto_intro_text and assistant_text:
+        final_reply = f"{auto_intro_text}\n\n{assistant_text}"
+    elif auto_intro_text and not assistant_text:
+        final_reply = auto_intro_text
+
+    _CHAT_SESSION_MANAGER.append_turn_history(
+        handle=handle,
+        user_text=user_visible_text,
+        assistant_text=assistant_text,
+        command="new" if command == "new" else "message",
+    )
+    await _CHAT_SESSION_MANAGER.save_agent_state(
+        handle,
+        agent,
+        command="new" if command == "new" else "message",
+        introduced=introduced_after,
+    )
+    return {
+        "reply": final_reply,
+        "mode": "chat",
+        "files": [],
+        "context_id": handle.session_id,
+        "session_id": handle.session_id,
+        "session": {
+            "session_id": handle.session_id,
+            "session_dir": str(handle.session_dir.resolve()),
+            "is_new_session": handle.is_new_session,
+            "resumed_from_latest": handle.resumed_from_latest,
+            "command": "new" if command == "new" else "message",
+        },
+    }
 
 
 def _extract_response_text(response: Any) -> str:
@@ -116,8 +315,15 @@ async def run_gateway_task(
     返回值说明：
         dict[str, Any]: 编排执行结果。
     """
-    logger.info("workflows.run_gateway_task mode=%s agent_hint=%s task_preview=%s",
-                mode, agent_hint or "", (task or "")[:120].replace("\n", " "))
+    logger.info(
+        "workflows.run_gateway_task mode=%s agent_hint=%s task_preview=%s",
+        mode,
+        agent_hint or "",
+        (task or "")[:120].replace("\n", " "),
+    )
+    if (mode or "").strip().lower() == "chat":
+        return await _run_gateway_chat_task(task=task, context_id=context_id)
+
     return await run_orchestrated_task(
         task=task,
         output_path=output_path,

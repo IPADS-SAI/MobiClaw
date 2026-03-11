@@ -69,7 +69,7 @@ def test_extract_image_text_ocr_with_fixture():
 
     metadata = getattr(resp, "metadata", {}) or {}
     text = _response_text(resp)
-    print(text)
+    # print(text)
 
     assert metadata.get("engine") == "tesseract"
     assert metadata.get("path", "").endswith("ocr_sample.png")

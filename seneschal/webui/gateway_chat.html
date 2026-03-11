@@ -1,0 +1,777 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Seneschal Chat</title>
+    <style>
+      :root {
+        --bg: #f4f6ef;
+        --ink: #20241f;
+        --muted: #5a665a;
+        --line: #d8dfd2;
+        --accent: #105f4a;
+        --warn: #d58f2e;
+        --danger: #b42318;
+        --mono: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+        --sans: "Work Sans", "PingFang SC", "Noto Sans SC", sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: var(--sans);
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 10% 0%, #dce8ce 0%, transparent 30%),
+          radial-gradient(circle at 90% 100%, #f3dbbd 0%, transparent 26%),
+          var(--bg);
+      }
+      .wrap { max-width: 1240px; margin: 0 auto; padding: 28px 18px 40px; }
+      h1 { margin: 0; letter-spacing: 0.03em; font-size: 30px; }
+      .sub { margin-top: 8px; color: var(--muted); font-size: 14px; }
+      .topbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+      .nav { display: flex; gap: 8px; }
+      .nav a {
+        text-decoration: none;
+        border: 1px solid var(--line);
+        background: #fff;
+        color: var(--ink);
+        border-radius: 10px;
+        padding: 8px 12px;
+        font-size: 13px;
+      }
+      .nav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+      .layout { margin-top: 20px; display: grid; grid-template-columns: 320px 1fr; gap: 14px; }
+      .panel {
+        background: linear-gradient(160deg, #fffffc, #f8fbf6);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 14px;
+        box-shadow: 0 8px 24px rgba(31, 34, 27, 0.08);
+      }
+      .panel h2 { margin: 0 0 10px; font-size: 16px; }
+      .hint { font-size: 12px; color: var(--muted); }
+      .status {
+        margin-top: 8px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: #fff;
+        font-size: 12px;
+      }
+      .session-select {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 9px 10px;
+        background: #fff;
+        color: var(--ink);
+        font-family: var(--mono);
+      }
+      .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+      button {
+        border: 0;
+        border-radius: 10px;
+        padding: 8px 12px;
+        cursor: pointer;
+        color: #fff;
+        background: var(--accent);
+        font: inherit;
+      }
+      button.alt { background: #486a62; }
+      button.warn { background: var(--warn); }
+      button.danger { background: var(--danger); }
+      .chat-box {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #fff;
+        height: 520px;
+        overflow: auto;
+        padding: 10px;
+        display: grid;
+        gap: 8px;
+      }
+      .msg {
+        max-width: 88%;
+        border-radius: 10px;
+        padding: 9px 10px;
+        white-space: pre-wrap;
+        line-height: 1.4;
+        font-size: 13px;
+      }
+      .msg.user { justify-self: end; background: #dff2e8; border: 1px solid #b6ddca; }
+      .msg.agent { justify-self: start; background: #f6f8fa; border: 1px solid #d9e2e8; }
+      .msg.system { justify-self: center; background: #fff8e6; border: 1px solid #f0d7a9; color: #7b5718; }
+      .msg.error { justify-self: start; background: #fde8e8; border: 1px solid #f6bcbc; color: #8a1f1f; }
+      .msg-meta { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+      .composer { margin-top: 10px; display: grid; gap: 8px; }
+      .row { display: flex; align-items: center; gap: 8px; }
+      .row-wrap { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+      .row label { font-size: 12px; color: var(--muted); }
+      select, textarea, input {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fff;
+        color: var(--ink);
+        padding: 9px 10px;
+        font: inherit;
+      }
+      textarea#chat-input { width: 100%; min-height: 92px; resize: vertical; }
+      .mono { font-family: var(--mono); }
+      .cmds { font-size: 12px; color: var(--muted); }
+      .log {
+        margin-top: 10px;
+        background: #1b1f1c;
+        color: #d7f4d6;
+        border-radius: 10px;
+        padding: 8px;
+        max-height: 150px;
+        overflow: auto;
+        font-size: 11px;
+      }
+      @media (max-width: 980px) {
+        .layout { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="topbar">
+        <div>
+          <h1>Seneschal Chat</h1>
+          <div class="sub">交互式聊天 · Session 管理 · 指令控制</div>
+        </div>
+        <div class="nav">
+          <a class="active" href="/console/chat">聊天</a>
+          <a href="/console">控制台</a>
+          <a href="/console/settings">设置</a>
+        </div>
+      </div>
+
+      <div class="layout">
+        <section class="panel">
+          <h2>Session 管理</h2>
+          <select id="session-select" class="session-select" size="10"></select>
+          <div class="btns">
+            <button id="btn-refresh" class="alt" type="button">刷新</button>
+            <button id="btn-load" type="button">加载</button>
+            <button id="btn-new" class="warn" type="button">新建</button>
+            <button id="btn-delete" class="danger" type="button">删除</button>
+          </div>
+          <div id="session-status" class="status">状态: <strong>未初始化</strong></div>
+          <div class="hint" style="margin-top: 8px;">当前会话会作为 `context_id` 发送给网关。</div>
+          <div class="log mono" id="mini-log">(empty)</div>
+        </section>
+
+        <section class="panel">
+          <h2>聊天窗口</h2>
+          <div id="chat-box" class="chat-box"></div>
+
+          <div class="composer">
+            <div class="row-wrap">
+              <label>模式</label>
+              <select id="chat-mode">
+                <option value="chat" selected>chat</option>
+                <option value="router">router</option>
+                <option value="intelligent">intelligent</option>
+                <option value="worker">worker</option>
+                <option value="steward">steward</option>
+                <option value="auto">auto</option>
+              </select>
+
+              <label>异步</label>
+              <input id="chat-async" type="checkbox" />
+
+              <label>job_id</label>
+              <input id="current-job" class="mono" style="width: 260px;" placeholder="当前轮询任务ID" />
+
+              <button id="btn-query-job" class="alt" type="button">查询Job</button>
+            </div>
+
+            <textarea id="chat-input" placeholder="输入消息，或输入指令: /new /quit /interrupt"></textarea>
+
+            <div class="row-wrap">
+              <button id="btn-send" type="button">发送</button>
+              <button id="btn-clear-chat" class="alt" type="button">清空聊天记录</button>
+              <span class="cmds">指令: <code>/new</code> 新建会话, <code>/quit</code> 结束当前会话, <code>/interrupt</code> 中断轮询</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <script>
+      const cfgKey = "seneschal_gateway_console_config_v1";
+      const activeSessionKey = "seneschal_chat_active_session_v1";
+      let pollingTimer = null;
+      let sessions = [];
+      let activeSessionId = "";
+      const renderedJobs = new Set();
+      const messages = [];
+
+      const el = {
+        sessionSelect: document.getElementById("session-select"),
+        btnRefresh: document.getElementById("btn-refresh"),
+        btnLoad: document.getElementById("btn-load"),
+        btnNew: document.getElementById("btn-new"),
+        btnDelete: document.getElementById("btn-delete"),
+        sessionStatus: document.getElementById("session-status"),
+        miniLog: document.getElementById("mini-log"),
+        chatBox: document.getElementById("chat-box"),
+        chatMode: document.getElementById("chat-mode"),
+        chatAsync: document.getElementById("chat-async"),
+        currentJob: document.getElementById("current-job"),
+        btnQueryJob: document.getElementById("btn-query-job"),
+        chatInput: document.getElementById("chat-input"),
+        btnSend: document.getElementById("btn-send"),
+        btnClearChat: document.getElementById("btn-clear-chat"),
+      };
+
+      function nowTime() {
+        return new Date().toLocaleTimeString("zh-CN", { hour12: false });
+      }
+
+      function logMini(text) {
+        el.miniLog.textContent = `[${nowTime()}] ${text}\n` + (el.miniLog.textContent || "");
+      }
+
+      function setSessionStatus(text, kind = "ok") {
+        const color = kind === "error" ? "#b42318" : "#105f4a";
+        el.sessionStatus.innerHTML = `状态: <strong style="color:${color}">${text}</strong>`;
+      }
+
+      function normalizeBaseUrl(raw) {
+        const value = (raw || "").trim();
+        if (!value) {
+          return window.location.origin || "http://127.0.0.1:8090";
+        }
+        try {
+          const u = new URL(value, window.location.origin);
+          return `${u.protocol}//${u.host}`;
+        } catch (_) {
+          return value.replace(/\/+$/, "");
+        }
+      }
+
+      function getConfig() {
+        const raw = localStorage.getItem(cfgKey);
+        let parsed = {};
+        if (raw) {
+          try {
+            parsed = JSON.parse(raw) || {};
+          } catch (_) {
+            parsed = {};
+          }
+        }
+        return {
+          baseUrl: normalizeBaseUrl(parsed.baseUrl || window.location.origin),
+          apiKey: (parsed.apiKey || "").trim(),
+          pollMs: Number(parsed.pollMs || 2000),
+          timeoutMs: Number(parsed.timeoutMs || 30000),
+        };
+      }
+
+      function authHeaders(baseHeaders = {}) {
+        const cfg = getConfig();
+        const headers = { ...baseHeaders };
+        if (cfg.apiKey) {
+          headers.Authorization = `Bearer ${cfg.apiKey}`;
+        }
+        return headers;
+      }
+
+      async function requestJson(path, options = {}) {
+        const cfg = getConfig();
+        const url = `${cfg.baseUrl}${path}`;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), Math.max(1000, cfg.timeoutMs || 30000));
+        try {
+          const resp = await fetch(url, { ...options, signal: controller.signal });
+          const text = await resp.text();
+          let json;
+          try {
+            json = text ? JSON.parse(text) : null;
+          } catch (_) {
+            json = { raw: text };
+          }
+          if (!resp.ok) {
+            const detail = (json && (json.detail || json.error || json.message || json.raw)) || "";
+            throw new Error(detail ? `HTTP ${resp.status}: ${detail}` : `HTTP ${resp.status}`);
+          }
+          return json;
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+
+      function pushMessage(role, text, meta = "") {
+        messages.push({ role, text: String(text || ""), meta: meta || nowTime() });
+        renderMessages();
+      }
+
+      function normalizeRole(role) {
+        const r = String(role || "").trim().toLowerCase();
+        if (r === "assistant" || r === "agent" || r === "bot") return "agent";
+        if (r === "user") return "user";
+        if (r === "error") return "error";
+        return "system";
+      }
+
+      function renderMessages() {
+        el.chatBox.innerHTML = "";
+        if (messages.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "hint";
+          empty.textContent = "暂无聊天记录。";
+          el.chatBox.appendChild(empty);
+          return;
+        }
+
+        messages.forEach((m) => {
+          const box = document.createElement("div");
+          box.className = `msg ${m.role}`;
+          const meta = document.createElement("div");
+          meta.className = "msg-meta";
+          meta.textContent = m.meta || "";
+          const body = document.createElement("div");
+          body.textContent = m.text;
+          box.appendChild(meta);
+          box.appendChild(body);
+          el.chatBox.appendChild(box);
+        });
+        el.chatBox.scrollTop = el.chatBox.scrollHeight;
+      }
+
+      function newSessionId() {
+        const d = new Date();
+        const stamp = d.toISOString().replace(/[.:TZ-]/g, "").slice(0, 17);
+        const rand = Math.random().toString(36).slice(2, 8);
+        return `chat_${stamp}_${rand}`;
+      }
+
+      function setActiveSession(sessionId) {
+        activeSessionId = String(sessionId || "").trim();
+        if (activeSessionId) {
+          localStorage.setItem(activeSessionKey, activeSessionId);
+        } else {
+          localStorage.removeItem(activeSessionKey);
+        }
+        refreshSessionSelect();
+      }
+
+      function refreshSessionSelect() {
+        el.sessionSelect.innerHTML = "";
+        sessions.forEach((item) => {
+          const contextId = String(item.context_id || item.session_id || "").trim();
+          if (!contextId) return;
+          const option = document.createElement("option");
+          option.value = contextId;
+          const updatedAt = String(item.updated_at || "").trim();
+          option.textContent = updatedAt ? `${contextId} · ${updatedAt}` : contextId;
+          if (contextId === activeSessionId) {
+            option.selected = true;
+          }
+          el.sessionSelect.appendChild(option);
+        });
+      }
+
+      function upsertSession(sessionId) {
+        const id = String(sessionId || "").trim();
+        if (!id) return;
+        const nowIso = new Date().toISOString();
+        sessions = sessions.filter((s) => String(s.context_id || s.session_id || "").trim() !== id);
+        sessions.unshift({ context_id: id, session_id: id, updated_at: nowIso });
+        refreshSessionSelect();
+      }
+
+      async function refreshSessions() {
+        const resp = await requestJson("/api/v1/chat/sessions", {
+          method: "GET",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+        });
+        sessions = Array.isArray(resp.sessions) ? resp.sessions : [];
+        refreshSessionSelect();
+      }
+
+      async function loadSession(sessionId) {
+        const id = String(sessionId || "").trim();
+        if (!id) {
+          throw new Error("session_id 为空");
+        }
+        const resp = await requestJson(`/api/v1/chat/sessions/${encodeURIComponent(id)}?limit=120`, {
+          method: "GET",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+        });
+        const loaded = Array.isArray(resp.messages) ? resp.messages : [];
+        messages.length = 0;
+        renderedJobs.clear();
+        loaded.forEach((item) => {
+          const role = normalizeRole(item.role);
+          const text = String(item.text || "").trim();
+          if (!text) return;
+          const ts = String(item.ts || "").trim();
+          messages.push({ role, text, meta: ts ? `LOADED · ${ts}` : `LOADED · ${nowTime()}` });
+        });
+        setActiveSession(id);
+        upsertSession(id);
+        renderMessages();
+      }
+
+      async function deleteSession(sessionId) {
+        const id = String(sessionId || "").trim();
+        if (!id) {
+          throw new Error("session_id 为空");
+        }
+        await requestJson(`/api/v1/chat/sessions/${encodeURIComponent(id)}`, {
+          method: "DELETE",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+        });
+        sessions = sessions.filter((s) => String(s.context_id || s.session_id || "").trim() !== id);
+        if (activeSessionId === id) {
+          setActiveSession("");
+          messages.length = 0;
+          renderedJobs.clear();
+          renderMessages();
+        }
+        refreshSessionSelect();
+      }
+
+      function resolveContextId(result) {
+        if (!result || typeof result !== "object") return "";
+        const direct = String(result.context_id || result.session_id || "").trim();
+        if (direct) return direct;
+        const sessionObj = result.session && typeof result.session === "object" ? result.session : {};
+        return String(sessionObj.context_id || sessionObj.session_id || "").trim();
+      }
+
+      function appendAgentOutput(taskResult) {
+        if (!taskResult || !taskResult.job_id) return;
+        if (renderedJobs.has(taskResult.job_id)) return;
+        renderedJobs.add(taskResult.job_id);
+
+        if (taskResult.status === "failed") {
+          pushMessage("error", `任务失败(job=${taskResult.job_id})\n${taskResult.error || "unknown error"}`, `ERROR · ${nowTime()}`);
+          return;
+        }
+
+        const result = taskResult.result || {};
+        const trace = result.routing_trace && typeof result.routing_trace === "object" ? result.routing_trace : {};
+        const stages = Array.isArray(trace.stages) ? trace.stages : [];
+
+        stages.forEach((stage, idx) => {
+          const subtasks = Array.isArray(stage.subtasks) ? stage.subtasks : [];
+          subtasks.forEach((item, subIdx) => {
+            const agent = item.agent || "agent";
+            const subtaskText = String(item.task || "").trim();
+            const reply = String(item.reply || "").trim() || "(无文本输出)";
+            const text = subtaskText ? `子任务: ${subtaskText}\n\n${reply}` : reply;
+            pushMessage("agent", text, `Stage ${idx + 1}.${subIdx + 1} · ${agent} · ${nowTime()}`);
+          });
+        });
+
+        const finalReply = String(result.reply || "").trim();
+        if (finalReply) {
+          pushMessage("agent", finalReply, `Final Reply · ${nowTime()}`);
+        } else if (stages.length === 0) {
+          pushMessage("system", `任务完成(job=${taskResult.job_id})，但无文本输出。`, `SYSTEM · ${nowTime()}`);
+        }
+
+        const contextId = resolveContextId(result);
+        if (contextId) {
+          setActiveSession(contextId);
+          upsertSession(contextId);
+        }
+      }
+
+      function stopPolling() {
+        if (pollingTimer) {
+          clearInterval(pollingTimer);
+          pollingTimer = null;
+        }
+      }
+
+      async function queryJob(jobId) {
+        const id = String(jobId || "").trim();
+        if (!id) throw new Error("job_id 为空");
+        const resp = await requestJson(`/api/v1/jobs/${encodeURIComponent(id)}`, {
+          method: "GET",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+        });
+        if (resp.status === "completed" || resp.status === "failed") {
+          appendAgentOutput(resp);
+        }
+        return resp;
+      }
+
+      function startPolling(jobId) {
+        stopPolling();
+        const cfg = getConfig();
+        const delay = Math.max(500, Number(cfg.pollMs) || 2000);
+        pollingTimer = setInterval(async () => {
+          try {
+            const data = await queryJob(jobId);
+            if (data.status === "completed" || data.status === "failed") {
+              stopPolling();
+              setSessionStatus(`任务完成: ${data.status}`, data.status === "failed" ? "error" : "ok");
+            }
+          } catch (err) {
+            stopPolling();
+            setSessionStatus(`轮询失败: ${err.message || err}`, "error");
+            pushMessage("error", String(err.message || err), `ERROR · ${nowTime()}`);
+          }
+        }, delay);
+      }
+
+      function ensureSession() {
+        if (!activeSessionId) {
+          const id = newSessionId();
+          setActiveSession(id);
+          upsertSession(id);
+          pushMessage("system", `已创建新会话: ${id}`, `SYSTEM · ${nowTime()}`);
+        }
+        return activeSessionId;
+      }
+
+      function normalizeMode(raw) {
+        const mode = String(raw || "chat").trim().toLowerCase();
+        if (mode === "chat") return "chat";
+        return mode || "chat";
+      }
+
+      async function sendChatMessage(text) {
+        const userText = String(text || "").trim();
+        if (!userText) return;
+
+        const contextId = ensureSession();
+        pushMessage("user", userText, `USER · ${nowTime()}`);
+
+        const mode = normalizeMode(el.chatMode.value);
+        const asyncMode = !!el.chatAsync.checked;
+        const payload = {
+          task: userText,
+          async_mode: asyncMode,
+          mode,
+          context_id: contextId,
+          output_path: null,
+          agent_hint: null,
+          skill_hint: null,
+          routing_strategy: null,
+          webhook_url: null,
+          webhook_token: null,
+          callback_headers: {},
+        };
+
+        pushMessage("system", `已发送（mode=${mode}, async=${asyncMode ? "true" : "false"}）`, `SYSTEM · ${nowTime()}`);
+
+        const resp = await requestJson("/api/v1/task", {
+          method: "POST",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify(payload),
+        });
+
+        el.currentJob.value = resp.job_id || "";
+        if (asyncMode && resp.job_id) {
+          setSessionStatus(`异步任务已提交: ${resp.job_id}`, "ok");
+          startPolling(resp.job_id);
+        } else {
+          appendAgentOutput(resp);
+          setSessionStatus(`任务完成: ${resp.status || "completed"}`, "ok");
+        }
+      }
+
+      async function initSessionGreeting(sessionId) {
+        const id = String(sessionId || "").trim();
+        if (!id) throw new Error("session_id 为空");
+
+        const payload = {
+          task: "/new",
+          async_mode: false,
+          mode: "chat",
+          context_id: id,
+          output_path: null,
+          agent_hint: null,
+          skill_hint: null,
+          routing_strategy: null,
+          webhook_url: null,
+          webhook_token: null,
+          callback_headers: {},
+        };
+        const resp = await requestJson("/api/v1/task", {
+          method: "POST",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify(payload),
+        });
+        el.currentJob.value = resp.job_id || "";
+        appendAgentOutput(resp);
+      }
+
+      async function handleCommand(raw) {
+        const text = String(raw || "").trim();
+        if (!text.startsWith("/")) return false;
+        const cmd = text.toLowerCase();
+
+        if (cmd === "/new") {
+          const id = newSessionId();
+          setActiveSession(id);
+          upsertSession(id);
+          messages.length = 0;
+          renderedJobs.clear();
+          renderMessages();
+          setSessionStatus(`新会话初始化中: ${id}`, "ok");
+          pushMessage("system", `已创建并切换到新会话: ${id}`, `SYSTEM · ${nowTime()}`);
+          await initSessionGreeting(id);
+          setSessionStatus(`新会话已就绪: ${id}`, "ok");
+          return true;
+        }
+
+        if (cmd === "/quit") {
+          stopPolling();
+          setSessionStatus("已退出当前会话", "ok");
+          pushMessage("system", `会话已退出: ${activeSessionId || "(none)"}`, `SYSTEM · ${nowTime()}`);
+          setActiveSession("");
+          return true;
+        }
+
+        if (cmd === "/interrupt") {
+          stopPolling();
+          setSessionStatus("已中断轮询", "ok");
+          pushMessage("system", `已中断任务轮询。当前job=${el.currentJob.value || "(none)"}`, `SYSTEM · ${nowTime()}`);
+          return true;
+        }
+
+        pushMessage("error", `未知指令: ${text}`, `ERROR · ${nowTime()}`);
+        return true;
+      }
+
+      async function onSend() {
+        const raw = el.chatInput.value || "";
+        if (!raw.trim()) return;
+        el.chatInput.value = "";
+
+        try {
+          const handled = await handleCommand(raw);
+          if (handled) return;
+          await sendChatMessage(raw);
+        } catch (err) {
+          setSessionStatus(err.message || String(err), "error");
+          pushMessage("error", String(err.message || err), `ERROR · ${nowTime()}`);
+          logMini(`发送失败: ${err.message || err}`);
+        }
+      }
+
+      el.btnSend.addEventListener("click", onSend);
+      el.chatInput.addEventListener("keydown", (event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+          event.preventDefault();
+          onSend();
+        }
+      });
+
+      el.btnClearChat.addEventListener("click", () => {
+        messages.length = 0;
+        renderedJobs.clear();
+        renderMessages();
+      });
+
+      el.btnQueryJob.addEventListener("click", async () => {
+        try {
+          const jobId = (el.currentJob.value || "").trim();
+          const result = await queryJob(jobId);
+          setSessionStatus(`Job状态: ${result.status || "unknown"}`, result.status === "failed" ? "error" : "ok");
+        } catch (err) {
+          setSessionStatus(err.message || String(err), "error");
+          pushMessage("error", String(err.message || err), `ERROR · ${nowTime()}`);
+        }
+      });
+
+      el.btnRefresh.addEventListener("click", async () => {
+        try {
+          await refreshSessions();
+          setSessionStatus("会话列表已刷新", "ok");
+        } catch (err) {
+          setSessionStatus(err.message || String(err), "error");
+        }
+      });
+
+      el.btnLoad.addEventListener("click", async () => {
+        try {
+          const selected = String(el.sessionSelect.value || "").trim();
+          await loadSession(selected);
+          setSessionStatus(`已加载会话: ${selected}`, "ok");
+        } catch (err) {
+          setSessionStatus(err.message || String(err), "error");
+          pushMessage("error", String(err.message || err), `ERROR · ${nowTime()}`);
+        }
+      });
+
+      el.btnNew.addEventListener("click", async () => {
+        try {
+          const id = newSessionId();
+          setActiveSession(id);
+          upsertSession(id);
+          messages.length = 0;
+          renderedJobs.clear();
+          renderMessages();
+          setSessionStatus(`新会话初始化中: ${id}`, "ok");
+          pushMessage("system", `已创建并切换到新会话: ${id}`, `SYSTEM · ${nowTime()}`);
+          await initSessionGreeting(id);
+          setSessionStatus(`新会话已就绪: ${id}`, "ok");
+        } catch (err) {
+          setSessionStatus(err.message || String(err), "error");
+          pushMessage("error", String(err.message || err), `ERROR · ${nowTime()}`);
+        }
+      });
+
+      el.btnDelete.addEventListener("click", async () => {
+        try {
+          const selected = String(el.sessionSelect.value || activeSessionId || "").trim();
+          if (!selected) throw new Error("请选择要删除的会话");
+          await deleteSession(selected);
+          setSessionStatus(`已删除会话: ${selected}`, "ok");
+          pushMessage("system", `会话已删除: ${selected}`, `SYSTEM · ${nowTime()}`);
+        } catch (err) {
+          setSessionStatus(err.message || String(err), "error");
+          pushMessage("error", String(err.message || err), `ERROR · ${nowTime()}`);
+        }
+      });
+
+      el.sessionSelect.addEventListener("dblclick", async () => {
+        const selected = String(el.sessionSelect.value || "").trim();
+        if (!selected) return;
+        try {
+          await loadSession(selected);
+          setSessionStatus(`已加载会话: ${selected}`, "ok");
+        } catch (err) {
+          setSessionStatus(err.message || String(err), "error");
+        }
+      });
+
+      (async () => {
+        renderMessages();
+        const storedSession = String(localStorage.getItem(activeSessionKey) || "").trim();
+        if (storedSession) {
+          activeSessionId = storedSession;
+        }
+
+        try {
+          await refreshSessions();
+          if (activeSessionId) {
+            const exists = sessions.some((s) => String(s.context_id || s.session_id || "").trim() === activeSessionId);
+            if (exists) {
+              await loadSession(activeSessionId);
+              setSessionStatus(`恢复会话: ${activeSessionId}`, "ok");
+            } else {
+              setActiveSession("");
+              setSessionStatus("已刷新会话列表", "ok");
+            }
+          } else {
+            setSessionStatus("已刷新会话列表", "ok");
+          }
+        } catch (err) {
+          setSessionStatus(`初始化失败: ${err.message || err}`, "error");
+          logMini(`初始化失败: ${err.message || err}`);
+        }
+      })();
+    </script>
+  </body>
+</html>

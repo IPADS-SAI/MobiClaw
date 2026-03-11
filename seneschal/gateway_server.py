@@ -17,11 +17,15 @@ import hmac
 import json
 import mimetypes
 import os
+import re
+import shutil
+from collections import deque
 from pathlib import Path
 from contextlib import asynccontextmanager
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Any
 
@@ -100,7 +104,7 @@ class TaskRequest(BaseModel):
     task: str
     async_mode: bool = Field(default=False)
     output_path: str | None = None
-    mode: str = Field(default="router")
+    mode: str = Field(default="chat")
     agent_hint: str | None = None
     skill_hint: str | None = None
     routing_strategy: str | None = None
@@ -151,9 +155,11 @@ _JOB_CONTEXT: dict[str, JobContext] = {}
 _JOB_LOCK = asyncio.Lock()
 _MAIN_LOOP: asyncio.AbstractEventLoop | None = None
 _FEISHU_WS_THREAD: threading.Thread | None = None
+_WEBUI_CHAT = Path(__file__).resolve().parent / "webui" / "gateway_chat.html"
 _WEBUI_INDEX = Path(__file__).resolve().parent / "webui" / "gateway_console.html"
 _WEBUI_SETTINGS = Path(__file__).resolve().parent / "webui" / "gateway_settings.html"
 _ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+_CHAT_SESSION_NAME_RE = re.compile(r"^(?P<prefix>.+)-chat-(?P<context_id>.+)$")
 _ENV_SETTINGS_SCHEMA: list[dict[str, Any]] = [
     {
         "id": "runtime",
@@ -161,6 +167,7 @@ _ENV_SETTINGS_SCHEMA: list[dict[str, Any]] = [
         "items": [
             {"key": "SENESCHAL_LOG_LEVEL", "label": "日志级别", "type": "select", "options": ["DEBUG", "INFO", "WARNING", "ERROR"]},
             {"key": "SENESCHAL_FILE_WRITE_ROOT", "label": "文件输出根目录", "type": "text"},
+            {"key": "SENESCHAL_CHAT_SESSION_ROOT", "label": "Chat 会话目录", "type": "text"},
         ],
     },
     {
@@ -230,7 +237,7 @@ _ENV_SETTINGS_SCHEMA: list[dict[str, Any]] = [
         "id": "routing",
         "title": "Routing",
         "items": [
-            {"key": "SENESCHAL_ROUTING_DEFAULT_MODE", "label": "默认模式", "type": "select", "options": ["router", "intelligent", "worker", "steward", "auto"]},
+            {"key": "SENESCHAL_ROUTING_DEFAULT_MODE", "label": "默认模式", "type": "select", "options": ["chat", "router", "intelligent", "worker", "steward", "auto"]},
             {"key": "SENESCHAL_ROUTING_STRATEGY", "label": "路由策略", "type": "text"},
             {"key": "SENESCHAL_ALLOW_LEGACY_MODE", "label": "允许 legacy 模式(0/1)", "type": "text"},
             {"key": "SENESCHAL_ROUTING_MAX_SUBTASKS", "label": "最大子任务数", "type": "number"},
@@ -273,6 +280,234 @@ _ENV_SETTINGS_SCHEMA: list[dict[str, Any]] = [
         ],
     },
 ]
+
+
+def _utc_now_iso() -> str:
+    """返回 UTC 时间 ISO 字符串。"""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _chat_session_root_dir() -> Path:
+    """返回 chat session 根目录。"""
+    configured = (os.environ.get("SENESCHAL_CHAT_SESSION_ROOT") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path(__file__).resolve().parents[1] / ".mobiclaw" / "session"
+
+
+def _normalize_context_id(raw: str | None) -> str:
+    """规范化 context_id，避免非法路径字符。"""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"[^0-9A-Za-z._-]+", "-", text)
+    return text.strip("-")
+
+
+def _parse_chat_session_dir_name(name: str) -> tuple[str, str] | None:
+    """从目录名解析时间前缀与 context_id。"""
+    matched = _CHAT_SESSION_NAME_RE.match(name.strip())
+    if not matched:
+        return None
+    prefix = str(matched.group("prefix") or "").strip()
+    context_id = _normalize_context_id(matched.group("context_id"))
+    if not prefix or not context_id:
+        return None
+    return prefix, context_id
+
+
+def _scan_chat_session_dirs() -> list[dict[str, Any]]:
+    """扫描 session 根目录，按目录名解析会话并按更新时间倒序返回。"""
+    root = _chat_session_root_dir()
+    if not root.exists() or not root.is_dir():
+        return []
+
+    records: list[dict[str, Any]] = []
+    for child in root.iterdir():
+        if not child.is_dir():
+            continue
+        parsed = _parse_chat_session_dir_name(child.name)
+        if parsed is None:
+            continue
+        _, context_id = parsed
+        try:
+            stat = child.stat()
+        except OSError:
+            continue
+        updated_ts = float(stat.st_mtime)
+        updated_at = datetime.fromtimestamp(updated_ts, tz=timezone.utc).isoformat()
+        records.append(
+            {
+                "context_id": context_id,
+                "session_id": context_id,
+                "dir_name": child.name,
+                "path": str(child.resolve()),
+                "updated_ts": updated_ts,
+                "updated_at": updated_at,
+            }
+        )
+
+    records.sort(key=lambda item: float(item.get("updated_ts", 0.0)), reverse=True)
+    return records
+
+
+def _latest_session_dir_for_context(context_id: str) -> Path | None:
+    """返回指定 context_id 最新会话目录。"""
+    normalized = _normalize_context_id(context_id)
+    if not normalized:
+        return None
+    candidates = [item for item in _scan_chat_session_dirs() if item.get("context_id") == normalized]
+    if not candidates:
+        return None
+    path = str(candidates[0].get("path") or "").strip()
+    if not path:
+        return None
+    target = Path(path)
+    if not target.exists() or not target.is_dir():
+        return None
+    return target
+
+
+def _ensure_session_dir_for_context(context_id: str) -> Path:
+    """确保 context_id 对应目录存在；不存在则按约定命名创建。"""
+    normalized = _normalize_context_id(context_id)
+    if not normalized:
+        raise ValueError("context_id is empty")
+
+    existing = _latest_session_dir_for_context(normalized)
+    if existing is not None:
+        return existing
+
+    root = _chat_session_root_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    dir_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}-chat-{normalized}"
+    session_dir = root / dir_name
+    session_dir.mkdir(parents=True, exist_ok=True)
+    return session_dir
+
+
+def _resolve_context_id(explicit_context_id: str | None, result: dict[str, Any] | None = None) -> str | None:
+    """从显式参数或结果对象中解析 context_id。"""
+    explicit = _normalize_context_id(explicit_context_id)
+    if explicit:
+        return explicit
+    if not isinstance(result, dict):
+        return None
+    for key in ("context_id", "session_id"):
+        value = _normalize_context_id(result.get(key))
+        if value:
+            return value
+    session_obj = result.get("session")
+    if isinstance(session_obj, dict):
+        for key in ("context_id", "session_id"):
+            value = _normalize_context_id(session_obj.get(key))
+            if value:
+                return value
+    return None
+
+
+def _append_history_line(history_path: Path, record: dict[str, Any]) -> None:
+    """追加写入单条 JSONL 记录。"""
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    with history_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def _append_chat_history(
+    *,
+    context_id: str | None,
+    mode: str,
+    job_id: str,
+    user_text: str,
+    assistant_text: str,
+    status: str,
+) -> None:
+    """按约定写入 session 目录下 history.jsonl。"""
+    resolved = _normalize_context_id(context_id)
+    if not resolved:
+        return
+    try:
+        session_dir = _ensure_session_dir_for_context(resolved)
+    except Exception:
+        logger.exception("Failed to ensure session directory for context_id=%s", resolved)
+        return
+
+    history_file = session_dir / "history.jsonl"
+    ts = _utc_now_iso()
+    shared_meta = {
+        "job_id": job_id,
+        "mode": str(mode or ""),
+        "status": str(status or ""),
+        "context_id": resolved,
+    }
+
+    user_message = str(user_text or "").strip()
+    if user_message:
+        _append_history_line(
+            history_file,
+            {
+                "ts": ts,
+                "role": "user",
+                "name": "user",
+                "text": user_message,
+                "meta": shared_meta,
+            },
+        )
+
+    assistant_message = str(assistant_text or "").strip()
+    if assistant_message:
+        _append_history_line(
+            history_file,
+            {
+                "ts": ts,
+                "role": "assistant",
+                "name": "assistant",
+                "text": assistant_message,
+                "meta": shared_meta,
+            },
+        )
+
+
+def _read_recent_session_messages(session_dir: Path, limit: int) -> list[dict[str, Any]]:
+    """读取会话目录中 history.jsonl 最近 N 条消息。"""
+    history_file = session_dir / "history.jsonl"
+    if not history_file.exists() or not history_file.is_file():
+        return []
+
+    max_items = max(1, int(limit or 20))
+    items: deque[dict[str, Any]] = deque(maxlen=max_items)
+    try:
+        with history_file.open("r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    parsed = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(parsed, dict):
+                    continue
+                text = str(parsed.get("text") or "").strip()
+                if not text:
+                    continue
+                role = str(parsed.get("role") or "assistant").strip().lower() or "assistant"
+                if role not in {"user", "assistant", "system", "error"}:
+                    role = "assistant"
+                meta = parsed.get("meta")
+                items.append(
+                    {
+                        "ts": str(parsed.get("ts") or ""),
+                        "role": role,
+                        "name": str(parsed.get("name") or role),
+                        "text": text,
+                        "meta": meta if isinstance(meta, dict) else {},
+                    }
+                )
+    except OSError:
+        logger.exception("Failed to read history.jsonl from session dir: %s", session_dir)
+        return []
+    return list(items)
 
 
 @asynccontextmanager
@@ -761,6 +996,20 @@ async def _run_job(
             routing_strategy=routing_strategy,
             context_id=context_id,
         )
+        resolved_context_id = _resolve_context_id(context_id, result)
+        if resolved_context_id:
+            result = dict(result or {})
+            result.setdefault("context_id", resolved_context_id)
+            result.setdefault("session_id", resolved_context_id)
+        if (mode or "").strip().lower() != "chat":
+            _append_chat_history(
+                context_id=resolved_context_id,
+                mode=mode,
+                job_id=job_id,
+                user_text=task,
+                assistant_text=str((result or {}).get("reply", "")),
+                status="completed",
+            )
         result = _decorate_result_with_files(job_id, result, request=None, cfg=cfg)
         completed = TaskResult(job_id=job_id, status="completed", result=result)
         async with _JOB_LOCK:
@@ -785,10 +1034,24 @@ async def _run_job(
                 if current and current.status == "completed":
                     current.error = f"callback_failed: {exc}"
     except Exception as exc:
+        resolved_context_id = _resolve_context_id(context_id, None)
+        if (mode or "").strip().lower() != "chat":
+            _append_chat_history(
+                context_id=resolved_context_id,
+                mode=mode,
+                job_id=job_id,
+                user_text=task,
+                assistant_text=str(exc),
+                status="failed",
+            )
         failed = TaskResult(
             job_id=job_id,
             status="failed",
-            result={"error": str(exc)},
+            result={
+                "error": str(exc),
+                "context_id": resolved_context_id,
+                "session_id": resolved_context_id,
+            },
             error=str(exc),
         )
         async with _JOB_LOCK:
@@ -808,7 +1071,7 @@ async def health() -> dict[str, str]:
 @app.get("/", include_in_schema=False)
 async def root() -> RedirectResponse:
     """根路径默认跳转到控制台页面。"""
-    return RedirectResponse(url="/console", status_code=307)
+    return RedirectResponse(url="/console/chat", status_code=307)
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -826,6 +1089,17 @@ async def gateway_console() -> HTMLResponse:
             status_code=404,
         )
     return HTMLResponse(content=_WEBUI_INDEX.read_text(encoding="utf-8"))
+
+
+@app.get("/console/chat", response_class=HTMLResponse, include_in_schema=False)
+async def gateway_chat() -> HTMLResponse:
+    """返回内置网关聊天页面。"""
+    if not _WEBUI_CHAT.exists():
+        return HTMLResponse(
+            content="<h1>Gateway Chat Not Found</h1><p>missing seneschal/webui/gateway_chat.html</p>",
+            status_code=404,
+        )
+    return HTMLResponse(content=_WEBUI_CHAT.read_text(encoding="utf-8"))
 
 
 @app.get("/console/settings", response_class=HTMLResponse, include_in_schema=False)
@@ -906,8 +1180,111 @@ async def submit_task(
         routing_strategy=request.routing_strategy,
         context_id=request.context_id,
     )
+    resolved_context_id = _resolve_context_id(request.context_id, result)
+    if resolved_context_id:
+        result = dict(result or {})
+        result.setdefault("context_id", resolved_context_id)
+        result.setdefault("session_id", resolved_context_id)
+    if (request.mode or "").strip().lower() != "chat":
+        _append_chat_history(
+            context_id=resolved_context_id,
+            mode=request.mode,
+            job_id=job_id,
+            user_text=request.task,
+            assistant_text=str((result or {}).get("reply", "")),
+            status="completed",
+        )
     result = _decorate_result_with_files(job_id, result, request=raw_request, cfg=cfg)
     return TaskResult(job_id=job_id, status="completed", result=result)
+
+
+@app.get("/api/v1/chat/sessions")
+async def list_chat_sessions(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    """列出历史 chat session（按更新时间倒序）。"""
+    cfg = load_config()
+    _ensure_auth(authorization, cfg)
+    sessions = _scan_chat_session_dirs()
+    for item in sessions:
+        item.pop("updated_ts", None)
+    return {"sessions": sessions}
+
+
+@app.get("/api/v1/chat/sessions/{context_id}")
+async def get_chat_session(
+    context_id: str,
+    limit: int = 20,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """加载指定 chat session 的摘要与最近消息。"""
+    cfg = load_config()
+    _ensure_auth(authorization, cfg)
+
+    normalized = _normalize_context_id(context_id)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="context_id is empty")
+
+    session_dir = _latest_session_dir_for_context(normalized)
+    if session_dir is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    try:
+        stat = session_dir.stat()
+        updated_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+    except OSError:
+        updated_at = ""
+
+    recent_messages = _read_recent_session_messages(session_dir, limit=max(1, min(limit, 200)))
+    return {
+        "context_id": normalized,
+        "session_id": normalized,
+        "summary": {
+            "context_id": normalized,
+            "session_id": normalized,
+            "dir_name": session_dir.name,
+            "path": str(session_dir.resolve()),
+            "updated_at": updated_at,
+            "message_count": len(recent_messages),
+        },
+        "messages": recent_messages,
+    }
+
+
+@app.delete("/api/v1/chat/sessions/{context_id}")
+async def delete_chat_session(
+    context_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """删除指定 context_id 关联的 chat session 目录。"""
+    cfg = load_config()
+    _ensure_auth(authorization, cfg)
+
+    normalized = _normalize_context_id(context_id)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="context_id is empty")
+
+    matched_dirs: list[Path] = []
+    for item in _scan_chat_session_dirs():
+        item_context_id = _normalize_context_id(str(item.get("context_id") or ""))
+        path_str = str(item.get("path") or "").strip()
+        if item_context_id != normalized or not path_str:
+            continue
+        matched_dirs.append(Path(path_str))
+
+    if not matched_dirs:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    deleted = 0
+    for directory in matched_dirs:
+        if not directory.exists():
+            continue
+        shutil.rmtree(directory, ignore_errors=False)
+        deleted += 1
+
+    return {
+        "ok": True,
+        "context_id": normalized,
+        "deleted": deleted,
+    }
 
 
 @app.get("/api/v1/jobs/{job_id}", response_model=TaskResult)
