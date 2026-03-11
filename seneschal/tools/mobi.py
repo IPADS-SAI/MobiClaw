@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,8 @@ from agentscope.tool import ToolResponse
 
 from ..config import MOBI_AGENT_CONFIG
 from .mock_data import get_mock_action_result, get_mock_collect_result
+
+logger = logging.getLogger(__name__)
 
 
 def _load_execution_from_data_dir(data_dir: str) -> dict:
@@ -69,6 +72,7 @@ def _extract_summary_from_execution(collected_data: dict[str, Any]) -> dict[str,
 
 def _collect_request(task_desc: str, timeout: int = 120) -> dict[str, Any]:
     api_url = f"{MOBI_AGENT_CONFIG['base_url']}/api/v1/collect"
+    logger.info("mobi.collect.request url=%s task_desc=%s", api_url, (task_desc or "")[:120])
     headers = {
         "Authorization": f"Bearer {MOBI_AGENT_CONFIG['api_key']}",
         "Content-Type": "application/json",
@@ -93,6 +97,7 @@ async def call_mobi_collect_verified(task_desc: str, max_retries: int = 2) -> To
     try:
         raw = _collect_request(task_desc, timeout=180)
         success, message, collected_data = _normalize_collect_result(raw)
+        logger.info("mobi.collect.result success=%s message=%s", success, (message or "")[:120])
         if not success:
             return ToolResponse(
                 content=[
@@ -148,6 +153,7 @@ async def call_mobi_collect_verified(task_desc: str, max_retries: int = 2) -> To
 
 async def call_mobi_action(action_type: str, payload: str) -> ToolResponse:
     """指挥 MobiAgent 执行手机端的 GUI 操作。"""
+    logger.info("mobi.action.request action_type=%s", action_type)
     try:
         try:
             payload_dict = json.loads(payload) if isinstance(payload, str) else payload

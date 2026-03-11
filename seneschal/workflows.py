@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,8 @@ from agentscope.message import Msg
 from .agents import create_steward_agent, create_user_agent, create_worker_agent
 from .dailytasks.runner import run_daily_tasks
 from .orchestrator import run_orchestrated_task
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_response_text(response: Any) -> str:
@@ -113,6 +116,8 @@ async def run_gateway_task(
     返回值说明：
         dict[str, Any]: 编排执行结果。
     """
+    logger.info("workflows.run_gateway_task mode=%s agent_hint=%s task_preview=%s",
+                mode, agent_hint or "", (task or "")[:120].replace("\n", " "))
     return await run_orchestrated_task(
         task=task,
         output_path=output_path,
@@ -142,7 +147,7 @@ async def run_demo_conversation() -> None:
     print("-" * 70)
     print()
 
-    preset_message = "开始今日的数据整理和分析，给出最近活动的总结和待办事项。"
+    preset_message = "开始今日的数据整理和分析，给出最近的待办事项。"
     print(f"[User]: {preset_message}")
     print()
 
@@ -231,6 +236,8 @@ async def run_agent_task(
 
     print("[Orchestrator 正在路由与执行...]")
     print("-" * 70)
+    logger.info("workflows.run_agent_task mode=%s agent_hint=%s task_preview=%s",
+                mode, agent_hint or "", (task or "")[:120].replace("\n", " "))
 
     try:
         result = await run_orchestrated_task(

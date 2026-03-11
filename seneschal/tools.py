@@ -17,6 +17,7 @@ file_tools = importlib.import_module("seneschal.tools.file")
 web = importlib.import_module("seneschal.tools.web")
 papers = importlib.import_module("seneschal.tools.papers")
 office = importlib.import_module("seneschal.tools.office")
+ocr = importlib.import_module("seneschal.tools.ocr")
 
 call_mobi_action = mobi.call_mobi_action
 call_mobi_collect = mobi.call_mobi_collect
@@ -42,6 +43,7 @@ create_pdf_from_text = office.create_pdf_from_text
 read_xlsx_summary = office.read_xlsx_summary
 write_xlsx_from_records = office.write_xlsx_from_records
 write_xlsx_from_rows = office.write_xlsx_from_rows
+extract_image_text_ocr = ocr.extract_image_text_ocr
 
 __all__ = [
     "call_mobi_action",
@@ -68,4 +70,5 @@ __all__ = [
     "read_xlsx_summary",
     "write_xlsx_from_records",
     "write_xlsx_from_rows",
+    "extract_image_text_ocr",
 ]

@@ -21,11 +21,31 @@ from pathlib import Path
 import subprocess
 import base64
 import re
+import logging
 import xml.etree.ElementTree as ET
 from fastapi import FastAPI, HTTPException, Header, status
 from pydantic import BaseModel, Field
 
 from seneschal.tools.mock_data import get_mock_collect_result, get_mock_action_result
+
+def _configure_logging() -> None:
+    """Ensure gateway and orchestrator logs are visible under module startup."""
+    level_name = (os.environ.get("SENESCHAL_LOG_LEVEL", "INFO") or "INFO").strip().upper()
+    level = getattr(logging, level_name, logging.INFO)
+
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s %(levelname)s %(name)s : %(message)s",
+        )
+    else:
+        # Keep existing handlers from uvicorn, only raise/lower threshold.
+        root_logger.setLevel(level)
+
+    logging.getLogger("mobiagent_server").setLevel(level)
+
+_configure_logging()
 
 
 @dataclass

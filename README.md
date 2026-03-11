@@ -57,6 +57,10 @@ git submodule update --init --recursive
 
 ```bash
 uv sync
+
+# 安装 tesseract 中文包，用于后续可能的 OCR 需求（可选）
+sudo apt-get update
+sudo apt-get install -y tesseract-ocr-chi-sim
 ```
 
 项目要求 Python 3.12+。
@@ -222,7 +226,7 @@ python app.py --daily --daily-trigger daily
 
 #### Agent Task 模式
 
-通过`--mode`指定具体的Agen：t
+通过`--mode`指定具体的Agen：
 ```bash
 python app.py --agent-task "从 arXiv 搜索今天的 Agent 论文并总结" --mode worker
 ```
@@ -353,12 +357,21 @@ python app.py --agent-task "生成一个前端页面原型" --skill-hint web-art
 
 ### 输出文件提示机制
 
-如果提供 `--output`，当前实现只会把该路径提示追加到**最后一个子任务**，由实际执行 Agent 自行决定是否落盘。若 Agent 在回复中输出 `[File] Wrote: ...`，orchestrator 会自动收集并返回文件列表。
+当前实现会为每次任务创建独立目录：`<项目根>/outputs/job_<时间戳>/`，并在其下创建临时目录：`tmp/`。
+
+`--output` 的实际落盘规则如下：
+
+- 始终只把“最终输出文件路径”提示给**最后一个子任务**（前面的子任务不会拿到该提示）。
+- 若未提供 `--output`：默认最终输出路径为
+  ` <项目根>/outputs/job_<时间戳>/final_output.md `。
+- 若提供了相对路径（例如 `--output outputs/paper.md`）：会被拼到该 job 目录下，最终路径为
+  ` <项目根>/outputs/job_<时间戳>/outputs/paper.md `。
+- 若提供了绝对路径：出于目录隔离，当前实现会仅保留文件名并落到 job 目录下（不会写到外部绝对路径）。
 
 
-### 7) Gateway模式（类似OpenClaw Core 入口）
+## Gateway模式（类似OpenClaw Core 入口）
 
-## Gateway 模式
+
 
 启动命令：
 
