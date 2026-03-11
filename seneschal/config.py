@@ -54,7 +54,7 @@ ROUTING_CONFIG = {
     "skill_root_dir": os.environ.get("SENESCHAL_SKILL_ROOT_DIR", ""),
     "skill_max_per_subtask": max(0, int(os.environ.get("SENESCHAL_SKILL_MAX_PER_SUBTASK", "2"))),
     "skill_selector_timeout_s": max(0.5, float(os.environ.get("SENESCHAL_SKILL_SELECTOR_TIMEOUT_S", "20"))),
-    "skill_llm_rerank": os.environ.get("SENESCHAL_SKILL_LLM_RERANK", "0").strip() not in {"0", "false", "False"},
+    "skill_llm_rerank": os.environ.get("SENESCHAL_SKILL_LLM_RERANK", "1").strip() not in {"0", "false", "False"},
     "skill_rule_max_candidates": max(1, int(os.environ.get("SENESCHAL_SKILL_RULE_MAX_CANDIDATES", "8"))),
     "skill_hint_override": os.environ.get("SENESCHAL_SKILL_HINT_OVERRIDE", "1").strip() not in {"0", "false", "False"},
 }

@@ -196,7 +196,6 @@ dependencies = [
     "pyopenssl==25.1.0",
     "pyparsing==3.3.2",
     "pypdf==6.5.0",
-    "python-docx==1.1.2",
     "pyperclip==1.11.0",
     "pypika==0.50.0",
     "pyproject-hooks==1.2.0",
@@ -205,6 +204,7 @@ dependencies = [
     "python-datauri==3.0.2",
     "python-dateutil==2.9.0.post0",
     "python-docx==1.2.0",
+    "python-pptx>=0.6.23",
     "python-dotenv==1.2.1",
     "python-engineio==4.13.0",
     "python-frontmatter==1.1.0",
@@ -281,6 +281,7 @@ dependencies = [
     "yarl==1.22.0",
     "zipp==3.23.0",
     "zope-interface==8.2",
+    "markitdown",
 ]
 
 [tool.uv.workspace]

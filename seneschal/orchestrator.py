@@ -68,7 +68,8 @@ class SkillProfile:
     name: str
     description: str
     content_hint: str
-    content_full: str
+    full_content: str
+    skill_dir: str
 
 
 @dataclass
@@ -299,13 +300,13 @@ def _available_skill_profiles() -> tuple[SkillProfile, ...]:
         if not description:
             hint = _skill_content_hint(raw)
             description = hint or f"Skill {name}"
-        full_content = _strip_frontmatter(raw).strip()
         profiles.append(
             SkillProfile(
                 name=name,
                 description=description,
                 content_hint=_skill_content_hint(raw),
-                content_full=full_content,
+                full_content=raw.strip(),
+                skill_dir=str(child.resolve()),
             )
         )
     return tuple(profiles)
@@ -440,11 +441,20 @@ def _skill_prompt_context(selected_skills: list[str]) -> str:
         profile = profile_map.get(name)
         if not profile:
             continue
-        header = f"[Skill: {profile.name}]"
-        body = (profile.content_full or profile.description or profile.content_hint or "").strip()
-        if not body:
+        content = (profile.full_content or "").strip()
+        if not content:
+            content = (profile.description or profile.content_hint or "").strip()
+        if not content:
             continue
-        blocks.append(header + "\n" + body)
+        blocks.append(
+            "\n".join(
+                [
+                    f"[Skill: {profile.name}]",
+                    f"execution_dir: {profile.skill_dir}",
+                    content,
+                ]
+            )
+        )
     return "\n\n".join(blocks)
 
 

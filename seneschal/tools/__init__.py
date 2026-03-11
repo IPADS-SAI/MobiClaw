@@ -25,6 +25,14 @@ from .office import (
     write_xlsx_from_records,
     write_xlsx_from_rows,
 )
+from .ppt import (
+    create_pptx_from_outline,
+    edit_pptx,
+    insert_pptx_image,
+    read_pptx_summary,
+    set_pptx_text_style,
+)
+from .skill_runner import run_skill_script
 from .ocr import extract_image_text_ocr
 from .shell import run_shell_command
 from .web import brave_search, fetch_url_links, fetch_url_readable_text, fetch_url_text
