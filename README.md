@@ -265,6 +265,36 @@ python app.py --agent-task "从 arXiv 搜索今天的 Agent 论文并总结" --m
 - 可观测性：结果中的 `routing_trace.skills.records` 会记录候选、来源、原因和最终选择
 - 当前 `routing_trace` 还会记录 `planner_allowed_agents` 等规划约束信息，方便定位路由与规划偏差
 
+#### Skill 脚本执行（运行时）
+
+除了固定工具外，Worker 还支持通过 `run_skill_script` 在运行时调用 skill 目录中的脚本。
+
+脚本发现规则：
+- `run_skill_script` 接口参数：
+  - `command`：完整可执行命令字符串
+  - `execution_dir`：命令执行目录
+  - `timeout_s`：超时时间（可选）
+- 执行逻辑：
+  - 先进入 `execution_dir`
+  - 执行 `command`
+  - 执行完成后返回之前目录
+
+运行时示例（由 Agent 内部调用）：
+- `run_skill_script(command="python scripts/thumbnail.py input.pptx outputs/thumbs", execution_dir="/workspace/Seneschal/seneschal/skills/pptx")`
+- `run_skill_script(command="python scripts/office/unpack.py input.docx tmp/unpacked", execution_dir="/workspace/Seneschal/seneschal/skills/docx")`
+
+相关环境变量：
+- `SENESCHAL_SKILL_SCRIPT_TIMEOUT_S`：脚本超时秒数（默认 `120`）
+- `SENESCHAL_SKILL_SCRIPT_PYTHON`：Python 脚本运行时（默认当前解释器）
+- `SENESCHAL_SKILL_SCRIPT_NODE`：Node 脚本运行时（默认 `node`）
+- `SENESCHAL_SKILL_SCRIPT_BASH`：Shell 脚本运行时（默认 `bash`）
+
+说明：
+- `run_skill_script` 与 `run_shell_command` 的白名单机制独立。
+- `run_skill_script` 在运行时会读取 `execution_dir` 下的 `SKILL.md`，仅允许执行其中提到的命令。
+- `execution_dir` 必须位于 `seneschal/skills` 目录下。
+- 若 `SKILL.md` 缺失、无法提取命令，或命令不在白名单中，调用会被拒绝。
+
 ### `--agent-task` 常见示例
 
 `--context-id` 参数已经接入 CLI 与 Gateway 请求模型，当前主要作为后续多轮上下文能力的预留字段，现阶段不会改变单次执行结果。
@@ -325,7 +355,8 @@ python app.py --agent-task "生成一个前端页面原型" --skill-hint web-art
 
 如果提供 `--output`，当前实现只会把该路径提示追加到**最后一个子任务**，由实际执行 Agent 自行决定是否落盘。若 Agent 在回复中输出 `[File] Wrote: ...`，orchestrator 会自动收集并返回文件列表。
 
----
+
+### 7) Gateway模式（类似OpenClaw Core 入口）
 
 ## Gateway 模式
 
@@ -337,6 +368,35 @@ python -m seneschal.gateway_server
 
 默认监听：`http://0.0.0.0:8090`
 
+可选环境变量：
+- `SENESCHAL_GATEWAY_PORT`：自定义端口（默认 `8090`）
+- `SENESCHAL_GATEWAY_API_KEY`：网关鉴权（Bearer token）
+- `SENESCHAL_ROUTING_DEFAULT_MODE`：默认路由模式（默认 `router`）
+- `SENESCHAL_ROUTING_STRATEGY`：路由策略（默认 `llm_rule_hybrid`）
+- `SENESCHAL_ALLOW_LEGACY_MODE`：是否允许 legacy `worker/steward/auto`（默认 `1`）
+- `SENESCHAL_ROUTING_MAX_SUBTASKS`：Planner 最大子任务数（默认 `4`）
+- `SENESCHAL_ROUTING_MAX_DEPTH`：委派/路由最大深度（默认 `2`）
+- `SENESCHAL_ROUTER_TIMEOUT_S`：Router 决策超时秒数（默认 `60`，超时默认回退到 `worker`）
+- `SENESCHAL_PLANNER_TIMEOUT_S`：Planner 拆分超时秒数（默认 `60`，超时默认回退到 `worker`）
+- `SENESCHAL_SUBTASK_TIMEOUT_S`：单子任务执行超时秒数（默认 `300`）
+- `SENESCHAL_SKILL_ENABLED`：是否启用 skill 自动选择（默认 `1`）
+- `SENESCHAL_SKILL_ROOT_DIR`：skill 根目录（默认 `seneschal/skills`）
+- `SENESCHAL_SKILL_MAX_PER_SUBTASK`：每个子任务最多挂载的 skill 数（默认 `2`）
+- `SENESCHAL_SKILL_SELECTOR_TIMEOUT_S`：skill LLM 重排超时秒数（默认 `20`）
+- `SENESCHAL_SKILL_LLM_RERANK`：是否启用 LLM 重排（默认 `1`）
+- `SENESCHAL_SKILL_RULE_MAX_CANDIDATES`：规则召回候选上限（默认 `8`）
+- `SENESCHAL_SKILL_HINT_OVERRIDE`：是否允许 `skill_hint` 覆盖自动选择（默认 `1`）
+- `SENESCHAL_GATEWAY_PUBLIC_BASE_URL`：生成文件下载链接时使用的公网前缀
+- `SENESCHAL_GATEWAY_FILE_ROOT`：允许下载文件的根目录（建议设置）
+- `SENESCHAL_GATEWAY_CALLBACK_TIMEOUT`：异步回调超时秒数
+- `SENESCHAL_GATEWAY_CALLBACK_RETRY`：异步回调重试次数
+- `SENESCHAL_GATEWAY_CALLBACK_BACKOFF`：回调重试退避基数秒数
+- `FEISHU_EVENT_TRANSPORT`：飞书事件接入模式，支持 `webhook` / `long_conn` / `both` / `auto`（默认 `both`）
+- `FEISHU_APP_ID` / `FEISHU_APP_SECRET`：飞书应用机器人凭据（长连接与主动回发结果都会使用）
+- `FEISHU_VERIFICATION_TOKEN`：飞书事件订阅 token（可选）
+- `FEISHU_ENCRYPT_KEY`：飞书签名校验 key（可选）
+
+飞书长连接模式（推荐本地开发，无需公网 IP）：
 ### 当前 Gateway 能力
 
 相比旧版本只做“提交任务 -> 返回文本”，当前 Gateway 已支持：
