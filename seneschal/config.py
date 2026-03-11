@@ -39,7 +39,7 @@ RAG_CONFIG = {
     "embedding_dimensions": int(os.environ.get("SENESCHAL_RAG_EMBEDDING_DIMENSIONS", "1536")),
     "chunk_size": int(os.environ.get("SENESCHAL_RAG_CHUNK_SIZE", "512")),
     "index_file_content": os.environ.get("SENESCHAL_RAG_INDEX_FILE_CONTENT", "0").strip() not in {"0", "false", "False"},
-    "task_history_enabled": os.environ.get("SENESCHAL_RAG_TASK_HISTORY", "0").strip() not in {"0", "false", "False"},
+    "task_history_enabled": os.environ.get("SENESCHAL_RAG_ENABLED", "0").strip() not in {"0", "false", "False"},
 }
 
 # Brave Search 配置 (联网搜索)
