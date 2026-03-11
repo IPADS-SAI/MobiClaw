@@ -6,6 +6,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import logging
 from typing import Any
 
 from agentscope.message import Msg
@@ -14,6 +15,8 @@ from agentscope.tool import ToolResponse
 from ..agents import create_worker_agent
 from ..run_context import RunContext, create_run_context
 from ..tools import call_mobi_collect, weknora_add_knowledge, weknora_rag_chat
+
+logger = logging.getLogger(__name__)
 
 _TASKS_PATH = Path(__file__).with_name("tasks") / "tasks.json"
 
@@ -60,6 +63,7 @@ async def run_daily_tasks(
 ) -> dict[str, Any]:
     ctx = run_context or create_run_context()
     tasks = select_tasks(load_tasks(), trigger)
+    logger.info("dailytasks.start trigger=%s task_count=%d run_id=%s", trigger, len(tasks), ctx.run_id)
 
     ctx.log_event("task_selection", {"trigger": trigger, "task_count": len(tasks)})
 

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import logging
 import os
 import json
 
@@ -19,6 +20,8 @@ from agentscope.message import Msg, TextBlock
 from agentscope.memory import InMemoryMemory
 from agentscope.model import OpenAIChatModel
 from agentscope.tool import Toolkit, ToolResponse
+from agentscope.plan import PlanNotebook, Plan, SubTask
+
 
 from .config import MODEL_CONFIG, ROUTING_CONFIG
 from .tools import (
@@ -29,6 +32,7 @@ from .tools import (
     dblp_conference_search,
     download_file,
     edit_docx,
+    extract_image_text_ocr,
     extract_pdf_text,
     fetch_url_links,
     fetch_url_readable_text,
@@ -46,6 +50,15 @@ from .tools import (
     weknora_list_knowledge_bases,
     weknora_rag_chat,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _trim_for_log(text: str, max_chars: int = 260) -> str:
+    """裁剪日志显示长度，避免刷屏；不影响真实注入内容。"""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "..."
 
 
 def create_openai_model(*, stream: bool = True, temperature: float | None = None) -> OpenAIChatModel:
@@ -73,6 +86,8 @@ def _build_skill_prompt_suffix(skill_context: str | None) -> str:
         str: 可直接拼接到系统提示词末尾的约束文本；无输入时返回空字符串。
     """
     text = (skill_context or "").strip()
+    logger.debug("Skill context length(chars): %d", len(text))
+    logger.debug("Skill context: %s", _trim_for_log(text, max_chars=260))
     if not text:
         return ""
     return (
@@ -112,7 +127,7 @@ def get_agent_capability_descriptions() -> dict[str, dict[str, object]]:
                 "采集微信信息后入库并生成建议",
             ],
             boundaries=[
-                "不擅长大规模网页/论文检索",
+                "不擅长大规模网页/论文检索,不擅长直接生成总结内容",
                 "通用检索类子任务建议委派给 worker",
             ],
         ),
@@ -250,6 +265,11 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
     )
 
     toolkit.register_tool_function(
+        extract_image_text_ocr,
+        func_description="从本地图片文件中执行 OCR 识别，提取文字内容。",
+    )
+
+    toolkit.register_tool_function(
         read_docx_text,
         func_description="读取 DOCX 文档文本内容。",
     )
@@ -305,6 +325,7 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
 - 拿到候选链接后，优先使用 "fetch_url_readable_text" 抓取正文；需要原始 HTML 时再使用 "fetch_url_text"。
 - 需要从网页中发现相关链接时使用 "fetch_url_links"，再逐条抓取与筛选。
 - 需要下载论文或附件时使用 "download_file"；阅读 PDF 用 "extract_pdf_text"。
+- 需要识别图片中的文字时使用 "extract_image_text_ocr"。
 - 处理 Word/Excel/PDF 文档时，使用 docx/xlsx/pdf 相关工具完成读取或生成。
 - 需要输出文件时，可用 "write_text_file" 落盘。
 - 输出格式遵循用户要求；未指定时默认使用 Markdown。
@@ -346,7 +367,7 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
             "'send_message'(发送消息), 'set_reminder'(设置提醒), go_shop(下单购物)等。"
             "payload 参数为 JSON 格式字符串，如: "
             "'{\"title\": \"Meeting\", \"time\": \"15:00\", \"date\": \"2024-01-20\"}'。"
-            "这是数据整理流程的最后一步，根据分析结果执行具体操作。"
+            "通常是数据整理流程的最后一步，根据分析结果执行具体操作。"
         ),
     )
 
@@ -356,7 +377,7 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
             "将收集到的信息存入 WeKnora 知识库。"
             "用于持久化保存 OCR 识别的文字、对话记录、账单信息等。"
             "输入要存储的文本内容，系统会将其加入知识库供后续检索分析。"
-            "这是数据整理流程的第二步，应在收集数据后调用。"
+            "通常应在收集数据后调用。"
         ),
     )
 
@@ -367,11 +388,9 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
             "用于分析待办事项、总结账单、回答基于历史记录的问题。"
             "输入分析查询如 '基于近日活动，有哪些待办事项？' 或 '分析本月消费账单'，"
             "返回基于知识库内容的智能分析结果。"
-            "这是数据整理流程的第三步，应在存储数据后调用进行分析。"
+            "通常应在存储数据后调用进行分析。"
         ),
     )
-
-    
 
     toolkit.register_tool_function(
         weknora_knowledge_search,
@@ -531,6 +550,8 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
         delegate_to_worker,
         func_description="将子任务委派给 Worker Agent 并汇总返回结果。",
     )
+
+    plan_notebook=PlanNotebook(),
 
     sys_prompt = """你是 Seneschal 智能管家系统的核心 Agent，负责帮助用户管理个人数据和日常事务。
 

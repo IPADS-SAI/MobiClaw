@@ -39,7 +39,7 @@ from seneschal.workflows import main
 # )
 logging.basicConfig(
     level=os.environ.get("SENESCHAL_LOG_LEVEL", "INFO"),
-    format="%(levelname)s-%(name)s : %(message)s",
+    format="%(asctime)s %(levelname)s %(name)s : %(message)s",
 )
 
 

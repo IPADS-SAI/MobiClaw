@@ -13,8 +13,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import logging
 import uuid
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def _utc_now_iso() -> str:
@@ -40,6 +43,8 @@ class RunContext:
             "payload": payload,
         }
         self.events.append(event)
+        log_fn = getattr(logger, level if level in {"debug", "info", "warning", "error", "critical"} else "info", logger.info)
+        log_fn("run_context.event type=%s run_id=%s", event_type, self.run_id)
         if self.log_path:
             self.log_path.parent.mkdir(parents=True, exist_ok=True)
             with self.log_path.open("a", encoding="utf-8") as handle:

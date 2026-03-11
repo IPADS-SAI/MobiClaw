@@ -25,6 +25,7 @@ from .office import (
     write_xlsx_from_records,
     write_xlsx_from_rows,
 )
+from .ocr import extract_image_text_ocr
 from .shell import run_shell_command
 from .web import brave_search, fetch_url_links, fetch_url_readable_text, fetch_url_text
 from .weknora import (
@@ -43,10 +44,6 @@ from .weknora import (
 from ..config import WEKNORA_CONFIG
 
 logger = logging.getLogger(__name__)
-
-import logging
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 _KB_ID_CACHE: dict[str, str] = {}
 _KB_INFO_CACHE: dict[str, dict[str, Any]] = {}
