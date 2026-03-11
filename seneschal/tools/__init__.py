@@ -36,6 +36,14 @@ from .skill_runner import run_skill_script
 from .ocr import extract_image_text_ocr
 from .shell import run_shell_command
 from .web import brave_search, fetch_url_links, fetch_url_readable_text, fetch_url_text
+from .memory import (
+    read_memory,
+    update_long_term_memory,
+    store_task_result,
+    search_task_history,
+    store_steward_knowledge,
+    search_steward_knowledge,
+)
 from .weknora import (
     knowledge_chat,
     agent_chat,
@@ -505,4 +513,10 @@ __all__ = [
     "weknora_list_knowledge_bases",
     "weknora_add_knowledge",
     "weknora_rag_chat",
+    "read_memory",
+    "update_long_term_memory",
+    "store_task_result",
+    "search_task_history",
+    "store_steward_knowledge",
+    "search_steward_knowledge",
 ]

@@ -19,7 +19,7 @@ MOBI_AGENT_CONFIG = {
     "api_key": os.environ.get("MOBI_AGENT_API_KEY", "mobi-xxx"),
 }
 
-# WeKnora 配置 (知识库 API 地址)
+# WeKnora 配置 (知识库 API 地址) — legacy, used by dailytasks runner
 WEKNORA_CONFIG = {
     "base_url": os.environ.get("WEKNORA_BASE_URL", "http://localhost:8080"),
     "api_key": os.environ.get(
@@ -29,6 +29,17 @@ WEKNORA_CONFIG = {
     "knowledge_base_name": os.environ.get("WEKNORA_KB_NAME", ""),
     "agent_name": os.environ.get("WEKNORA_AGENT_NAME", ""),
     "session_id": os.environ.get("WEKNORA_SESSION_ID", "seneschal-session"),
+}
+
+# RAG 配置 (本地向量知识库)
+RAG_CONFIG = {
+    "store_path": os.environ.get("SENESCHAL_RAG_STORE_PATH", "~/.seneschal/rag_store"),
+    "collection_name": os.environ.get("SENESCHAL_RAG_COLLECTION", "seneschal_tasks"),
+    "embedding_model": os.environ.get("SENESCHAL_RAG_EMBEDDING_MODEL", "openai/text-embedding-3-small"),
+    "embedding_dimensions": int(os.environ.get("SENESCHAL_RAG_EMBEDDING_DIMENSIONS", "1536")),
+    "chunk_size": int(os.environ.get("SENESCHAL_RAG_CHUNK_SIZE", "512")),
+    "index_file_content": os.environ.get("SENESCHAL_RAG_INDEX_FILE_CONTENT", "0").strip() not in {"0", "false", "False"},
+    "task_history_enabled": os.environ.get("SENESCHAL_RAG_ENABLED", "0").strip() not in {"0", "false", "False"},
 }
 
 # Brave Search 配置 (联网搜索)
@@ -57,4 +68,10 @@ ROUTING_CONFIG = {
     "skill_llm_rerank": os.environ.get("SENESCHAL_SKILL_LLM_RERANK", "1").strip() not in {"0", "false", "False"},
     "skill_rule_max_candidates": max(1, int(os.environ.get("SENESCHAL_SKILL_RULE_MAX_CANDIDATES", "8"))),
     "skill_hint_override": os.environ.get("SENESCHAL_SKILL_HINT_OVERRIDE", "1").strip() not in {"0", "false", "False"},
+}
+
+# 长期记忆配置
+MEMORY_CONFIG = {
+    "enabled": os.environ.get("SENESCHAL_MEMORY_ENABLED", "0").strip() not in {"0", "false", "False"},
+    "file_path": os.environ.get("SENESCHAL_MEMORY_FILE", "~/.seneschal/MEMORY.md"),
 }

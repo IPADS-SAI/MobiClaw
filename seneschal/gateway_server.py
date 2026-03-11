@@ -512,6 +512,18 @@ async def _run_job(
         async with _JOB_LOCK:
             _JOB_STORE[job_id] = completed
         try:
+            from .config import RAG_CONFIG
+            if RAG_CONFIG["task_history_enabled"]:
+                from .tools import store_task_result
+                await store_task_result(
+                    job_id=job_id,
+                    task=task,
+                    reply=str((result or {}).get("reply", "")),
+                    files=(result or {}).get("files", []),
+                )
+        except Exception as exc:
+            logger.warning("Failed to store task result in RAG: %s", exc)
+        try:
             await _deliver_result(job_id, completed, cfg)
         except Exception as exc:
             async with _JOB_LOCK:

@@ -710,6 +710,12 @@ def _rule_route(task: str) -> RouteDecision:
         "总结",
         "下载",
         "pdf",
+        "历史",
+        "之前",
+        "以前",
+        "过去",
+        "任务记录",
+        "做过",
     }
     steward_keys = {
         "微信",

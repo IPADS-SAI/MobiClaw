@@ -27,7 +27,7 @@ from agentscope.tool import Toolkit, ToolResponse
 from agentscope.plan import PlanNotebook, Plan, SubTask
 
 
-from .config import MODEL_CONFIG, ROUTING_CONFIG
+from .config import MODEL_CONFIG, MEMORY_CONFIG, RAG_CONFIG, ROUTING_CONFIG
 from .tools import (
     arxiv_search,
     brave_search,
@@ -45,8 +45,13 @@ from .tools import (
     create_pdf_from_text,
     read_docx_text,
     read_xlsx_summary,
+    read_memory,
     run_skill_script,
     run_shell_command,
+    search_task_history,
+    search_steward_knowledge,
+    store_steward_knowledge,
+    update_long_term_memory,
     write_xlsx_from_records,
     write_xlsx_from_rows,
     write_text_file,
@@ -55,10 +60,6 @@ from .tools import (
     insert_pptx_image,
     read_pptx_summary,
     set_pptx_text_style,
-    weknora_add_knowledge,
-    weknora_knowledge_search,
-    weknora_list_knowledge_bases,
-    weknora_rag_chat,
 )
 
 logger = logging.getLogger(__name__)
@@ -303,6 +304,14 @@ def _build_skill_prompt_suffix(skill_context: str | None) -> str:
     )
 
 
+def _build_memory_prompt() -> str:
+    """构建长期记忆 prompt 片段（复用于所有 agent）。"""
+    if not MEMORY_CONFIG["enabled"]:
+        return ""
+    mem = read_memory()
+    return f"\n\n[长期记忆]\n{mem}\n" if mem else ""
+
+
 @dataclass
 class AgentCapability:
     """描述单个 Agent 能力边界的结构化模型。"""
@@ -338,21 +347,25 @@ def get_agent_capability_descriptions() -> dict[str, dict[str, object]]:
         ),
         AgentCapability(
             name="worker",
-            role="负责通用检索、网页阅读、学术资料收集、生成和阅读各类文档，和本地工具执行",
+            role="负责通用检索、网页阅读、学术资料收集、生成和阅读各类文档、历史任务检索、知识库检索、长期记忆管理，和本地工具执行",
             strengths=[
                 "Brave/网页/arXiv/DBLP 检索",
                 "下载文件与 PDF 文本提取",
                 "Word/Excel/PDF 文档读写与编辑",
                 "Shell 与本地文件写入",
+                "历史任务记录检索与知识库检索",
+                "长期记忆读写（记录用户偏好、事实信息等跨会话信息）",
             ],
             typical_tasks=[
                 "检索最新论文并总结",
                 "整理或生成 Word/Excel/PDF 文档",
                 "抓取网页并提炼可执行结论",
+                "查询之前做过的任务或历史记录",
+                "检索智能管家存储的知识（如手机采集的 OCR 文字、对话记录等）",
+                "记住用户偏好或更新长期记忆",
             ],
             boundaries=[
                 "不直接执行手机 GUI 操作",
-                "不负责 WeKnora 主流程编排",
             ],
         ),
     ]
@@ -521,9 +534,14 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
         write_text_file,
         func_description="写入本地文本文件，用于保存结果或日志。",
     )
+    if RAG_CONFIG["task_history_enabled"]:
+        toolkit.register_tool_function(
+            search_task_history,
+            func_description="检索历史任务执行记录和相关文档，用于回答关于之前做过的任务的问题。",
+        )
     toolkit.register_tool_function(
-        weknora_knowledge_search,
-        func_description="在 WeKnora 知识库中检索已有信息（不做 LLM 总结）。",
+        search_steward_knowledge,
+        func_description="检索本地知识库中已存储的信息（由智能管家从手机中提取并存储）。",
     )
 
     toolkit.register_tool_function(
@@ -582,9 +600,28 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
 - 需要识别图片中的文字时使用 "extract_image_text_ocr"。
 - 处理 Word/Excel/PDF 文档时，使用 docx/xlsx/pdf 相关工具完成读取或生成。
 - 需要输出文件时，可用 "write_text_file" 落盘。
+- 如果用户询问之前智能管家从手机中提取并存储的知识，使用 "search_steward_knowledge" 检索。
 - 输出格式遵循用户要求；未指定时默认使用 Markdown。
 - 必须输出最终文本结论或可执行结果；不要输出空的工具调用。
-- 不做多步长对话，输出最终结论或可执行结果。"""
+- 不做多步长对话，输出最终结论或可执行结果。
+"""
+    if RAG_CONFIG["task_history_enabled"]:
+        sys_prompt += "- 如果用户询问之前做过的任务，使用 \"search_task_history\" 检索历史记录。\n"
+
+    if MEMORY_CONFIG["enabled"]:
+        toolkit.register_tool_function(
+            update_long_term_memory,
+            func_description=(
+                "更新长期记忆文件（MEMORY.md）。传入完整新内容，覆盖写入。"
+                "用于记录用户偏好、事实信息、回答风格等需要跨会话保留的凝练信息。"
+            ),
+        )
+        sys_prompt += (
+            "- 你拥有 \"update_long_term_memory\" 工具，可更新长期记忆。"
+            "当用户明确要求记住某些偏好或信息时，先读取现有记忆内容，合并后写回。\n"
+        )
+
+    sys_prompt += _build_memory_prompt()
     sys_prompt += _build_skill_prompt_suffix(skill_context)
 
     return ReActAgent(
@@ -625,9 +662,9 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
     )
 
     toolkit.register_tool_function(
-        weknora_add_knowledge,
+        store_steward_knowledge,
         func_description=(
-            "将收集到的信息存入 WeKnora 知识库。"
+            "将收集到的信息存入本地知识库。"
             "用于持久化保存 OCR 识别的文字、对话记录、账单信息等。"
             "输入要存储的文本内容，系统会将其加入知识库供后续检索分析。"
             "通常应在收集数据后调用。"
@@ -635,24 +672,12 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
     )
 
     toolkit.register_tool_function(
-        weknora_rag_chat,
+        search_steward_knowledge,
         func_description=(
-            "基于 WeKnora 知识库进行 RAG 智能分析。"
-            "用于分析待办事项、总结账单、回答基于历史记录的问题。"
-            "输入分析查询如 '基于近日活动，有哪些待办事项？' 或 '分析本月消费账单'，"
-            "返回基于知识库内容的智能分析结果。"
-            "通常应在存储数据后调用进行分析。"
+            "检索本地知识库中已存储的信息。"
+            "用于查找之前通过 store_steward_knowledge 存入的数据（OCR 文字、对话记录等）。"
+            "检索后请根据返回的原始片段自行分析总结。"
         ),
-    )
-
-    toolkit.register_tool_function(
-        weknora_knowledge_search,
-        func_description="在 WeKnora 知识库中检索已有信息（不做 LLM 总结）。",
-    )
-
-    toolkit.register_tool_function(
-        weknora_list_knowledge_bases,
-        func_description="列出当前可用的 WeKnora 知识库。",
     )
 
     toolkit.register_tool_function(
@@ -870,7 +895,7 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
 ## 你的职责
 1. 理解用户的需求和指令
 2. 规划并执行数据收集、存储、分析和操作的完整流程
-3. 通过调用工具与 手机操作Agent如MobiAgent（手机端）和 WeKnora（知识库）协作
+3. 通过调用工具与手机操作Agent如MobiAgent（手机端）协作
 4. 必要时委派子任务给 Worker Agent（例如快速检索或命令行检查）
 
 ## 工作流程规范
@@ -891,16 +916,16 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
 - `failure_report` 内至少包含：
 - `status`, `latest_run_dir`, `latest_index_file`, `latest_screenshot_path`, `latest_reasoning`, `latest_ocr_preview`, `next_action_recommendation`
 
-### 存储 (Store)  
-- 使用 `weknora_add_knowledge` 工具将收集到的信息存入知识库
+### 存储 (Store)
+- 使用 `store_steward_knowledge` 工具将收集到的信息存入知识库
 - 确保所有有价值的信息都被持久化保存
 
 ### 分析 (Analyze)
-- 使用 `weknora_rag_chat` 工具基于知识库进行智能分析
-- 识别待办事项、账单、重要提醒等
+- 使用 `search_steward_knowledge` 检索知识库中已存储的数据
+- 根据检索到的原始片段，自行分析总结待办事项、账单、重要提醒等
 
 ### 检索 (Retrieve)
-- 如果需要历史信息或材料，先用 `weknora_knowledge_search` 检索
+- 查找之前存储的数据（OCR、对话记录等），使用 `search_steward_knowledge`
 - 对外部页面查询可用 `fetch_url_text` 获取原始文本
 
 ### 委派 (Delegate)
@@ -925,11 +950,12 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
 你应该：
 1. 思考并调用 call_mobi_collect_with_retry_report 获取证据（含显式重试上限）
 2. 基于证据自主判断是否完成；若未完成且已达上限，输出结构化失败证据包
-3. 调用 weknora_add_knowledge 存储收集到的信息
-4. 调用 weknora_rag_chat 分析待办和账单
+3. 调用 store_steward_knowledge 存储收集到的信息
+4. 调用 search_steward_knowledge 检索已存数据，自行分析待办和账单
 5. 如发现待办事项，询问是否需要添加到日历，然后调用 call_mobi_action
 
 现在，请准备好为用户服务！"""
+    sys_prompt += _build_memory_prompt()
     sys_prompt += _build_skill_prompt_suffix(skill_context)
 
     return ReActAgent(
