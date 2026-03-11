@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime
 from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
@@ -223,6 +224,37 @@ def _skills_root() -> Path:
     if configured:
         return Path(configured).expanduser()
     return Path(__file__).resolve().parent / "skills"
+
+
+def _project_root() -> Path:
+    """返回项目根目录路径。"""
+    return Path(__file__).resolve().parents[1]
+
+
+def _create_job_output_paths(output_path: str | None) -> tuple[str, str, str]:
+    """为本次任务创建 outputs/job_时间戳 目录并返回绝对路径。"""
+    outputs_root = (_project_root() / "outputs").resolve()
+    job_name = "job_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    job_dir = outputs_root / job_name
+    tmp_dir = job_dir / "tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    raw_output = (output_path or "").strip()
+    if raw_output:
+        candidate = Path(raw_output).expanduser()
+        if candidate.is_absolute():
+            candidate = Path(candidate.name)
+        final_output = job_dir / candidate
+    else:
+        final_output = job_dir / "final_output.md"
+
+    final_output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        resolved_output = final_output.resolve()
+    except FileNotFoundError:
+        resolved_output = final_output.absolute()
+
+    return str(resolved_output), str(job_dir), str(tmp_dir)
 
 
 def _parse_skill_frontmatter(text: str) -> dict[str, str]:
@@ -450,7 +482,7 @@ def _skill_prompt_context(selected_skills: list[str]) -> str:
             "\n".join(
                 [
                     f"[Skill: {profile.name}]",
-                    f"execution_dir: {profile.skill_dir}",
+                    f"execution_dir (just for skill scripts): {profile.skill_dir}",
                     content,
                 ]
             )
@@ -961,6 +993,8 @@ async def _run_one_agent(
     agent_name: str,
     task: str,
     output_path: str | None = None,
+    output_dir: str | None = None,
+    temp_dir: str | None = None,
     selected_skills: list[str] | None = None,
     prior_context: str | None = None,
 ) -> dict[str, Any]:
@@ -976,12 +1010,34 @@ async def _run_one_agent(
             + "\n\n"
             + msg_content
         )
+
     if output_path:
         msg_content += (
-            "\n\n输出文件路径: "
-            + output_path
+            "\n\n最终输出文件路径或文件名(绝对路径): "
+            + str(output_path or "")
+            + "\n任务执行过程的临时目录，例如下载或者生成文件的目录(绝对路径): "
+            + str(temp_dir or "")
             + "\n如需落盘，请自行选择合适工具完成。"
         )
+    else:
+        msg_content += (
+            "\n\n任务执行过程的临时目录，例如下载或者生成文件的目录(绝对路径): "
+            + str(temp_dir or "")
+            + "\n如需落盘，请自行选择合适工具完成。"
+        )
+
+    logger.info(
+        _highlight_log(
+            "orchestrator.executor.paths agent="
+            + str(agent_name)
+            + " output_path="
+            + str(output_path or "")
+            + " temp_dir="
+            + str(temp_dir or ""),
+            ANSI_CYAN,
+        )
+    )
+
     start = time.perf_counter()
     response = await agent(Msg(name="User", content=msg_content, role="user"))
     elapsed_ms = int((time.perf_counter() - start) * 1000)
@@ -1043,6 +1099,7 @@ async def run_orchestrated_task(
     router_timeout_s = float(ROUTING_CONFIG["router_timeout_s"])
     planner_timeout_s = float(ROUTING_CONFIG["planner_timeout_s"])
     subtask_timeout_s = float(ROUTING_CONFIG["subtask_timeout_s"])
+    resolved_output_path, job_output_dir, job_tmp_dir = _create_job_output_paths(output_path)
 
     logger.info(
         "orchestrator.start mode=%s strategy=%s agent_hint=%s task_preview=%s",
@@ -1165,7 +1222,7 @@ async def run_orchestrated_task(
         stage_execs: list[dict[str, Any]] = []
         for sub_index, item in enumerate(stage, start=1):
             is_last = stage_index == len(stages) and sub_index == len(stage)
-            hint_path = output_path if is_last else None
+            hint_path = resolved_output_path if is_last else None
             skill_decision = await _select_skills_for_subtask(
                 task=task,
                 subtask=item["task"],
@@ -1219,6 +1276,8 @@ async def run_orchestrated_task(
                         item["agent"],
                         item["task"],
                         output_path=hint_path,
+                        output_dir=job_output_dir,
+                        temp_dir=job_tmp_dir,
                         selected_skills=skill_decision.selected_skills,
                         prior_context=prior_context,
                     ),
@@ -1265,7 +1324,7 @@ async def run_orchestrated_task(
     reply = _aggregate_replies(executions)
     file_paths = _merge_file_paths(
         shared_file_paths,
-        _collect_file_paths(reply, output_path=output_path),
+        _collect_file_paths(reply, output_path=resolved_output_path),
     )
     files = _build_file_entries(file_paths)
     total_elapsed_ms = int((time.perf_counter() - task_start) * 1000)
