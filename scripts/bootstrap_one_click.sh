@@ -21,6 +21,7 @@ SKIP_PULL="${SKIP_PULL:-0}"
 SKIP_IMPORT="${SKIP_IMPORT:-0}"
 SKIP_FRONTEND="${SKIP_FRONTEND:-0}"
 SKIP_RERANK="${SKIP_RERANK:-0}"
+USE_CPU="${USE_CPU:-0}"
 PRE_CLEANUP="${PRE_CLEANUP:-0}"
 WEKNORA_IMPORT_GENERATE_KEY="${WEKNORA_IMPORT_GENERATE_KEY:-0}"
 WEKNORA_IMPORT_UPDATE_ENV_KEY="${WEKNORA_IMPORT_UPDATE_ENV_KEY:-1}"
@@ -466,7 +467,11 @@ else
 fi
 
 log "Syncing Python dependencies with uv..."
-uv sync
+if [[ "$USE_CPU" == "1" ]]; then
+  uv sync --group cpu
+else
+  uv sync --group gpu
+fi
 
 log "Starting mobiagent_server..."
 start_bg "$PID_DIR/mobiagent-server.pid" "$MOBI_SERVER_LOG" \
