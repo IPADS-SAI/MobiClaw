@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+import glob
 import shlex
 import subprocess
 
@@ -25,6 +26,21 @@ def _load_allowlist() -> set[str]:
 def _has_unsafe_tokens(command: str) -> bool:
     unsafe_tokens = ["|", ";", "&&", "||", ">", "<", "$", "`"]
     return any(token in command for token in unsafe_tokens)
+
+
+def _expand_glob_args(args: list[str]) -> list[str]:
+    """Expand wildcard tokens without invoking a shell."""
+    expanded: list[str] = []
+    for arg in args:
+        if any(ch in arg for ch in ["*", "?", "["]):
+            matches = glob.glob(arg)
+            if matches:
+                expanded.extend(matches)
+            else:
+                expanded.append(arg)
+            continue
+        expanded.append(arg)
+    return expanded
 
 
 async def run_shell_command(command: str) -> ToolResponse:
@@ -71,6 +87,8 @@ async def run_shell_command(command: str) -> ToolResponse:
             ],
             metadata={"command": args[0]},
         )
+
+    args = _expand_glob_args(args)
 
     timeout_s = float(os.environ.get("SENESCHAL_SHELL_TIMEOUT", "20"))
     logger.info("shell.run command=%s", command)

@@ -1048,7 +1048,7 @@ async def _run_one_agent(
 
     if output_path:
         msg_content += (
-            "\n\n最终输出文件路径或文件名(绝对路径): "
+            "\n\n全部任务完成后，最终输出文件路径或文件名(绝对路径): "
             + str(output_path or "")
             + "\n任务执行过程的临时目录，例如下载或者生成文件的目录(绝对路径): "
             + str(temp_dir or "")
