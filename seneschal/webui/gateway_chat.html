@@ -178,6 +178,35 @@
       textarea#chat-input { width: 100%; min-height: 92px; resize: vertical; }
       .mono { font-family: var(--mono); }
       .cmds { font-size: 12px; color: var(--muted); }
+      .cmd-suggest {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fff;
+        overflow: hidden;
+      }
+      .cmd-suggest[hidden] { display: none; }
+      .cmd-suggest-item {
+        display: block;
+        width: 100%;
+        text-align: left;
+        border: 0;
+        border-top: 1px solid #edf1ea;
+        background: #fff;
+        color: var(--ink);
+        border-radius: 0;
+        padding: 8px 10px;
+      }
+      .cmd-suggest-item:first-child { border-top: 0; }
+      .cmd-suggest-item.active { background: #e8f4ee; }
+      .cmd-suggest-item code {
+        font-family: var(--mono);
+        font-size: 12px;
+        margin-right: 8px;
+      }
+      .cmd-suggest-item .desc {
+        font-size: 12px;
+        color: var(--muted);
+      }
       .log {
         margin-top: 10px;
         background: #1b1f1c;
@@ -261,6 +290,7 @@
             </div>
 
             <textarea id="chat-input" placeholder="输入消息，或输入指令: /new /quit /interrupt"></textarea>
+            <div id="cmd-suggest" class="cmd-suggest" hidden></div>
 
             <div class="row-wrap">
               <button id="btn-send" type="button">发送</button>
@@ -281,6 +311,14 @@
       const renderedJobs = new Set();
       const seenPlannerEventKeys = new Set();
       const messages = [];
+      const commandSpecs = [
+        { cmd: "/new", desc: "新建会话" },
+        { cmd: "/quit", desc: "结束当前会话" },
+        { cmd: "/interrupt", desc: "中断轮询" },
+      ];
+      let commandSuggestVisible = false;
+      let commandSuggestItems = [];
+      let commandSuggestIndex = -1;
       const plannerMonitor = {
         enabled: false,
         currentPlan: null,
@@ -303,6 +341,7 @@
         currentJob: document.getElementById("current-job"),
         btnQueryJob: document.getElementById("btn-query-job"),
         chatInput: document.getElementById("chat-input"),
+        cmdSuggest: document.getElementById("cmd-suggest"),
         btnSend: document.getElementById("btn-send"),
         btnClearChat: document.getElementById("btn-clear-chat"),
         plannerState: document.getElementById("planner-state"),
@@ -803,6 +842,91 @@
         return mode || "chat";
       }
 
+      function commandPrefixInfo(raw, selectionStart) {
+        const text = String(raw || "");
+        const cursor = Number.isFinite(selectionStart) ? Math.max(0, selectionStart) : text.length;
+        const before = text.slice(0, cursor);
+        const lastLine = before.split("\n").pop() || "";
+        const leading = /^\s*/.exec(lastLine)?.[0] || "";
+        const token = lastLine.slice(leading.length);
+        if (!token.startsWith("/")) return { visible: false, prefix: "" };
+        if (/\s/.test(token)) return { visible: false, prefix: "" };
+        return { visible: true, prefix: token.toLowerCase() };
+      }
+
+      function hideCommandSuggest() {
+        commandSuggestVisible = false;
+        commandSuggestItems = [];
+        commandSuggestIndex = -1;
+        el.cmdSuggest.hidden = true;
+        el.cmdSuggest.innerHTML = "";
+      }
+
+      function applyCommandSuggestion(item) {
+        if (!item || !item.cmd) return;
+        const value = String(el.chatInput.value || "");
+        const cursor = Number.isFinite(el.chatInput.selectionStart) ? el.chatInput.selectionStart : value.length;
+        const before = value.slice(0, cursor);
+        const after = value.slice(cursor);
+        const lineStart = before.lastIndexOf("\n") + 1;
+        const currentLine = before.slice(lineStart);
+        const leading = /^\s*/.exec(currentLine)?.[0] || "";
+        const replacement = `${leading}${item.cmd} `;
+        const nextValue = `${before.slice(0, lineStart)}${replacement}${after}`;
+        const nextCursor = lineStart + replacement.length;
+        el.chatInput.value = nextValue;
+        el.chatInput.focus();
+        el.chatInput.setSelectionRange(nextCursor, nextCursor);
+        hideCommandSuggest();
+      }
+
+      function renderCommandSuggest(items) {
+        if (!Array.isArray(items) || items.length === 0) {
+          hideCommandSuggest();
+          return;
+        }
+        commandSuggestVisible = true;
+        commandSuggestItems = items.slice();
+        if (commandSuggestIndex < 0 || commandSuggestIndex >= commandSuggestItems.length) {
+          commandSuggestIndex = 0;
+        }
+        el.cmdSuggest.hidden = false;
+        el.cmdSuggest.innerHTML = "";
+        commandSuggestItems.forEach((item, idx) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = `cmd-suggest-item${idx === commandSuggestIndex ? " active" : ""}`;
+          btn.innerHTML = `<code>${escapeHtml(item.cmd)}</code><span class="desc">${escapeHtml(item.desc)}</span>`;
+          btn.addEventListener("mousedown", (event) => {
+            event.preventDefault();
+            applyCommandSuggestion(item);
+          });
+          el.cmdSuggest.appendChild(btn);
+        });
+      }
+
+      function updateCommandSuggest() {
+        const raw = el.chatInput.value || "";
+        const info = commandPrefixInfo(raw, el.chatInput.selectionStart);
+        if (!info.visible) {
+          hideCommandSuggest();
+          return;
+        }
+        const prefix = info.prefix || "/";
+        const matches = commandSpecs.filter((it) => it.cmd.startsWith(prefix));
+        if (matches.length === 0) {
+          hideCommandSuggest();
+          return;
+        }
+        renderCommandSuggest(matches);
+      }
+
+      function moveCommandSuggest(step) {
+        if (!commandSuggestVisible || commandSuggestItems.length === 0) return;
+        commandSuggestIndex = (commandSuggestIndex + step + commandSuggestItems.length) % commandSuggestItems.length;
+        renderCommandSuggest(commandSuggestItems);
+      }
+
       async function sendChatMessage(text) {
         const userText = String(text || "").trim();
         if (!userText) return;
@@ -889,7 +1013,7 @@
       async function handleCommand(raw) {
         const text = String(raw || "").trim();
         if (!text.startsWith("/")) return false;
-        const cmd = text.toLowerCase();
+        const cmd = text.split(/\s+/, 1)[0].toLowerCase();
 
         if (cmd === "/new") {
           const id = newSessionId();
@@ -929,6 +1053,7 @@
         const raw = el.chatInput.value || "";
         if (!raw.trim()) return;
         el.chatInput.value = "";
+        hideCommandSuggest();
 
         try {
           const handled = await handleCommand(raw);
@@ -943,10 +1068,39 @@
 
       el.btnSend.addEventListener("click", onSend);
       el.chatInput.addEventListener("keydown", (event) => {
-        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        if (commandSuggestVisible) {
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            moveCommandSuggest(1);
+            return;
+          }
+          if (event.key === "ArrowUp") {
+            event.preventDefault();
+            moveCommandSuggest(-1);
+            return;
+          }
+          if (event.key === "Tab" || event.key === "Enter") {
+            event.preventDefault();
+            const item = commandSuggestItems[commandSuggestIndex] || commandSuggestItems[0];
+            applyCommandSuggestion(item);
+            return;
+          }
+          if (event.key === "Escape") {
+            event.preventDefault();
+            hideCommandSuggest();
+            return;
+          }
+        }
+        if (event.key === "Enter" && !event.shiftKey) {
           event.preventDefault();
           onSend();
         }
+      });
+      el.chatInput.addEventListener("input", updateCommandSuggest);
+      el.chatInput.addEventListener("click", updateCommandSuggest);
+      el.chatInput.addEventListener("keyup", updateCommandSuggest);
+      el.chatInput.addEventListener("blur", () => {
+        setTimeout(() => hideCommandSuggest(), 80);
       });
 
       el.btnClearChat.addEventListener("click", () => {
