@@ -24,7 +24,6 @@ from typing import Any, Awaitable, Callable
 from agentscope.message import Msg
 
 from .agents import (
-    ChatSessionManager,
     create_chat_agent,
     create_steward_agent,
     create_user_agent,
@@ -32,6 +31,7 @@ from .agents import (
 )
 from .dailytasks.runner import run_daily_tasks
 from .orchestrator import run_orchestrated_task
+from .session import ChatSessionManager
 
 logger = logging.getLogger(__name__)
 _CHAT_SESSION_MANAGER = ChatSessionManager()
@@ -463,7 +463,7 @@ async def _run_gateway_chat_task(
 
     auto_intro_text = ""
     if not introduced:
-        auto_intro_text = "你好，我是 Seneschal 的 chat 助手 MobiChatBot，很高兴为你服务。"
+        auto_intro_text = "我是 MobiClaw 助手 MobiChatBot，很高兴为你服务。"
         memory = getattr(agent, "memory", None)
         if memory is not None and hasattr(memory, "add"):
             await memory.add(
@@ -490,7 +490,7 @@ async def _run_gateway_chat_task(
         )
         _cleanup_planner_hook()
         return {
-            "reply": auto_intro_text or "你好，我是 Seneschal 的 chat 助手 MobiChatBot，很高兴为你服务。",
+            "reply": auto_intro_text or "我是 MobiClaw 助手 MobiChatBot，很高兴为你服务。",
             "mode": "chat",
             "files": [],
             "planner_monitor": {
@@ -691,6 +691,7 @@ async def run_gateway_task(
         routing_strategy=routing_strategy,
         context_id=context_id,
         external_context=external_context,
+        progress_callback=progress_callback,
     )
 
 

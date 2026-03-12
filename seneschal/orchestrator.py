@@ -15,11 +15,11 @@ import logging
 import mimetypes
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from agentscope.message import Msg
 
@@ -33,8 +33,11 @@ from .agents import (
     get_agent_capability_descriptions,
 )
 from .config import ROUTING_CONFIG
+from .session import GenericSessionHandle, GenericSessionManager
 
 logger = logging.getLogger(__name__)
+_GENERIC_SESSION_MANAGER = GenericSessionManager()
+ProgressCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
 
 
 ANSI_RESET = "\033[0m"
@@ -111,6 +114,20 @@ def _collect_file_paths(text: str, output_path: str | None = None) -> list[Path]
         if candidate:
             paths.append(Path(candidate).expanduser())
 
+    # Fallback: extract absolute local file paths that already exist on disk.
+    # This helps capture files that the model reported as plain text paths.
+    for raw in re.findall(r"(?<![A-Za-z0-9_])(/[^\s`\"'<>]+)", text or ""):
+        candidate = raw.strip().rstrip(".,;:!?)")
+        if not candidate:
+            continue
+        path = Path(candidate).expanduser()
+        try:
+            resolved = path.resolve()
+        except FileNotFoundError:
+            resolved = path.absolute()
+        if resolved.exists() and resolved.is_file():
+            paths.append(path)
+
     unique: list[Path] = []
     seen: set[str] = set()
     for path in paths:
@@ -120,6 +137,23 @@ def _collect_file_paths(text: str, output_path: str | None = None) -> list[Path]
         seen.add(key)
         unique.append(path)
     return unique
+
+
+def _ensure_output_file_written(output_path: str | None, reply: str) -> Path | None:
+    """在输出文件缺失时将最终回复兜底写入到 output_path。"""
+    target_raw = str(output_path or "").strip()
+    if not target_raw:
+        return None
+    target = Path(target_raw).expanduser()
+    if target.exists() and target.is_file():
+        return target
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(str(reply or "").strip(), encoding="utf-8")
+        return target
+    except OSError:
+        logger.warning("Failed to persist final reply to output_path=%s", target_raw, exc_info=True)
+        return None
 
 
 def _build_file_entries(paths: list[Path]) -> list[dict[str, Any]]:
@@ -145,6 +179,21 @@ def _build_file_entries(paths: list[Path]) -> list[dict[str, Any]]:
             }
         )
     return entries
+
+
+async def _emit_progress(
+    callback: ProgressCallback | None,
+    payload: dict[str, Any],
+) -> None:
+    """向上游发送编排进度事件（兼容同步/异步回调）。"""
+    if callback is None:
+        return
+    try:
+        result = callback(payload)
+        if asyncio.iscoroutine(result):
+            await result
+    except Exception:
+        logger.warning("Failed to emit orchestrator progress", exc_info=True)
 
 
 def _merge_file_paths(existing: list[Path], incoming: list[Path]) -> list[Path]:
@@ -854,7 +903,7 @@ async def _llm_route(task: str, strategy: str) -> RouteDecision:
     prompt = (
         "你是任务路由器，请快速选择最合适的 agent。\n"
         "候选 Agent(精简版):\n"
-        f"{json.dumps(profile_brief, ensure_ascii=False, separators=(",", ":"))}\n\n"
+        f"{json.dumps(profile_brief, ensure_ascii=False, separators=(',', ':'))}\n\n"
         "仅输出 JSON，不要输出其他文本，格式为:\n"
         '{"target_agents":["agent_name"],"reason":"...","confidence":0.0,"plan_required":true|false}\n\n'
         "要求:\n"
@@ -1086,12 +1135,22 @@ async def _run_one_agent(
     temp_dir: str | None = None,
     selected_skills: list[str] | None = None,
     prior_context: str | None = None,
+    session_manager: GenericSessionManager | None = None,
+    session_handle: GenericSessionHandle | None = None,
+    session_mode: str = "router",
     external_context_text: str | None = None,
 ) -> dict[str, Any]:
     """执行单个子任务并返回结构化结果。"""
     skill_list = selected_skills or []
     skill_context = _skill_prompt_context(skill_list)
     agent = _build_agent(agent_name, skill_context=skill_context)
+    if session_manager is not None and session_handle is not None:
+        await session_manager.load_agent_state(
+            session_handle,
+            agent,
+            mode=session_mode,
+            agent_key=agent_name,
+        )
     msg_content = task.strip()
     if prior_context:
         msg_content = (
@@ -1135,7 +1194,17 @@ async def _run_one_agent(
     )
 
     start = time.perf_counter()
-    response = await agent(Msg(name="User", content=msg_content, role="user"))
+    try:
+        response = await agent(Msg(name="User", content=msg_content, role="user"))
+    finally:
+        if session_manager is not None and session_handle is not None:
+            await session_manager.save_agent_state(
+                session_handle,
+                agent,
+                command="orchestrated_subtask",
+                mode=session_mode,
+                agent_key=agent_name,
+            )
     elapsed_ms = int((time.perf_counter() - start) * 1000)
     return {
         "agent": agent_name,
@@ -1173,6 +1242,7 @@ async def run_orchestrated_task(
     routing_strategy: str | None = None,
     context_id: str | None = None,
     external_context: dict[str, Any] | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """执行完整的多智能体编排任务。
 
@@ -1190,11 +1260,21 @@ async def run_orchestrated_task(
     返回值说明：
         dict[str, Any]: 含最终回复、路由轨迹、执行明细与文件信息。
     """
-    del context_id  # Reserved for future multi-turn persistence identifier.
-
     task_start = time.perf_counter()
     external_context_text = _build_external_context_text(external_context)
     normalized_mode = (mode or "").strip().lower() or ROUTING_CONFIG["default_mode"]
+    session_handle = await _GENERIC_SESSION_MANAGER.resolve_session(
+        context_id,
+        mode=normalized_mode,
+    )
+    _GENERIC_SESSION_MANAGER.append_history_message(
+        handle=session_handle,
+        role="user",
+        name="user",
+        text=task,
+        mode=normalized_mode,
+        command="orchestrated_task",
+    )
     strategy = (routing_strategy or ROUTING_CONFIG["strategy"]).strip().lower()
     router_timeout_s = float(ROUTING_CONFIG["router_timeout_s"])
     planner_timeout_s = float(ROUTING_CONFIG["planner_timeout_s"])
@@ -1312,6 +1392,22 @@ async def run_orchestrated_task(
     skill_trace_records: list[dict[str, Any]] = []
 
     for stage_index, stage in enumerate(stages, start=1):
+        stage_started_at = datetime.now(timezone.utc).isoformat()
+        await _emit_progress(
+            progress_callback,
+            {
+                "channel": "orchestrator_progress",
+                "event_key": f"orchestrator:{stage_index}:0:started:{time.time_ns()}",
+                "stage": stage_index,
+                "subtask": 0,
+                "agent": "",
+                "state": "started",
+                "task": "",
+                "reply_preview": "",
+                "error": "",
+                "event_at": stage_started_at,
+            },
+        )
         stage_start = time.perf_counter()
         logger.info(
             "orchestrator.stage.start stage=%d subtasks=%d parallel=%s",
@@ -1321,6 +1417,22 @@ async def run_orchestrated_task(
         )
         stage_execs: list[dict[str, Any]] = []
         for sub_index, item in enumerate(stage, start=1):
+            subtask_started_at = datetime.now(timezone.utc).isoformat()
+            await _emit_progress(
+                progress_callback,
+                {
+                    "channel": "orchestrator_progress",
+                    "event_key": f"orchestrator:{stage_index}:{sub_index}:started:{time.time_ns()}",
+                    "stage": stage_index,
+                    "subtask": sub_index,
+                    "agent": str(item.get("agent") or ""),
+                    "state": "started",
+                    "task": str(item.get("task") or ""),
+                    "reply_preview": "",
+                    "error": "",
+                    "event_at": subtask_started_at,
+                },
+            )
             is_last = stage_index == len(stages) and sub_index == len(stage)
             hint_path = resolved_output_path if is_last else None
             skill_decision = await _select_skills_for_subtask(
@@ -1380,6 +1492,9 @@ async def run_orchestrated_task(
                         temp_dir=job_tmp_dir,
                         selected_skills=skill_decision.selected_skills,
                         prior_context=prior_context,
+                        session_manager=_GENERIC_SESSION_MANAGER,
+                        session_handle=session_handle,
+                        session_mode=normalized_mode,
                         external_context_text=external_context_text,
                     ),
                     timeout=subtask_timeout_s,
@@ -1397,9 +1512,41 @@ async def run_orchestrated_task(
                     "elapsed_ms": 0,
                     "error": error_text,
                 }
+            _GENERIC_SESSION_MANAGER.append_history_message(
+                handle=session_handle,
+                role="assistant",
+                name=item["agent"],
+                text=str(result.get("reply") or ""),
+                mode=normalized_mode,
+                command="orchestrated_subtask",
+                agent=item["agent"],
+                extra_meta={
+                    "task": item["task"],
+                    "stage": stage_index,
+                    "subtask": sub_index,
+                    "elapsed_ms": int(result.get("elapsed_ms", 0) or 0),
+                    "error": str(result.get("error") or ""),
+                },
+            )
 
             stage_execs.append(result)
             executions.append(result)
+            reply_preview = str(result.get("reply") or "").strip()
+            await _emit_progress(
+                progress_callback,
+                {
+                    "channel": "orchestrator_progress",
+                    "event_key": f"orchestrator:{stage_index}:{sub_index}:{'failed' if result.get('error') else 'done'}:{time.time_ns()}",
+                    "stage": stage_index,
+                    "subtask": sub_index,
+                    "agent": str(item.get("agent") or ""),
+                    "state": "failed" if result.get("error") else "done",
+                    "task": str(item.get("task") or ""),
+                    "reply_preview": reply_preview[:320],
+                    "error": str(result.get("error") or ""),
+                    "event_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
             shared_file_paths = _merge_file_paths(
                 shared_file_paths,
                 _collect_file_paths(str(result.get("reply") or ""), output_path=hint_path),
@@ -1430,10 +1577,13 @@ async def run_orchestrated_task(
         )
 
     reply = _aggregate_replies(executions)
+    ensured_output = _ensure_output_file_written(resolved_output_path, reply)
     file_paths = _merge_file_paths(
         shared_file_paths,
         _collect_file_paths(reply, output_path=resolved_output_path),
     )
+    if ensured_output is not None:
+        file_paths = _merge_file_paths(file_paths, [ensured_output])
     file_paths = _merge_file_paths(
         file_paths,
         _collect_tmp_dir_file_paths(
@@ -1456,6 +1606,17 @@ async def run_orchestrated_task(
     return {
         "reply": reply,
         "mode": normalized_mode,
+        "context_id": session_handle.session_id,
+        "session_id": session_handle.session_id,
+        "session": {
+            "session_id": session_handle.session_id,
+            "session_dir": str(session_handle.session_dir.resolve()),
+            "is_new_session": session_handle.is_new_session,
+            "resumed_from_latest": session_handle.resumed_from_latest,
+            "mode": normalized_mode,
+            "storage_session_ids": session_handle.meta.get("storage_session_ids", {}),
+            "agent_state_keys": session_handle.meta.get("agent_state_keys", {}),
+        },
         "files": files,
         "routing_trace": {
             "control_path": {
