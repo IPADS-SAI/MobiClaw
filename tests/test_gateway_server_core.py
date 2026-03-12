@@ -1,0 +1,334 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
+
+from seneschal import gateway_server
+from seneschal.gateway_server import GatewayConfig, JobContext, TaskRequest
+
+
+def _cfg(*, api_key: str = "") -> GatewayConfig:
+    return GatewayConfig(
+        api_key=api_key,
+        callback_timeout_s=3.0,
+        callback_retry=1,
+        callback_retry_backoff_s=0.1,
+        public_base_url="https://gw.example",
+        file_root=None,
+        feishu_app_id="",
+        feishu_app_secret="",
+        feishu_verification_token="",
+        feishu_encrypt_key="",
+        feishu_event_transport="off",
+    )
+
+
+def test_ensure_auth_all_paths() -> None:
+    gateway_server._ensure_auth(None, _cfg(api_key=""))
+
+    with pytest.raises(HTTPException) as exc_missing:
+        gateway_server._ensure_auth(None, _cfg(api_key="k1"))
+    assert exc_missing.value.status_code == 401
+
+    with pytest.raises(HTTPException) as exc_format:
+        gateway_server._ensure_auth("Token k1", _cfg(api_key="k1"))
+    assert exc_format.value.status_code == 401
+
+    with pytest.raises(HTTPException) as exc_invalid:
+        gateway_server._ensure_auth("Bearer bad", _cfg(api_key="k1"))
+    assert exc_invalid.value.status_code == 401
+
+    gateway_server._ensure_auth("Bearer k1", _cfg(api_key="k1"))
+
+
+def test_resolve_context_id_priority_and_fallback() -> None:
+    assert gateway_server._resolve_context_id(" explicit id ", None) == "explicit-id"
+
+    result = {
+        "context_id": "ctx-1",
+        "session_id": "sess-1",
+        "session": {"context_id": "nested-ctx", "session_id": "nested-sess"},
+    }
+    assert gateway_server._resolve_context_id(None, result) == "ctx-1"
+
+    nested_only = {"session": {"session_id": "nested-sess"}}
+    assert gateway_server._resolve_context_id(None, nested_only) == "nested-sess"
+
+    assert gateway_server._resolve_context_id(None, None) is None
+
+
+def test_append_chat_history_and_read_recent_messages(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "session"
+    monkeypatch.setattr(gateway_server, "_chat_session_root_dir", lambda: root)
+
+    gateway_server._append_chat_history(
+        context_id="ctx_a",
+        mode="worker",
+        job_id="job-1",
+        user_text="hello",
+        assistant_text="world",
+        status="completed",
+    )
+    gateway_server._append_chat_history(
+        context_id="ctx_a",
+        mode="worker",
+        job_id="job-2",
+        user_text="only-user",
+        assistant_text="",
+        status="completed",
+    )
+
+    session_dir = gateway_server._latest_session_dir_for_context("ctx_a")
+    assert session_dir is not None
+
+    messages = gateway_server._read_recent_session_messages(session_dir, limit=20)
+    assert len(messages) == 3
+    assert messages[0]["role"] == "user"
+    assert messages[1]["role"] == "assistant"
+    assert messages[2]["text"] == "only-user"
+    assert messages[0]["meta"]["job_id"] == "job-1"
+
+
+def test_parse_split_and_render_env_content() -> None:
+    content = """
+# comment
+export OPENROUTER_API_KEY="k"
+SENESCHAL_LOG_LEVEL=DEBUG
+CUSTOM=42
+INVALID_LINE
+"""
+    variables = gateway_server._parse_env_variables(content)
+    assert variables["OPENROUTER_API_KEY"] == "k"
+    assert variables["SENESCHAL_LOG_LEVEL"] == "DEBUG"
+    assert variables["CUSTOM"] == "42"
+    assert "INVALID_LINE" not in variables
+
+    managed, unmanaged = gateway_server._split_env_variables(variables)
+    assert managed["OPENROUTER_API_KEY"] == "k"
+    assert unmanaged["CUSTOM"] == "42"
+
+    rendered = gateway_server._render_structured_env_content(
+        values={"SENESCHAL_LOG_LEVEL": "INFO", "OPENROUTER_API_KEY": "abc"},
+        unmanaged={"CUSTOM": "42"},
+    )
+    assert "export SENESCHAL_LOG_LEVEL=\"INFO\"" in rendered
+    assert "export OPENROUTER_API_KEY=\"abc\"" in rendered
+    assert "export CUSTOM=\"42\"" in rendered
+
+
+def test_file_exposure_and_result_decoration(tmp_path: Path) -> None:
+    root = tmp_path / "files"
+    root.mkdir(parents=True, exist_ok=True)
+    allowed = root / "ok.txt"
+    allowed.write_text("ok", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("out", encoding="utf-8")
+
+    cfg = GatewayConfig(
+        api_key="",
+        callback_timeout_s=3.0,
+        callback_retry=1,
+        callback_retry_backoff_s=0.1,
+        public_base_url="https://gw.example",
+        file_root=str(root),
+        feishu_app_id="",
+        feishu_app_secret="",
+        feishu_verification_token="",
+        feishu_encrypt_key="",
+        feishu_event_transport="off",
+    )
+
+    assert gateway_server._can_expose_file(str(allowed), cfg) is True
+    assert gateway_server._can_expose_file(str(outside), cfg) is False
+
+    result = {
+        "reply": "done",
+        "files": [
+            {"name": "ok.txt", "path": str(allowed)},
+            {"name": "outside.txt", "path": str(outside)},
+            {"name": "bad-no-path"},
+        ],
+    }
+    decorated = gateway_server._decorate_result_with_files("job-9", result, request=None, cfg=cfg)
+    files = decorated["files"]
+    assert len(files) == 1
+    assert files[0]["name"] == "ok.txt"
+    assert files[0]["download_url"].endswith("/api/v1/files/job-9/ok.txt")
+
+
+def test_build_callback_headers() -> None:
+    headers = gateway_server._build_callback_headers(
+        JobContext(
+            webhook_token="tok",
+            callback_headers={"X-Trace": "1", "X-Empty": "", "": "bad"},
+        )
+    )
+    assert headers["Content-Type"] == "application/json"
+    assert headers["Authorization"] == "Bearer tok"
+    assert headers["X-Trace"] == "1"
+    assert "X-Empty" not in headers
+
+
+def test_run_job_success_non_chat(monkeypatch) -> None:
+    job_id = "job-ok"
+    gateway_server._JOB_STORE.clear()
+    gateway_server._JOB_CONTEXT.clear()
+    gateway_server._JOB_CONTEXT[job_id] = JobContext()
+
+    append_calls: list[dict] = []
+    deliver_calls: list[str] = []
+
+    async def fake_run_gateway_task(**kwargs):  # noqa: ANN003
+        progress = kwargs.get("progress_callback")
+        assert progress is not None
+        await progress({"channel": "planner_monitor", "session_id": "ctx-a", "mode": "worker", "planner": {"enabled": True}})
+        return {"reply": "done", "files": []}
+
+    async def fake_deliver(job: str, result, cfg):  # noqa: ANN001
+        del result, cfg
+        deliver_calls.append(job)
+
+    def fake_append(**kwargs):  # noqa: ANN003
+        append_calls.append(kwargs)
+
+    monkeypatch.setattr(gateway_server, "run_gateway_task", fake_run_gateway_task)
+    monkeypatch.setattr(gateway_server, "_deliver_result", fake_deliver)
+    monkeypatch.setattr(gateway_server, "_append_chat_history", fake_append)
+    monkeypatch.setattr(gateway_server, "_decorate_result_with_files", lambda job_id, result, request, cfg: {**result, "decorated": True})
+    monkeypatch.setattr(gateway_server, "load_config", lambda: _cfg())
+
+    import seneschal.config as seneschal_config
+
+    monkeypatch.setitem(seneschal_config.RAG_CONFIG, "task_history_enabled", False)
+
+    asyncio.run(
+        gateway_server._run_job(
+            job_id=job_id,
+            task="do it",
+            output_path=None,
+            mode="worker",
+            agent_hint=None,
+            skill_hint=None,
+            routing_strategy=None,
+            context_id="ctx-a",
+            web_search_enabled=False,
+        )
+    )
+
+    stored = gateway_server._JOB_STORE[job_id]
+    assert stored.status == "completed"
+    assert stored.result is not None
+    assert stored.result["context_id"] == "ctx-a"
+    assert stored.result["decorated"] is True
+    assert len(append_calls) == 1
+    assert append_calls[0]["status"] == "completed"
+    assert deliver_calls == [job_id]
+
+
+def test_run_job_failure_non_chat(monkeypatch) -> None:
+    job_id = "job-fail"
+    gateway_server._JOB_STORE.clear()
+    gateway_server._JOB_CONTEXT.clear()
+    gateway_server._JOB_CONTEXT[job_id] = JobContext()
+
+    append_calls: list[dict] = []
+    deliver_calls: list[str] = []
+
+    async def fake_run_gateway_task(**kwargs):  # noqa: ANN003
+        del kwargs
+        raise RuntimeError("boom")
+
+    async def fake_deliver(job: str, result, cfg):  # noqa: ANN001
+        del result, cfg
+        deliver_calls.append(job)
+
+    def fake_append(**kwargs):  # noqa: ANN003
+        append_calls.append(kwargs)
+
+    monkeypatch.setattr(gateway_server, "run_gateway_task", fake_run_gateway_task)
+    monkeypatch.setattr(gateway_server, "_deliver_result", fake_deliver)
+    monkeypatch.setattr(gateway_server, "_append_chat_history", fake_append)
+    monkeypatch.setattr(gateway_server, "load_config", lambda: _cfg())
+
+    asyncio.run(
+        gateway_server._run_job(
+            job_id=job_id,
+            task="do it",
+            output_path=None,
+            mode="worker",
+            agent_hint=None,
+            skill_hint=None,
+            routing_strategy=None,
+            context_id="ctx-x",
+            web_search_enabled=False,
+        )
+    )
+
+    stored = gateway_server._JOB_STORE[job_id]
+    assert stored.status == "failed"
+    assert stored.error == "boom"
+    assert stored.result is not None
+    assert stored.result["context_id"] == "ctx-x"
+    assert len(append_calls) == 1
+    assert append_calls[0]["status"] == "failed"
+    assert deliver_calls == [job_id]
+
+
+def test_submit_task_sync_non_chat(monkeypatch) -> None:
+    append_calls: list[dict] = []
+
+    async def fake_run_gateway_task(**kwargs):  # noqa: ANN003
+        del kwargs
+        return {"reply": "ok", "files": []}
+
+    def fake_append(**kwargs):  # noqa: ANN003
+        append_calls.append(kwargs)
+
+    monkeypatch.setattr(gateway_server, "run_gateway_task", fake_run_gateway_task)
+    monkeypatch.setattr(gateway_server, "_append_chat_history", fake_append)
+    monkeypatch.setattr(gateway_server, "_decorate_result_with_files", lambda job_id, result, request, cfg: {**result, "decorated": True})
+    monkeypatch.setattr(gateway_server, "load_config", lambda: _cfg(api_key=""))
+
+    req = TaskRequest(
+        task="hello",
+        async_mode=False,
+        mode="worker",
+        context_id="ctx-42",
+    )
+    raw_request = SimpleNamespace(base_url="https://gw.example/")
+
+    result = asyncio.run(gateway_server.submit_task(req, raw_request=raw_request, authorization=None))
+
+    assert result.status == "completed"
+    assert result.result is not None
+    assert result.result["reply"] == "ok"
+    assert result.result["context_id"] == "ctx-42"
+    assert result.result["decorated"] is True
+    assert len(append_calls) == 1
+
+
+def test_read_recent_session_messages_skips_invalid_rows(tmp_path: Path) -> None:
+    session_dir = tmp_path / "session"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    history = session_dir / "history.jsonl"
+    history.write_text(
+        "\n".join(
+            [
+                "not json",
+                json.dumps({"text": "", "role": "user"}, ensure_ascii=False),
+                json.dumps({"text": "ok1", "role": "unknown", "name": "n"}, ensure_ascii=False),
+                json.dumps({"text": "ok2", "role": "assistant", "meta": "bad"}, ensure_ascii=False),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    messages = gateway_server._read_recent_session_messages(session_dir, limit=20)
+    assert len(messages) == 2
+    assert messages[0]["role"] == "assistant"
+    assert messages[1]["meta"] == {}

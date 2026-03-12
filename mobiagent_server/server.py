@@ -26,7 +26,10 @@ import xml.etree.ElementTree as ET
 from fastapi import FastAPI, HTTPException, Header, status
 from pydantic import BaseModel, Field
 
+from seneschal.env import load_project_env
 from seneschal.tools.mock_data import get_mock_collect_result, get_mock_action_result
+
+load_project_env()
 
 def _configure_logging() -> None:
     """Ensure gateway and orchestrator logs are visible under module startup."""
