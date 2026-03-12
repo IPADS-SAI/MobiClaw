@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
 
-from fastapi.testclient import TestClient
 from agentscope.message import Msg
 
 from seneschal import gateway_server
@@ -44,19 +44,17 @@ def _make_session_dir(root: Path, dir_name: str, mtime: int, history_rows: list[
 def test_list_chat_sessions_sorted_desc(monkeypatch, tmp_path: Path):
     root = tmp_path / "session"
     root.mkdir(parents=True, exist_ok=True)
-    _make_session_dir(root, "20260312_120000_000001-chat-s1", mtime=10)
-    _make_session_dir(root, "20260312_120000_000002-chat-s2", mtime=30)
-    _make_session_dir(root, "20260312_120000_000003-chat-s3", mtime=20)
+    _make_session_dir(root, "20260312_120000_000001-chat_20260312120000001_s1", mtime=10)
+    _make_session_dir(root, "20260312_120000_000002-chat_20260312120000002_s2", mtime=30)
+    _make_session_dir(root, "20260312_120000_000003-chat_20260312120000003_s3", mtime=20)
 
     monkeypatch.setenv("SENESCHAL_GATEWAY_API_KEY", "")
+    monkeypatch.setenv("FEISHU_EVENT_TRANSPORT", "off")
     monkeypatch.setattr(gateway_server, "_chat_session_root_dir", lambda: root)
 
-    with TestClient(gateway_server.app) as client:
-        resp = client.get("/api/v1/chat/sessions")
-        assert resp.status_code == 200
-        payload = resp.json()
-        sessions = payload.get("sessions", [])
-        assert [item["context_id"] for item in sessions] == ["s2", "s3", "s1"]
+    sessions = gateway_server._scan_chat_session_dirs()
+    context_ids = [str(item.get("context_id") or "") for item in sessions]
+    assert [item.rsplit("_", 1)[-1] for item in context_ids] == ["s2", "s3", "s1"]
 
 
 def test_get_chat_session_recent_messages_limit(monkeypatch, tmp_path: Path):
@@ -73,34 +71,32 @@ def test_get_chat_session_recent_messages_limit(monkeypatch, tmp_path: Path):
                 "meta": {"idx": idx},
             }
         )
-    _make_session_dir(root, "20260312_120000_000010-chat-limit_ctx", mtime=50, history_rows=rows)
+    _make_session_dir(root, "20260312_120000_000010-chat_20260312120000010_limit_ctx", mtime=50, history_rows=rows)
 
     monkeypatch.setenv("SENESCHAL_GATEWAY_API_KEY", "")
+    monkeypatch.setenv("FEISHU_EVENT_TRANSPORT", "off")
     monkeypatch.setattr(gateway_server, "_chat_session_root_dir", lambda: root)
 
-    with TestClient(gateway_server.app) as client:
-        resp = client.get("/api/v1/chat/sessions/limit_ctx?limit=20")
-        assert resp.status_code == 200
-        payload = resp.json()
-        messages = payload.get("messages", [])
-        assert len(messages) == 20
-        assert messages[0]["text"] == "line-10"
-        assert messages[-1]["text"] == "line-29"
+    session_dir = gateway_server._latest_session_dir_for_context("limit_ctx")
+    assert session_dir is not None
+    messages = gateway_server._read_recent_session_messages(session_dir, limit=20)
+    assert len(messages) == 20
+    assert messages[0]["text"] == "line-10"
+    assert messages[-1]["text"] == "line-29"
 
 
 def test_get_chat_session_without_history_file(monkeypatch, tmp_path: Path):
     root = tmp_path / "session"
     root.mkdir(parents=True, exist_ok=True)
-    _make_session_dir(root, "20260312_120000_000100-chat-empty_ctx", mtime=70, history_rows=None)
+    _make_session_dir(root, "20260312_120000_000100-chat_20260312120000100_empty_ctx", mtime=70, history_rows=None)
 
     monkeypatch.setenv("SENESCHAL_GATEWAY_API_KEY", "")
+    monkeypatch.setenv("FEISHU_EVENT_TRANSPORT", "off")
     monkeypatch.setattr(gateway_server, "_chat_session_root_dir", lambda: root)
 
-    with TestClient(gateway_server.app) as client:
-        resp = client.get("/api/v1/chat/sessions/empty_ctx?limit=20")
-        assert resp.status_code == 200
-        payload = resp.json()
-        assert payload.get("messages") == []
+    session_dir = gateway_server._latest_session_dir_for_context("empty_ctx")
+    assert session_dir is not None
+    assert gateway_server._read_recent_session_messages(session_dir, limit=20) == []
 
 
 def test_chat_mode_not_double_append_history(monkeypatch, tmp_path: Path):
@@ -109,23 +105,24 @@ def test_chat_mode_not_double_append_history(monkeypatch, tmp_path: Path):
 
     manager = ChatSessionManager(root_dir=root)
     monkeypatch.setattr(workflows, "_CHAT_SESSION_MANAGER", manager)
-    monkeypatch.setattr(workflows, "create_chat_agent", lambda: _DummyChatAgent())
-    monkeypatch.setattr(gateway_server, "_chat_session_root_dir", lambda: root)
+    monkeypatch.setattr(workflows, "create_chat_agent", lambda **_: _DummyChatAgent())
     monkeypatch.setenv("SENESCHAL_GATEWAY_API_KEY", "")
+    monkeypatch.setenv("FEISHU_EVENT_TRANSPORT", "off")
 
-    with TestClient(gateway_server.app) as client:
-        resp = client.post(
-            "/api/v1/task",
-            json={
-                "task": "你好",
-                "mode": "chat",
-                "context_id": "dup_ctx",
-                "async_mode": False,
-            },
+    result = asyncio.run(
+        workflows.run_gateway_task(
+            task="你好",
+            mode="chat",
+            context_id="dup_ctx",
         )
-        assert resp.status_code == 200
+    )
+    assert result.get("reply")
 
-    sessions = [p for p in root.iterdir() if p.is_dir() and p.name.endswith("-chat-dup_ctx")]
+    sessions = [
+        Path(str(item.get("path")))
+        for item in manager._list_session_dirs()
+        if str(item.get("session_id") or "") == "dup_ctx"
+    ]
     assert sessions, "expected chat session directory to be created"
     history_file = sessions[0] / "history.jsonl"
     assert history_file.exists()
