@@ -127,6 +127,37 @@ def _invalid_container_hint(container_id: str, container_id_type: str, app_id_hi
     return "；".join(pieces)
 
 
+def _build_feishu_history_error_response(
+    *,
+    error_kind: str,
+    http_status: int,
+    payload: dict[str, Any],
+    chat_id: str,
+    container_id_type: str,
+    app_id_hint: str,
+    history_range_requested: str,
+    history_range_applied: str,
+    diagnostic_hint: str = "",
+) -> ToolResponse:
+    """统一构造历史消息查询错误响应。"""
+    text = f"[Feishu] 拉取历史消息失败: http_status={http_status}, payload={json.dumps(payload, ensure_ascii=False)}"
+    if diagnostic_hint:
+        text += f"\n[Feishu] 诊断提示: {diagnostic_hint}"
+    return ToolResponse(
+        content=[TextBlock(type="text", text=text)],
+        metadata={
+            "error": error_kind,
+            "http_status": http_status,
+            "payload": payload,
+            "chat_id": chat_id,
+            "container_id_type": container_id_type,
+            "app_id_hint": app_id_hint,
+            "history_range_requested": history_range_requested,
+            "history_range_applied": history_range_applied,
+        },
+    )
+
+
 def _normalize_history_range(history_range: str) -> str:
     """规范化历史范围参数，仅支持固定枚举。"""
     normalized = (history_range or "today").strip().lower()
@@ -191,89 +222,130 @@ def _history_range_bounds_s(normalized_range: str) -> tuple[int | None, int | No
     return None, None
 
 
+def _read_int_env(name: str, default: int, min_value: int, max_value: int) -> int:
+    """读取整数环境变量并约束范围。"""
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return default
+    return max(min_value, min(parsed, max_value))
+
+
+def _validate_fetch_feishu_history_args(
+    chat_id: str,
+    container_id_type: str,
+    history_range: str,
+) -> tuple[dict[str, Any] | None, ToolResponse | None]:
+    """统一校验历史消息查询入参，并返回规范化结果。"""
+    cid = (chat_id or "").strip()
+    normalized_container_id_type = (container_id_type or "").strip()
+
+    errors: list[dict[str, str]] = []
+    if not cid:
+        errors.append({"field": "chat_id", "code": "empty", "message": "chat_id 不能为空"})
+    elif _is_placeholder_chat_id(cid):
+        errors.append(
+            {
+                "field": "chat_id",
+                "code": "placeholder",
+                "message": "chat_id 不能是占位符(auto/chat/user)",
+            }
+        )
+    elif not _is_valid_container_id(cid):
+        errors.append(
+            {
+                "field": "chat_id",
+                "code": "invalid_format",
+                "message": "chat_id 格式无效或疑似被截断（期望 oc_/ou_ 开头且完整）",
+            }
+        )
+
+    if not _is_supported_container_id_type(container_id_type):
+        errors.append(
+            {
+                "field": "container_id_type",
+                "code": "unsupported",
+                "message": "container_id_type 仅支持 auto/chat/user",
+            }
+        )
+
+    normalized_range: str | None = None
+    try:
+        normalized_range = _normalize_history_range(history_range)
+    except ValueError:
+        errors.append(
+            {
+                "field": "history_range",
+                "code": "unsupported",
+                "message": "history_range 仅支持 today/yesterday/7d/all",
+            }
+        )
+
+    if errors:
+        detail = "；".join(f"{item['field']}: {item['message']}" for item in errors)
+        return None, ToolResponse(
+            content=[TextBlock(type="text", text=f"[Feishu] 参数校验失败: {detail}")],
+            metadata={
+                "error": "invalid_arguments",
+                "errors": errors,
+                "chat_id": cid,
+                "container_id_type": normalized_container_id_type,
+                "history_range": history_range,
+            },
+        )
+
+    if normalized_range is None:
+        return None, ToolResponse(
+            content=[TextBlock(type="text", text="[Feishu] 参数校验失败: history_range 无效")],
+            metadata={"error": "invalid_arguments", "chat_id": cid},
+        )
+
+    return {
+        "chat_id": cid,
+        "container_id_type": normalized_container_id_type,
+        "history_range": normalized_range,
+    }, None
+
+
 def fetch_feishu_chat_history(
     chat_id: str,
-    page_size: int = 20,
+    page_size: int = 40,
     container_id_type: str = "auto",
     history_range: str = "today",
     page_token: str = "",
 ) -> ToolResponse:
     """读取飞书会话历史消息，支持 today/yesterday/7d/all 范围查询。"""
-    cid = (chat_id or "").strip()
-    if not cid:
+    validated, validation_error = _validate_fetch_feishu_history_args(
+        chat_id=chat_id,
+        container_id_type=container_id_type,
+        history_range=history_range,
+    )
+    if validation_error is not None:
+        return validation_error
+    if validated is None:
         return ToolResponse(
-            content=[TextBlock(type="text", text="[Feishu] chat_id 不能为空")],
-            metadata={"error": "chat_id_empty"},
-        )
-    if _is_placeholder_chat_id(cid):
-        return ToolResponse(
-            content=[
-                TextBlock(
-                    type="text",
-                    text=(
-                        "[Feishu] chat_id 不能是占位符(auto/chat/user)。"
-                        "请传真实会话 ID（如 oc_...）或用户 ID（如 ou_...）；"
-                        "container_id_type 才能使用 auto/chat/user。"
-                    ),
-                )
-            ],
-            metadata={"error": "chat_id_placeholder", "chat_id": cid},
+            content=[TextBlock(type="text", text="[Feishu] 参数校验失败")],
+            metadata={"error": "invalid_arguments"},
         )
 
-    if not _is_supported_container_id_type(container_id_type):
-        normalized = (container_id_type or "").strip()
-        return ToolResponse(
-            content=[
-                TextBlock(
-                    type="text",
-                    text=(
-                        f"[Feishu] container_id_type 不支持: {normalized}。"
-                        "仅支持 auto/chat/user。"
-                    ),
-                )
-            ],
-            metadata={"error": "invalid_container_id_type", "container_id_type": normalized, "chat_id": cid},
-        )
-
-    if not _is_valid_container_id(cid):
-        return ToolResponse(
-            content=[
-                TextBlock(
-                    type="text",
-                    text=(
-                        f"[Feishu] container_id 格式无效或疑似被截断: {cid}。"
-                        "期望格式示例：oc_a0553eda9014c201e6969b478895c230。\n"
-                        + _container_id_recovery_hint()
-                    ),
-                )
-            ],
-            metadata={"error": "invalid_container_id_format", "chat_id": cid},
-        )
+    cid = str(validated.get("chat_id") or "").strip()
+    container_id_type = str(validated.get("container_id_type") or "").strip()
+    normalized_range = str(validated.get("history_range") or "today").strip().lower()
 
     try:
         size = max(1, min(int(page_size), 50))
     except (TypeError, ValueError):
-        size = 20
-
-    try:
-        normalized_range = _normalize_history_range(history_range)
-    except ValueError as exc:
-        return ToolResponse(
-            content=[TextBlock(type="text", text=f"[Feishu] history_range 无效: {history_range}。仅支持 today/yesterday/7d/all")],
-            metadata={
-                "error": "invalid_history_range",
-                "history_range": history_range,
-                "detail": str(exc),
-                "chat_id": cid,
-            },
-        )
+        size = 40
 
     range_start_s, range_end_s = _history_range_bounds_s(normalized_range)
-    minimum_today_count = 10
-    max_pages = 10
-    max_raw_items = 500
+    minimum_today_messages = 10
+    fetch_page_budget = _read_int_env("FEISHU_HISTORY_FETCH_PAGE_BUDGET", 50, 1, 100)
+    fetch_item_budget = _read_int_env("FEISHU_HISTORY_FETCH_ITEM_BUDGET", 500, 50, 10000)
     requested_page_token = (page_token or "").strip()
-    target_count = max(size, minimum_today_count) if normalized_range == "today" else size
+    desired_return_count = max(size, minimum_today_messages) if normalized_range == "today" else size
 
     resolved_container_id_type = _resolve_container_id_type(cid, container_id_type)
     app_hint = _app_id_hint()
@@ -285,7 +357,7 @@ def fetch_feishu_chat_history(
             start_time_s: int | None,
             end_time_s: int | None,
             initial_page_token: str,
-            need_count: int,
+            stop_after_count: int | None,
         ) -> tuple[dict[str, Any] | None, ToolResponse | None]:
             messages: list[dict[str, Any]] = []
             current_token = (initial_page_token or "").strip()
@@ -296,7 +368,7 @@ def fetch_feishu_chat_history(
             segment_http_status = 200
             segment_payload: dict[str, Any] = {}
 
-            for _ in range(max_pages):
+            for _ in range(fetch_page_budget):
                 params: dict[str, Any] = {
                     "container_id_type": resolved_container_id_type,
                     "container_id": cid,
@@ -326,46 +398,24 @@ def fetch_feishu_chat_history(
                     _invalid_container_hint(cid, resolved_container_id_type, app_hint) if is_invalid_container else ""
                 )
 
-                if segment_http_status >= 400:
-                    text = (
-                        f"[Feishu] 拉取历史消息失败: http_status={segment_http_status}, "
-                        f"payload={json.dumps(segment_payload, ensure_ascii=False)}"
-                    )
-                    if diagnostic_hint:
-                        text += f"\n[Feishu] 诊断提示: {diagnostic_hint}"
-                    return None, ToolResponse(
-                        content=[TextBlock(type="text", text=text)],
-                        metadata={
-                            "error": "invalid_container_id" if is_invalid_container else "http_error",
-                            "http_status": segment_http_status,
-                            "payload": segment_payload,
-                            "chat_id": cid,
-                            "container_id_type": resolved_container_id_type,
-                            "app_id_hint": app_hint,
-                            "history_range_requested": history_range,
-                            "history_range_applied": normalized_range,
-                        },
-                    )
+                if segment_http_status >= 400 or api_code != 0:
+                    if is_invalid_container:
+                        error_kind = "invalid_container_id"
+                    elif segment_http_status >= 400:
+                        error_kind = "http_error"
+                    else:
+                        error_kind = "api_error"
 
-                if api_code != 0:
-                    text = (
-                        f"[Feishu] 拉取历史消息失败: http_status={segment_http_status}, "
-                        f"payload={json.dumps(segment_payload, ensure_ascii=False)}"
-                    )
-                    if diagnostic_hint:
-                        text += f"\n[Feishu] 诊断提示: {diagnostic_hint}"
-                    return None, ToolResponse(
-                        content=[TextBlock(type="text", text=text)],
-                        metadata={
-                            "error": "invalid_container_id" if is_invalid_container else "api_error",
-                            "http_status": segment_http_status,
-                            "payload": segment_payload,
-                            "chat_id": cid,
-                            "container_id_type": resolved_container_id_type,
-                            "app_id_hint": app_hint,
-                            "history_range_requested": history_range,
-                            "history_range_applied": normalized_range,
-                        },
+                    return None, _build_feishu_history_error_response(
+                        error_kind=error_kind,
+                        http_status=segment_http_status,
+                        payload=segment_payload,
+                        chat_id=cid,
+                        container_id_type=resolved_container_id_type,
+                        app_id_hint=app_hint,
+                        history_range_requested=history_range,
+                        history_range_applied=normalized_range,
+                        diagnostic_hint=diagnostic_hint,
                     )
 
                 data = segment_payload.get("data") if isinstance(segment_payload.get("data"), dict) else {}
@@ -393,9 +443,9 @@ def fetch_feishu_chat_history(
                     )
 
                 raw_count += len(items)
-                if len(messages) >= need_count:
+                if stop_after_count is not None and len(messages) >= stop_after_count:
                     break
-                if raw_count >= max_raw_items:
+                if raw_count >= fetch_item_budget:
                     break
                 if not segment_has_more:
                     break
@@ -421,7 +471,7 @@ def fetch_feishu_chat_history(
             start_time_s=range_start_s,
             end_time_s=range_end_s,
             initial_page_token=phase_one_token,
-            need_count=target_count,
+            stop_after_count=desired_return_count,
         )
         if err is not None:
             return err
@@ -440,13 +490,13 @@ def fetch_feishu_chat_history(
         today_count = len(messages) if normalized_range == "today" else 0
         extended_to_minimum = False
 
-        if normalized_range == "today" and today_count < minimum_today_count:
-            need_more = minimum_today_count - today_count
+        if normalized_range == "today" and today_count < desired_return_count:
+            missing_today_messages = desired_return_count - today_count
             backfill, err = _fetch_segment(
                 start_time_s=None,
                 end_time_s=range_start_s,
                 initial_page_token="",
-                need_count=need_more,
+                stop_after_count=missing_today_messages,
             )
             if err is not None:
                 return err
@@ -459,7 +509,7 @@ def fetch_feishu_chat_history(
                     messages.append(item)
                     if mid:
                         existing_ids.add(mid)
-                    if len(messages) >= minimum_today_count:
+                    if len(messages) >= desired_return_count:
                         break
 
                 if len(messages) > today_count:
@@ -472,7 +522,7 @@ def fetch_feishu_chat_history(
                 http_status = int(backfill.get("http_status") or http_status)
                 payload = backfill.get("payload") if isinstance(backfill.get("payload"), dict) else payload
 
-        simplified = messages[:target_count]
+        simplified = messages[:desired_return_count]
 
         preview = json.dumps(simplified[:5], ensure_ascii=False)
         return ToolResponse(
@@ -496,7 +546,10 @@ def fetch_feishu_chat_history(
                 "payload": payload,
                 "history_range_requested": history_range,
                 "history_range_applied": normalized_range,
-                "minimum_today_count": minimum_today_count,
+                "minimum_today_count": minimum_today_messages,
+                "desired_return_count": desired_return_count,
+                "fetch_page_budget": fetch_page_budget,
+                "fetch_item_budget": fetch_item_budget,
                 "today_count": today_count,
                 "extended_to_minimum": extended_to_minimum,
                 "requested_page_token": requested_page_token,
