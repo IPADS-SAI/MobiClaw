@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import asyncio
 import base64
+import functools
+from functools import lru_cache
 import logging
 import os
 import json
@@ -28,7 +30,7 @@ from agentscope.tool import Toolkit, ToolResponse
 from agentscope.plan import PlanNotebook, Plan, SubTask
 
 
-from .config import MODEL_CONFIG, MEMORY_CONFIG, RAG_CONFIG, ROUTING_CONFIG
+from .config import CUSTOM_AGENT_CONFIG, MODEL_CONFIG, MEMORY_CONFIG, RAG_CONFIG, ROUTING_CONFIG, SCHEDULE_CONFIG
 from .tools import (
     arxiv_search,
     brave_search,
@@ -75,15 +77,21 @@ def _trim_for_log(text: str, max_chars: int = 260) -> str:
     return text[:max_chars].rstrip() + "..."
 
 
-def create_openai_model(*, stream: bool = True, temperature: float | None = None) -> OpenAIChatModel:
+def create_openai_model(
+    *,
+    stream: bool = True,
+    temperature: float | None = None,
+    model_name: str | None = None,
+) -> OpenAIChatModel:
     """创建 OpenAI 兼容的聊天模型实例。"""
     api_base = MODEL_CONFIG["api_base"]
     if not api_base.startswith("http://") and not api_base.startswith("https://"):
         api_base = "http://" + api_base
 
     temp = MODEL_CONFIG["temperature"] if temperature is None else temperature
+    selected_model_name = (model_name or "").strip() or MODEL_CONFIG["model_name"]
     return OpenAIChatModel(
-        model_name=MODEL_CONFIG["model_name"],
+        model_name=selected_model_name,
         api_key=MODEL_CONFIG["api_key"],
         stream=stream,
         client_kwargs={"base_url": api_base},
@@ -326,13 +334,119 @@ class AgentCapability:
     boundaries: list[str]
 
 
-def get_agent_capability_descriptions() -> dict[str, dict[str, object]]:
+@dataclass
+class CustomAgentDefinition:
+    """配置文件驱动的自定义 Agent 定义。"""
+
+    name: str
+    display_name: str
+    role: str
+    system_prompt: str
+    tools: list[str]
+    strengths: list[str]
+    typical_tasks: list[str]
+    boundaries: list[str]
+    model_name: str | None
+    temperature: float | None
+    max_iters: int
+
+
+def _tool_catalog() -> dict[str, tuple[Any, str]]:
+    """返回可供自定义 Agent 复用的工具目录。"""
+    return {
+        "run_shell_command": (run_shell_command, "运行受限的本地命令行工具（白名单约束）。"),
+        "run_skill_script": (run_skill_script, "在指定 execution_dir 中执行 skill 脚本。"),
+        "brave_search": (brave_search, "通过 Brave Search API 联网检索新闻与网页来源链接。"),
+        "arxiv_search": (arxiv_search, "查询 arXiv API 获取论文元数据、摘要与 PDF 链接。"),
+        "dblp_conference_search": (dblp_conference_search, "检索会议论文清单与链接（DBLP）。"),
+        "fetch_url_text": (fetch_url_text, "抓取指定 URL 的文本内容用于快速检索。"),
+        "fetch_url_readable_text": (fetch_url_readable_text, "抓取并提取网页可读文本。"),
+        "fetch_url_links": (fetch_url_links, "抓取网页并提取链接。"),
+        "download_file": (download_file, "下载 URL 文件到本地路径（支持二进制，例如 PDF）。"),
+        "extract_pdf_text": (extract_pdf_text, "从本地 PDF 文件中提取文本内容。"),
+        "extract_image_text_ocr": (extract_image_text_ocr, "从本地图片文件中执行 OCR 识别。"),
+        "read_docx_text": (read_docx_text, "读取 DOCX 文档文本内容。"),
+        "create_docx_from_text": (create_docx_from_text, "从纯文本生成 DOCX 文档。"),
+        "edit_docx": (edit_docx, "对 DOCX 文档进行查找替换、追加段落或插入表格。"),
+        "create_pdf_from_text": (create_pdf_from_text, "从纯文本生成 PDF 文档。"),
+        "read_xlsx_summary": (read_xlsx_summary, "读取 XLSX 工作簿摘要与预览。"),
+        "write_xlsx_from_records": (write_xlsx_from_records, "从记录列表生成 XLSX 文件。"),
+        "write_xlsx_from_rows": (write_xlsx_from_rows, "从行数据生成 XLSX 文件。"),
+        "write_text_file": (write_text_file, "写入本地文本文件。"),
+        "search_task_history": (search_task_history, "检索历史任务执行记录和相关文档。"),
+        "search_steward_knowledge": (search_steward_knowledge, "检索本地知识库中已存储的信息。"),
+        "store_steward_knowledge": (store_steward_knowledge, "将收集到的信息存入本地知识库。"),
+        "fetch_feishu_chat_history": (fetch_feishu_chat_history, "读取飞书会话历史消息列表。"),
+        "get_feishu_message": (get_feishu_message, "按消息 ID 获取飞书消息详情。"),
+        "update_long_term_memory": (update_long_term_memory, "更新长期记忆文件（MEMORY.md）。"),
+        "read_pptx_summary": (read_pptx_summary, "读取 PPTX/PPT 文件并返回结构化摘要。"),
+        "create_pptx_from_outline": (create_pptx_from_outline, "从幻灯片大纲列表创建新 PPTX 文件。"),
+        "edit_pptx": (edit_pptx, "综合编辑已有 PPTX。"),
+        "insert_pptx_image": (insert_pptx_image, "向指定幻灯片插入本地图片。"),
+        "set_pptx_text_style": (set_pptx_text_style, "对匹配文本应用 PPTX 字体样式。"),
+    }
+
+
+def _normalize_agent_name(raw: str) -> str:
+    value = re.sub(r"[^0-9a-zA-Z_\-]+", "_", str(raw or "").strip().lower())
+    return value.strip("_")
+
+
+def _as_str_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    items: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text:
+            items.append(text)
+    return items
+
+
+def _builtin_agent_capabilities() -> list[AgentCapability]:
     """返回路由可用的 Agent 能力描述字典。
 
     返回值说明：
         dict[str, dict[str, object]]: 以 agent 名称为键、能力画像为值的映射。
     """
-    registry = [
+
+    worker_role = "负责通用检索、网页阅读、学术资料收集、生成和阅读各类文档、智能管家知识库检索、本地工具执行"
+    if RAG_CONFIG["task_history_enabled"]:
+        worker_role += "、历史任务检索"
+    if MEMORY_CONFIG["enabled"]:
+        worker_role += "、长期记忆管理"
+    if SCHEDULE_CONFIG["enabled"]:
+        worker_role += "、定时任务管理"
+    worker_role += "，飞书相关的聊天历史检索（使用飞书连接时）"
+    
+    worker_strengths = [
+        "Brave/网页/arXiv/DBLP 检索",
+        "下载文件与 PDF 文本提取",
+        "Word/Excel/PDF 文档读写与编辑",
+        "Shell 与本地文件写入",
+        "智能管家知识库检索",
+    ]
+    if RAG_CONFIG["task_history_enabled"]:
+        worker_strengths.append("历史任务记录检索")
+    if MEMORY_CONFIG["enabled"]:
+        worker_strengths.append("长期记忆读写（记录用户偏好、事实信息等跨会话信息）")
+    if SCHEDULE_CONFIG["enabled"]:
+        worker_strengths.append("定时任务管理（创建、查看、取消）")
+
+    worker_typical_tasks = [
+        "检索最新论文并总结",
+        "整理或生成 Word/Excel/PDF 文档",
+        "抓取网页并提炼可执行结论",
+        "检索智能管家存储的知识（如手机采集的 OCR 文字、对话记录等）",
+    ]
+    if RAG_CONFIG["task_history_enabled"]:
+        worker_typical_tasks.append("查询之前做过的任务或历史记录")
+    if MEMORY_CONFIG["enabled"]:
+        worker_typical_tasks.append("记住用户偏好或更新长期记忆")
+    if SCHEDULE_CONFIG["enabled"]:
+        worker_typical_tasks.append("查看、创建或取消定时任务")
+
+    return [
         AgentCapability(
             name="steward",
             role="负责手机端数据收集-存储-分析这一类特殊任务（Collect/Store/Analyze/Execute）",
@@ -350,29 +464,155 @@ def get_agent_capability_descriptions() -> dict[str, dict[str, object]]:
         ),
         AgentCapability(
             name="worker",
-            role="负责通用检索、网页阅读、学术资料收集、生成和阅读各类文档、历史任务检索、知识库检索、长期记忆管理，本地工具执行，飞书相关的聊天历史检索（使用飞书连接时）",
-            strengths=[
-                "Brave/网页/arXiv/DBLP 检索",
-                "下载文件与 PDF 文本提取",
-                "Word/Excel/PDF 文档读写与编辑",
-                "Shell 与本地文件写入",
-                "历史任务记录检索与知识库检索",
-                "长期记忆读写（记录用户偏好、事实信息等跨会话信息）",
-            ],
-            typical_tasks=[
-                "检索最新论文并总结",
-                "整理或生成 Word/Excel/PDF 文档",
-                "抓取网页并提炼可执行结论",
-                "查询之前做过的任务或历史记录",
-                "检索智能管家存储的知识（如手机采集的 OCR 文字、对话记录等）",
-                "记住用户偏好或更新长期记忆",
-            ],
+            role=worker_role,
+            strengths=worker_strengths,
+            typical_tasks=worker_typical_tasks,
             boundaries=[
                 "不直接执行手机 GUI 操作",
             ],
         ),
     ]
+
+
+@lru_cache(maxsize=1)
+def _load_custom_agent_definitions() -> tuple[CustomAgentDefinition, ...]:
+    raw_items = CUSTOM_AGENT_CONFIG.get("agents", []) if isinstance(CUSTOM_AGENT_CONFIG, dict) else []
+    if not isinstance(raw_items, list) or not raw_items:
+        return ()
+
+    catalog = _tool_catalog()
+    reserved = {"worker", "steward", "router", "planner", "skillselector", "user", "mobichatbot"}
+    seen: set[str] = set()
+    defs: list[CustomAgentDefinition] = []
+
+    for idx, raw in enumerate(raw_items, start=1):
+        if not isinstance(raw, dict):
+            logger.warning("custom agent ignored: index=%d reason=not_object", idx)
+            continue
+
+        display_name = str(raw.get("agent_name") or "").strip()
+        role = str(raw.get("role") or "").strip()
+        system_prompt = str(raw.get("system_prompt") or "").strip()
+        if not display_name or not role or not system_prompt:
+            logger.warning("custom agent ignored: index=%d reason=missing_required_fields", idx)
+            continue
+
+        name = _normalize_agent_name(display_name)
+        if not name:
+            logger.warning("custom agent ignored: index=%d reason=invalid_name", idx)
+            continue
+        if name in reserved:
+            logger.warning("custom agent ignored: name=%s reason=reserved_name", name)
+            continue
+        if name in seen:
+            logger.warning("custom agent ignored: name=%s reason=duplicate", name)
+            continue
+
+        raw_tools = _as_str_list(raw.get("tools"))
+        tools = list(dict.fromkeys([_normalize_agent_name(tool) for tool in raw_tools if _normalize_agent_name(tool)]))
+        unknown_tools = [tool for tool in tools if tool not in catalog]
+        if unknown_tools:
+            logger.warning(
+                "custom agent ignored: name=%s reason=unknown_tools unknown=%s",
+                name,
+                unknown_tools,
+            )
+            continue
+
+        temperature: float | None = None
+        if raw.get("temperature") is not None:
+            try:
+                temperature = float(raw.get("temperature"))
+            except (TypeError, ValueError):
+                logger.warning("custom agent ignored: name=%s reason=invalid_temperature", name)
+                continue
+
+        max_iters = 12
+        if raw.get("max_iters") is not None:
+            try:
+                max_iters = max(1, min(50, int(raw.get("max_iters"))))
+            except (TypeError, ValueError):
+                logger.warning("custom agent ignored: name=%s reason=invalid_max_iters", name)
+                continue
+
+        model_name = str(raw.get("model_name") or "").strip() or None
+        defs.append(
+            CustomAgentDefinition(
+                name=name,
+                display_name=display_name,
+                role=role,
+                system_prompt=system_prompt,
+                tools=tools,
+                strengths=_as_str_list(raw.get("strengths")),
+                typical_tasks=_as_str_list(raw.get("typical_tasks")),
+                boundaries=_as_str_list(raw.get("boundaries")),
+                model_name=model_name,
+                temperature=temperature,
+                max_iters=max_iters,
+            )
+        )
+        seen.add(name)
+
+    return tuple(defs)
+
+
+def get_agent_capability_descriptions() -> dict[str, dict[str, object]]:
+    """返回路由可用的 Agent 能力描述字典。
+
+    返回值说明：
+        dict[str, dict[str, object]]: 以 agent 名称为键、能力画像为值的映射。
+    """
+    registry = _builtin_agent_capabilities()
+    for item in _load_custom_agent_definitions():
+        registry.append(
+            AgentCapability(
+                name=item.name,
+                role=item.role,
+                strengths=item.strengths,
+                typical_tasks=item.typical_tasks,
+                boundaries=item.boundaries,
+            )
+        )
     return {item.name: asdict(item) for item in registry}
+
+
+def create_configured_agent_by_name(agent_name: str, *, skill_context: str | None = None) -> ReActAgent | None:
+    """根据 custom_agent.json 定义按名称构建自定义 Agent。"""
+    normalized = _normalize_agent_name(agent_name)
+    target = None
+    for item in _load_custom_agent_definitions():
+        if item.name == normalized:
+            target = item
+            break
+    if target is None:
+        return None
+
+    toolkit = Toolkit()
+    catalog = _tool_catalog()
+    for tool_name in target.tools:
+        func, desc = catalog[tool_name]
+        if tool_name == "search_task_history" and not RAG_CONFIG["task_history_enabled"]:
+            continue
+        if tool_name == "update_long_term_memory" and not MEMORY_CONFIG["enabled"]:
+            continue
+        toolkit.register_tool_function(func, func_description=desc)
+
+    sys_prompt = target.system_prompt
+    sys_prompt += _build_memory_prompt()
+    sys_prompt += _build_skill_prompt_suffix(skill_context)
+
+    return ReActAgent(
+        name=target.display_name,
+        sys_prompt=sys_prompt,
+        model=create_openai_model(
+            temperature=target.temperature,
+            model_name=target.model_name,
+        ),
+        formatter=OpenAIChatFormatter(),
+        toolkit=toolkit,
+        memory=InMemoryMemory(),
+        max_iters=target.max_iters,
+    )
 
 
 def create_router_agent() -> ReActAgent:
@@ -388,7 +628,11 @@ def create_router_agent() -> ReActAgent:
     return ReActAgent(
         name="Router",
         sys_prompt=sys_prompt,
-        model=create_openai_model(stream=True, temperature=0.1),
+        model=create_openai_model(
+            stream=True,
+            temperature=0.1,
+            model_name=MODEL_CONFIG.get("orchestrator_model_name"),
+        ),
         formatter=OpenAIChatFormatter(),
         # toolkit=Toolkit(),
         # memory=InMemoryMemory(),
@@ -409,7 +653,11 @@ def create_planner_agent() -> ReActAgent:
     return ReActAgent(
         name="Planner",
         sys_prompt=sys_prompt,
-        model=create_openai_model(stream=True, temperature=0.1),
+        model=create_openai_model(
+            stream=True,
+            temperature=0.1,
+            model_name=MODEL_CONFIG.get("orchestrator_model_name"),
+        ),
         formatter=OpenAIChatFormatter(),
         # toolkit=Toolkit(),
         # memory=InMemoryMemory(),
@@ -430,13 +678,20 @@ def create_skill_selector_agent() -> ReActAgent:
     return ReActAgent(
         name="SkillSelector",
         sys_prompt=sys_prompt,
-        model=create_openai_model(stream=True, temperature=0.1),
+        model=create_openai_model(
+            stream=True,
+            temperature=0.1,
+            model_name=MODEL_CONFIG.get("orchestrator_model_name"),
+        ),
         formatter=OpenAIChatFormatter(),
         max_iters=1,
     )
 
 
-def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
+def create_worker_agent(
+    skill_context: str | None = None,
+    job_context: dict[str, Any] | None = None,
+) -> ReActAgent:
     """创建 Worker Agent，用于子任务委派。"""
     toolkit = Toolkit()
 
@@ -537,11 +792,7 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
         write_text_file,
         func_description="写入本地文本文件，用于保存结果或日志。",
     )
-    if RAG_CONFIG["task_history_enabled"]:
-        toolkit.register_tool_function(
-            search_task_history,
-            func_description="检索历史任务执行记录和相关文档，用于回答关于之前做过的任务的问题。",
-        )
+        
     toolkit.register_tool_function(
         search_steward_knowledge,
         func_description="检索本地知识库中已存储的信息（由智能管家从手机中提取并存储）。",
@@ -632,6 +883,10 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
 - 不做多步长对话，输出最终结论或可执行结果。
 """
     if RAG_CONFIG["task_history_enabled"]:
+        toolkit.register_tool_function(
+            search_task_history,
+            func_description="检索历史任务执行记录和相关文件，用于回答关于之前做过的任务的问题。",
+        )
         sys_prompt += "- 如果用户询问之前做过的任务，使用 \"search_task_history\" 检索历史记录。\n"
 
     if MEMORY_CONFIG["enabled"]:
@@ -645,6 +900,29 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
         sys_prompt += (
             "- 你拥有 \"update_long_term_memory\" 工具，可更新长期记忆。"
             "当用户明确要求记住某些偏好或信息时，先读取现有记忆内容，合并后写回。\n"
+        )
+
+    if SCHEDULE_CONFIG["enabled"]:
+        from .tools.schedule import list_scheduled_tasks, cancel_scheduled_task, create_scheduled_task
+
+        bound_create = functools.partial(create_scheduled_task, bound_job_context=job_context or {})
+        bound_create.__name__ = "create_scheduled_task"
+        bound_create.__doc__ = create_scheduled_task.__doc__
+        toolkit.register_tool_function(
+            bound_create,
+            func_description='创建定时任务。传入 task（核心任务描述，去除时间信息）和 time_description（自然语言时间描述，如"每天早上8点"（周期任务）、"下午2点10分"（单次任务））。系统会自动解析时间并创建定时调度。',
+        )
+        toolkit.register_tool_function(
+            list_scheduled_tasks,
+            func_description="列出所有定时任务及其状态信息（schedule_id、任务内容、状态、调度类型、描述、cron 表达式等）。",
+        )
+        toolkit.register_tool_function(
+            cancel_scheduled_task,
+            func_description="取消指定的定时任务。需要提供 schedule_id，可先通过 list_scheduled_tasks 查询。",
+        )
+        sys_prompt += (
+            '- 如果用户想创建定时任务（如"每天帮我搜新闻"），使用 "create_scheduled_task" 创建，传入核心任务和时间描述。\n'
+            "- 如果用户想查看或取消定时任务，使用 \"list_scheduled_tasks\" 查看列表，使用 \"cancel_scheduled_task\" 取消指定任务。\n"
         )
 
     sys_prompt += _build_memory_prompt()
@@ -943,16 +1221,15 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
 - `status`, `latest_run_dir`, `latest_index_file`, `latest_screenshot_path`, `latest_reasoning`, `latest_ocr_preview`, `next_action_recommendation`
 
 ### 存储 (Store)
-- 使用 `store_steward_knowledge` 工具将收集到的信息存入知识库
+- 使用 `store_steward_knowledge` 工具将收集到的信息存入管家知识库
 - 确保所有有价值的信息都被持久化保存
 
-### 分析 (Analyze)
-- 使用 `search_steward_knowledge` 检索知识库中已存储的数据
-- 根据检索到的原始片段，自行分析总结待办事项、账单、重要提醒等
-
 ### 检索 (Retrieve)
-- 查找之前存储的数据（OCR、对话记录等），使用 `search_steward_knowledge`
+- 查找之前存储的管家知识库（OCR、对话记录等），使用 `search_steward_knowledge`
 - 对外部页面查询可用 `fetch_url_text` 获取原始文本
+
+### 分析 (Analyze)
+- 根据管家知识库检索到的原始片段，自行分析总结待办事项、账单、重要提醒等
 
 ### 委派 (Delegate)
 - 可将通用检索、浏览器查询或本地命令任务交给 `delegate_to_worker`

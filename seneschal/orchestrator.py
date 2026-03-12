@@ -819,6 +819,21 @@ def _rule_route(task: str) -> RouteDecision:
         "过去",
         "任务记录",
         "做过",
+        "取消定时",
+        "取消任务",
+        "定时任务",
+        "定时",
+        "定期",
+        "每天",
+        "每日",
+        "每周",
+        "每月",
+        "cancel",
+        "schedule",
+        "every day",
+        "every week",
+        "daily",
+        "weekly",
     }
     steward_keys = {
         "微信",
@@ -1100,15 +1115,29 @@ def _fallback_plan(task: str, decision: RouteDecision, max_subtasks: int) -> lis
     return stages or [[{"agent": _default_agent_name(), "task": task.strip()}]]
 
 
-def _build_agent(agent_name: str, skill_context: str | None = None):
+def _build_agent(
+    agent_name: str,
+    skill_context: str | None = None,
+    job_context: dict[str, Any] | None = None,
+):
     """按名称构建对应执行 Agent。"""
     normalized = (agent_name or "").strip().lower()
+
+    custom_factory = getattr(agents_module, "create_configured_agent_by_name", None)
+    if callable(custom_factory):
+        custom_agent = custom_factory(normalized, skill_context=skill_context)
+        if custom_agent is not None:
+            return custom_agent
+
     factory = getattr(agents_module, f"create_{normalized}_agent", None)
     if callable(factory):
         try:
-            return factory(skill_context=skill_context)
+            return factory(skill_context=skill_context, job_context=job_context)
         except TypeError:
-            return factory()
+            try:
+                return factory(skill_context=skill_context)
+            except TypeError:
+                return factory()
 
     fallback = _default_agent_name()
     if normalized != fallback:
@@ -1119,11 +1148,13 @@ def _build_agent(agent_name: str, skill_context: str | None = None):
         )
     fallback_factory = getattr(agents_module, f"create_{fallback}_agent", None)
     if callable(fallback_factory):
-        return fallback_factory()
+        try:
+            return fallback_factory(job_context=job_context)
+        except TypeError:
+            return fallback_factory()
 
-    # Defensive fallback to keep runtime compatible if registry and factories drift.
     if fallback == "worker":
-        return create_worker_agent(skill_context=skill_context)
+        return create_worker_agent(skill_context=skill_context, job_context=job_context)
     return create_steward_agent(skill_context=skill_context)
 
 
@@ -1138,12 +1169,21 @@ async def _run_one_agent(
     session_manager: GenericSessionManager | None = None,
     session_handle: GenericSessionHandle | None = None,
     session_mode: str = "router",
-    external_context_text: str | None = None,
+    external_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """执行单个子任务并返回结构化结果。"""
     skill_list = selected_skills or []
     skill_context = _skill_prompt_context(skill_list)
-    agent = _build_agent(agent_name, skill_context=skill_context)
+
+    # 重新组装，和JobContext字段对齐，透传给worker agent，用于创建定时任务
+    job_ctx_dict = {
+        "feishu_chat_id": external_context.get("feishu", {}).get("chat_id", None),
+        "feishu_user_open_id": external_context.get("feishu", {}).get("open_id", None),
+        "feishu_message_id": external_context.get("feishu", {}).get("message_id", None),
+    }
+    job_ctx_dict["feishu_receive_id_type"] = "chat_id" if job_ctx_dict["feishu_chat_id"] else "open_id"
+    
+    agent = _build_agent(agent_name, skill_context=skill_context, job_context=job_ctx_dict)
     if session_manager is not None and session_handle is not None:
         await session_manager.load_agent_state(
             session_handle,
@@ -1159,8 +1199,8 @@ async def _run_one_agent(
             + "\n\n"
             + msg_content
         )
-    if external_context_text:
-        msg_content = external_context_text + "\n\n" + msg_content
+    if external_context:
+        msg_content = _build_external_context_text(external_context) + "\n\n" + msg_content
 
     if output_path:
         msg_content += (
@@ -1261,7 +1301,6 @@ async def run_orchestrated_task(
         dict[str, Any]: 含最终回复、路由轨迹、执行明细与文件信息。
     """
     task_start = time.perf_counter()
-    external_context_text = _build_external_context_text(external_context)
     normalized_mode = (mode or "").strip().lower() or ROUTING_CONFIG["default_mode"]
     session_handle = await _GENERIC_SESSION_MANAGER.resolve_session(
         context_id,
@@ -1353,34 +1392,46 @@ async def run_orchestrated_task(
     max_subtasks = int(ROUTING_CONFIG["max_subtasks"])
     planner_allowed_agents = _planner_allowed_agents(decision)
     plan_control_path = "direct"
+    single_non_steward_direct = (
+        len(decision.target_agents) == 1 and decision.target_agents[0] != "steward"
+    )
     if decision.plan_required or len(decision.target_agents) > 1:
-        try:
-            stages = await asyncio.wait_for(
-                _llm_plan(task, decision, max_subtasks=max_subtasks),
-                timeout=planner_timeout_s,
-            )
-            plan_source = "llm"
-            plan_control_path = "planner_llm"
+        if single_non_steward_direct:
+            stages = [[{"agent": decision.target_agents[0], "task": task.strip()}]]
+            plan_source = "direct_single_non_steward"
+            plan_control_path = "direct_single_non_steward"
             logger.info(
-                "orchestrator.plan.ok timeout_s=%.2f stages=%d",
-                planner_timeout_s,
-                len(stages),
+                "orchestrator.plan.skip_single_non_steward target=%s",
+                decision.target_agents[0],
             )
-        except asyncio.TimeoutError:
-            timeout_default_agent = "worker" if "worker" in _available_agent_names() else _default_agent_name()
-            stages = [[{"agent": timeout_default_agent, "task": task.strip()}]]
-            plan_source = "timeout_worker"
-            plan_control_path = "planner_timeout_worker"
-            logger.warning(
-                "orchestrator.plan.timeout timeout_s=%.2f; fallback=%s",
-                planner_timeout_s,
-                timeout_default_agent,
-            )
-        except Exception:
-            stages = _fallback_plan(task, decision, max_subtasks=max_subtasks)
-            plan_source = "fallback"
-            plan_control_path = "planner_error_fallback"
-            logger.exception("orchestrator.plan.error fallback=rule")
+        else:
+            try:
+                stages = await asyncio.wait_for(
+                    _llm_plan(task, decision, max_subtasks=max_subtasks),
+                    timeout=planner_timeout_s,
+                )
+                plan_source = "llm"
+                plan_control_path = "planner_llm"
+                logger.info(
+                    "orchestrator.plan.ok timeout_s=%.2f stages=%d",
+                    planner_timeout_s,
+                    len(stages),
+                )
+            except asyncio.TimeoutError:
+                timeout_default_agent = "worker" if "worker" in _available_agent_names() else _default_agent_name()
+                stages = [[{"agent": timeout_default_agent, "task": task.strip()}]]
+                plan_source = "timeout_worker"
+                plan_control_path = "planner_timeout_worker"
+                logger.warning(
+                    "orchestrator.plan.timeout timeout_s=%.2f; fallback=%s",
+                    planner_timeout_s,
+                    timeout_default_agent,
+                )
+            except Exception:
+                stages = _fallback_plan(task, decision, max_subtasks=max_subtasks)
+                plan_source = "fallback"
+                plan_control_path = "planner_error_fallback"
+                logger.exception("orchestrator.plan.error fallback=rule")
     else:
         stages = [[{"agent": decision.target_agents[0], "task": task.strip()}]]
         plan_source = "direct"
@@ -1495,7 +1546,7 @@ async def run_orchestrated_task(
                         session_manager=_GENERIC_SESSION_MANAGER,
                         session_handle=session_handle,
                         session_mode=normalized_mode,
-                        external_context_text=external_context_text,
+                        external_context=external_context,
                     ),
                     timeout=subtask_timeout_s,
                 )

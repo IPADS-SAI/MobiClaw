@@ -3,15 +3,59 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
+from pathlib import Path
 from .env import load_project_env
+
+
+logger = logging.getLogger(__name__)
 
 
 load_project_env()
 
+
+def _custom_agent_config_path() -> Path:
+    raw = (os.environ.get("SENESCHAL_CUSTOM_AGENT_CONFIG_PATH") or "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return Path(__file__).resolve().parent / "configs" / "custom_agent.json"
+
+
+def _load_custom_agents() -> list[dict[str, object]]:
+    path = _custom_agent_config_path()
+    if not path.exists() or not path.is_file():
+        return []
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("custom agent config parse failed: path=%s error=%s", path, exc)
+        return []
+
+    if isinstance(payload, dict):
+        payload = payload.get("agents", [])
+
+    if not isinstance(payload, list):
+        logger.warning("custom agent config must be list or {\"agents\": [...]}: path=%s", path)
+        return []
+
+    agents: list[dict[str, object]] = []
+    for item in payload:
+        if isinstance(item, dict):
+            agents.append(item)
+        else:
+            logger.warning("custom agent config item ignored (not object): path=%s item=%r", path, item)
+    return agents
+
 # LLM 模型配置 - 优先从环境变量读取，否则使用默认值
 MODEL_CONFIG = {
     "model_name": os.environ.get("OPENROUTER_MODEL", os.environ.get("OPENAI_MODEL", "google/gemini-3-flash-preview")),
+    "orchestrator_model_name": os.environ.get(
+        "OPENROUTER_MODEL_FOR_ORCHESTRATOR",
+        os.environ.get("OPENROUTER_MODEL", os.environ.get("OPENAI_MODEL", "google/gemini-3-flash-preview")),
+    ),
     "api_key": os.environ.get("OPENROUTER_API_KEY", os.environ.get("OPENAI_API_KEY", "sk-or-v1-xxx")),
     "api_base": os.environ.get("OPENROUTER_BASE_URL", os.environ.get("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")),
     "temperature": 0.5,
@@ -43,7 +87,7 @@ RAG_CONFIG = {
     "embedding_dimensions": int(os.environ.get("SENESCHAL_RAG_EMBEDDING_DIMENSIONS", "1536")),
     "chunk_size": int(os.environ.get("SENESCHAL_RAG_CHUNK_SIZE", "512")),
     "index_file_content": os.environ.get("SENESCHAL_RAG_INDEX_FILE_CONTENT", "0").strip() not in {"0", "false", "False"},
-    "task_history_enabled": os.environ.get("SENESCHAL_RAG_ENABLED", "0").strip() not in {"0", "false", "False"},
+    "task_history_enabled": os.environ.get("SENESCHAL_RAG_STORE_HISTORY", "1").strip() not in {"0", "false", "False"},
 }
 
 # Brave Search 配置 (联网搜索)
@@ -74,8 +118,20 @@ ROUTING_CONFIG = {
     "skill_hint_override": os.environ.get("SENESCHAL_SKILL_HINT_OVERRIDE", "1").strip() not in {"0", "false", "False"},
 }
 
+# 定时任务调度配置
+SCHEDULE_CONFIG = {
+    "enabled": os.environ.get("SENESCHAL_SCHEDULE_ENABLED", "1").strip() not in {"0", "false", "False"},
+    "store_path": os.environ.get("SENESCHAL_SCHEDULE_STORE_PATH", "~/.seneschal/schedules.json")
+}
+
 # 长期记忆配置
 MEMORY_CONFIG = {
-    "enabled": os.environ.get("SENESCHAL_MEMORY_ENABLED", "0").strip() not in {"0", "false", "False"},
+    "enabled": os.environ.get("SENESCHAL_MEMORY_ENABLED", "1").strip() not in {"0", "false", "False"},
     "file_path": os.environ.get("SENESCHAL_MEMORY_FILE", "~/.seneschal/MEMORY.md"),
+}
+
+# 自定义 Agent 配置（配置驱动自动注册）
+CUSTOM_AGENT_CONFIG = {
+    "path": str(_custom_agent_config_path()),
+    "agents": _load_custom_agents(),
 }
