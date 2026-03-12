@@ -618,6 +618,7 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
 - 如果检索学术论文，优先使用 "arxiv_search" 获取元数据与 PDF 链接。
 - 如果检索会议论文，优先使用 "dblp_conference_search" 获取论文清单与链接，然后去arxiv上搜索对应的论文。
 - 如果已经下载过论文/文件了，优先通过临时文件目录，查找之前下载的文件，避免重复上网搜索和下载。
+- 如果已经搜索过论文/文件了，优先通过之前的历史对话获取信息，避免重复联网检索。
 - 如果任务中有今天，明天等相对日期的描述，你可以通过shell中的date命令，获取具体的日期。
 - 拿到候选链接后，优先使用 "fetch_url_readable_text" 抓取正文；需要原始 HTML 时再使用 "fetch_url_text"。
 - 需要从网页中发现相关链接时使用 "fetch_url_links"，再逐条抓取与筛选。
