@@ -25,7 +25,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 import threading
 import time
-from tkinter import NO
+# from tkinter import NO
 import uuid
 from datetime import datetime, timezone
 from dataclasses import asdict, dataclass
