@@ -1,6 +1,6 @@
 # 模块文档：seneschal/tools 工具层（按当前实际代码口径）
 
-本文档说明当前工具层的能力分类、主链路接入情况，以及 legacy 工具的现实定位。
+本文档说明当前工具层的能力分类与主链路接入情况。
 
 ---
 
@@ -26,26 +26,19 @@
 - `seneschal/tools/__init__.py`
 - `seneschal/tools.py`
 
-### 1.3 当前仍保留但属于 legacy 的工具
-
-- `seneschal/tools/weknora.py`
-- `seneschal/tools/weknora/*`
 
 ---
 
 ## 2. 当前工具层的真实定位
 
-当前工具层不应再被理解为“手机 + WeKnora + 网络工具”的并列结构。
-
-更准确的现实是：
+当前工具层的主轴：
 
 1. **Mobi 工具**：手机执行边界
 2. **Web / Papers 工具**：联网信息获取
 3. **Local 工具**：shell / ocr / file / office / ppt / skill
 4. **Memory 工具**：本地长期记忆、本地知识、任务历史
-5. **Legacy 工具**：WeKnora 封装
 
-也就是说，当前工具层的主轴已经变成：
+也就是说，当前工具层的主轴是：
 
 > **Mobi + Local Tools + Local Memory**
 
@@ -217,34 +210,10 @@
 - 本地任务历史
 - steward knowledge
 
-这也解释了为什么当前系统的 Store / Analyze 更偏向本地状态，而不是 WeKnora。
+这也解释了为什么当前系统的 Store / Analyze 更偏向本地状态。
 
 ---
 
-## 8. WeKnora 工具的当前定位
-
-当前仍保留：
-
-- `weknora_add_knowledge`
-- `weknora_rag_chat`
-- `weknora_knowledge_search`
-- `weknora_list_knowledge_bases`
-
-但当前应明确把它们标成：
-
-> **legacy compatibility tools**
-
-原因：
-
-- Chat 主链路不依赖它们
-- Gateway 主链路不依赖它们
-- Orchestrator 主干不依赖它们
-- Worker 主能力不依赖它们
-- 只有部分旧 Daily 路径仍保留调用
-
-因此当前文档不应再把 WeKnora 工具与 Mobi 工具并列写成“当前双核心”。
-
----
 
 ## 9. 工具扩展建议
 
@@ -258,12 +227,6 @@
 4. 补 `func_description`
 5. 补文档和测试
 
-### 9.2 新增 legacy 工具
-
-如果只是为了保留历史兼容：
-
-- 不建议混入当前主链路说明
-- 最好明确标注为 legacy
 
 ---
 
@@ -274,7 +237,6 @@
 - Shell 被拒：检查 allowlist 与危险 token
 - 文件未落盘：检查写入根目录限制
 - OCR 异常：检查依赖和图片路径
-- Daily 仍触发 WeKnora：说明走到了 legacy 路径，而不是当前推荐路径
 
 ---
 
@@ -282,8 +244,4 @@
 
 当前工具层的正确理解不是：
 
-- Mobi + WeKnora + Web
-
-而是：
-
-> **Mobi + Local Tools + Local Memory + Legacy Compatibility**
+> **Mobi + Local Tools + Local Memory**

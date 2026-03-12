@@ -2,19 +2,13 @@
 set -euo pipefail
 
 # 一键关闭脚本：
-# - 停止脚本托管的本地进程（weknora app/frontend/rerank, mobiagent_server）
-# - 尝试停止 WeKnora 基础设施容器（dev.sh stop）
+# - 停止脚本托管的本地进程（mobiagent_server）
 # - 按端口兜底清理托管进程残留
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PID_DIR="$ROOT_DIR/tmp"
-WEKNORA_DIR="$ROOT_DIR/WeKnora"
-RERANK_PORT="${RERANK_PORT:-8001}"
 
 KNOWN_PID_FILES=(
-  "$PID_DIR/weknora-app.pid"
-  "$PID_DIR/weknora-frontend.pid"
-  "$PID_DIR/weknora-rerank.pid"
   "$PID_DIR/mobiagent-server.pid"
 )
 
@@ -69,10 +63,10 @@ is_managed_process() {
   local args cwd
   args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
   cwd="$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)"
-  if [[ -n "$args" && ( "$args" == *"$ROOT_DIR"* || "$args" == *"$WEKNORA_DIR"* || "$args" == *"mobiagent_server"* || "$args" == *"rerank_server_bge-reranker-v2-m3.py"* ) ]]; then
+  if [[ -n "$args" && ( "$args" == *"$ROOT_DIR"* || "$args" == *"mobiagent_server"* ) ]]; then
     return 0
   fi
-  if [[ -n "$cwd" && ( "$cwd" == "$ROOT_DIR"* || "$cwd" == "$WEKNORA_DIR"* ) ]]; then
+  if [[ -n "$cwd" && "$cwd" == "$ROOT_DIR"* ]]; then
     return 0
   fi
   return 1
@@ -131,12 +125,7 @@ main() {
     stop_pid_from_file "$pid_file"
   done
 
-  if [[ -d "$WEKNORA_DIR" ]]; then
-    log "Stopping WeKnora infrastructure via dev.sh stop..."
-    bash "$WEKNORA_DIR/scripts/dev.sh" stop || warn "dev.sh stop failed or services not running"
-  fi
-
-  local ports=("8080" "5173" "$RERANK_PORT" "8081")
+  local ports=("8081")
   for p in "${ports[@]}"; do
     if port_is_listening "$p"; then
       kill_managed_port_listeners "$p"

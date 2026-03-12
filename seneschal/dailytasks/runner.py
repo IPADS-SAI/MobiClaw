@@ -14,7 +14,7 @@ from agentscope.tool import ToolResponse
 
 from ..agents import create_worker_agent
 from ..run_context import RunContext, create_run_context
-from ..tools import call_mobi_collect, weknora_add_knowledge, weknora_rag_chat
+from ..tools import call_mobi_collect
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,6 @@ async def run_daily_tasks(
     ctx.log_event("task_selection", {"trigger": trigger, "task_count": len(tasks)})
 
     collected: list[dict[str, Any]] = []
-    collect_count = 0
     for task in tasks:
         task_id = task.get("task_id", "unknown")
         prompt = build_task_prompt(task)
@@ -118,14 +117,6 @@ async def run_daily_tasks(
         if response and response.metadata:
             metadata["collect_metadata"] = response.metadata
 
-        weknora_add_knowledge(
-            text_content,
-            title=f"Seneschal {task_id}",
-            metadata=metadata,
-        )
-
-        collect_count += 1
-
         collected.append(
             {
                 "task_id": task_id,
@@ -136,20 +127,8 @@ async def run_daily_tasks(
         )
         ctx.log_event("collect_done", {"task_id": task_id})
 
-    analysis = None
-    if collect_count:
-        analysis_query = (
-            "请基于近期新增记录进行总结，输出："
-            "1) 摘要 2) 待办 3) 风险提醒 4) 建议行动。"
-            f"本次 run_id={ctx.run_id}。"
-        )
-        ctx.log_event("analyze_start", {"query": analysis_query})
-        analysis = weknora_rag_chat(analysis_query)
-        ctx.log_event("analyze_done", {"summary": tool_response_to_text(analysis)})
-
     return {
         "run_id": ctx.run_id,
         "task_count": len(tasks),
         "collected": collected,
-        "analysis": analysis,
     }

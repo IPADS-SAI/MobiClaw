@@ -30,12 +30,7 @@
 
 - 手机端 GUI 执行细节：由 `mobiagent_server` 负责
 - 具体联网抓取与文件处理：由 `seneschal/tools/*` 负责
-- 外部知识库主链路：当前代码里已无 WeKnora 主依赖
 
-注意：
-
-- 仓库里仍存在 WeKnora 相关封装与配置
-- 但它们应视为 legacy / 兼容残留，而不是当前核心编排依赖
 
 ---
 
@@ -219,11 +214,6 @@
 - Skill：`SENESCHAL_SKILL_*`
 - Memory：`SENESCHAL_MEMORY_*`
 
-### 8.2 当前仍保留但属于 legacy 的配置
-
-- `WEKNORA_*`
-
-这些字段仍在配置中，但不应再被当作当前运行主链路的必需条件。
 
 ---
 
@@ -234,13 +224,10 @@
 3. Worker / Steward 是执行角色，不是顶层控制中心
 4. MobiAgent 是当前唯一明确的外部执行边界
 5. Store / Analyze 当前更多依赖本地状态、本地工具结果和 Agent 推理
-6. WeKnora 是 legacy，不应继续作为核心编排边界来写
 
 ---
 
 ## 10. 后续清理建议
 
-1. 把旧文档中的 WeKnora 主链路表述全部替换
-2. 继续收敛 Daily 中的 legacy 路径
-3. 考虑把 WeKnora 相关封装移动到 `legacy/` 或单独目录
-4. 增加 `Gateway -> Orchestrator -> Mobi` 的集成测试
+1. 继续收敛 Daily 中的 legacy 路径
+2. 增加 `Gateway -> Orchestrator -> Mobi` 的集成测试

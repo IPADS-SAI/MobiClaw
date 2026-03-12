@@ -67,18 +67,6 @@ MOBI_AGENT_CONFIG = {
     "api_key": os.environ.get("MOBI_AGENT_API_KEY", "mobi-xxx"),
 }
 
-# WeKnora 配置 (知识库 API 地址) — legacy, used by dailytasks runner
-WEKNORA_CONFIG = {
-    "base_url": os.environ.get("WEKNORA_BASE_URL", "http://localhost:8080"),
-    "api_key": os.environ.get(
-        "WEKNORA_API_KEY",
-        "sk-Q-xxx",
-    ),
-    "knowledge_base_name": os.environ.get("WEKNORA_KB_NAME", ""),
-    "agent_name": os.environ.get("WEKNORA_AGENT_NAME", ""),
-    "session_id": os.environ.get("WEKNORA_SESSION_ID", "seneschal-session"),
-}
-
 # RAG 配置 (本地向量知识库)
 RAG_CONFIG = {
     "store_path": os.environ.get("SENESCHAL_RAG_STORE_PATH", "~/.seneschal/rag_store"),

@@ -1,13 +1,13 @@
 # Seneschal
 
-Seneschal 是一个“**编排层**”项目：用 Agent 协调手机端执行（MobiAgent）与知识库分析（WeKnora），形成 `Collect -> Store -> Analyze -> Execute` 的自动化闭环。
+Seneschal 是一个“**编排层**”项目：用 Agent 协调手机端执行（MobiAgent）与本地工具，形成 `Route -> Plan -> Execute -> Persist` 的自动化闭环。
 
 当前主链路已经扩展为“**Router + Planner + Executor + Skill Selector**”的多智能体编排模型：
 
 - **编排入口**：`app.py` + `seneschal/workflows.py`
 - **编排核心**：`seneschal/orchestrator.py`
 - **智能体**：`seneschal/agents.py`（Steward / Worker / Router / Planner / Skill Selector / User）
-- **工具层**：`seneschal/tools/`（mobi / weknora / web / shell / file / papers / office）
+- **工具层**：`seneschal/tools/`（mobi / web / shell / file / papers / office / memory）
 - **手机网关**：`mobiagent_server/server.py`（collect / action / jobs）
 - **任务网关**：`seneschal/gateway_server.py`（统一任务入口、异步任务、文件下载、飞书接入）
 - **定时任务**：`seneschal/dailytasks/runner.py`
@@ -87,7 +87,6 @@ export BRAVE_API_KEY='...'
 ```bash
 export OPENROUTER_MODEL='google/gemini-3-flash-preview'
 export OPENROUTER_BASE_URL='https://openrouter.ai/api/v1'
-export WEKNORA_BASE_URL='http://localhost:8080'
 export MOBI_AGENT_BASE_URL='http://localhost:8081'
 ```
 
@@ -95,67 +94,6 @@ export MOBI_AGENT_BASE_URL='http://localhost:8081'
 
 ### 4) 启动依赖服务
 
-#### 4.1 启动 WeKnora（在 `WeKnora/` 子模块）
-
-推荐开发流程（按 WeKnora README）：
-按需配置`文件存储类型`、
-```bash
-cd WeKnora
-make dev-start
-make dev-app
-make dev-frontend
-```
-
-#### 4.2 启动 Rerank（按需）
-
-```bash
-cd WeKnora
-modelscope download --model BAAI/bge-reranker-v2-m3 --local_dir bge-reranker-v2-m3
-python rerank_server_bge-reranker-v2-m3.py
-```
-
-#### 4.3 导入其余 WeKnora 配置
-
-根据注册用户名（或租户）修改 `configs/` 目录下的配置文件（租户信息默认 `tenant_id=10000`）：
-
-- `configs/custom_agents_export.json`
-- `configs/knowledge_bases_export.json`
-- `configs/models_export.json`
-- `configs/tenants_export.json`
-- `configs/users_export.json`
-
-
-导入WeKnora的其余配置，包括知识库、模型、Agent等配置
-```bash
-cd /workspace/Seneschal
-ENV_FILE=./.env CONFIG_DIR=./configs bash ./scripts/weknora_import.sh
-```
-
-可选：导入前生成并导入新的租户 API key（推荐在迁移或密钥不一致时使用）
-```bash
-cd /workspace/Seneschal
-TENANT_AES_KEY='weknorarag-api-key-secret-secret' \
-GENERATE_API_KEY=1 \
-UPDATE_ENV_FILE_KEY=1 \
-ENV_FILE=./.env \
-CONFIG_DIR=./configs \
-bash ./scripts/weknora_import.sh
-```
-
-说明：
-- `GENERATE_API_KEY=1`：导入前为租户生成新 key
-- `TENANT_AES_KEY`：必须与当前 WeKnora 实例一致
-- `UPDATE_ENV_FILE_KEY=1`：自动把新 key 写回 `.env`
-- `WEKNORA_TENANT_ID`：可选，不填时默认取 `configs/tenants_export.json` 的第一个租户 id
-
-更多脚本用法见：`scripts/README.md`
-
-可登录前端页面：
-默认用户
-- 用户名：flyboy@outlook.com
-- 密码：flyboy123456
-
-> 若非首次部署/本地已有WeKnora服务，建议先检查 `configs/*.json` 中 tenant、用户、知识库、模型等配置是否与已有的 WeKnora 环境一致，避免覆盖导致冲突。
 
 ### 5) 启动 MobiAgent 网关
 
@@ -172,19 +110,6 @@ python -m mobiagent_server.server
 ```bash
 bash ./scripts/bootstrap_one_click.sh
 ```
-
-如需在一键启动时自动生成并导入新的 WeKnora 租户 API key：
-
-```bash
-TENANT_AES_KEY='weknorarag-api-key-secret-secret' \
-WEKNORA_IMPORT_GENERATE_KEY=1 \
-WEKNORA_IMPORT_UPDATE_ENV_KEY=1 \
-bash ./scripts/bootstrap_one_click.sh
-```
-
-可选参数：
-- `WEKNORA_IMPORT_TENANT_ID`：指定生成 key 的租户 ID（默认取导入配置中的第一个租户）
-- `WEKNORA_IMPORT_UPDATE_ENV_KEY`：是否把新 key 回写到 `.env`（默认 `1`）
 
 #### 一键停止
 
@@ -774,7 +699,6 @@ python -m seneschal.gateway_server
 这是一个包含多个子模块的大仓库，修改时请先确认你操作的是：
 
 - 根项目 `Seneschal`
-- 子模块 `WeKnora/`
 - 子模块 `MobiAgent/`
 - 其他子模块或辅助目录
 

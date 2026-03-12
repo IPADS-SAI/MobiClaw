@@ -24,7 +24,6 @@ Daily 现在实际承担的目标是：
 3. 为整轮运行生成 `run_id` 和事件日志
 4. 对 collect 或 agent_task 做统一调度
 
-旧文档里“统一写入 WeKnora 并总结”的表述已经不应再被当作当前模块核心定位。
 
 ---
 
@@ -37,7 +36,7 @@ Daily 现在实际承担的目标是：
 3. 按 trigger 过滤任务
 4. 遍历任务
 5. 记录结构化事件
-6. 返回 `run_id / task_count / collected / analysis`
+6. 返回 `run_id / task_count / collected`
 
 ---
 
@@ -76,22 +75,12 @@ Daily 现在实际承担的目标是：
 
 ---
 
-## 5. 当前的 legacy 部分
+## 5. 当前执行状态
 
-`runner.py` 当前仍保留以下旧路径：
-
-- `weknora_add_knowledge`
-- `weknora_rag_chat`
-
-因此 Daily 当前的现实状态应该写成：
+Daily 当前的现实状态：
 
 - 可运行
 - 有 RunContext 和任务选择逻辑
-- 但内部仍混有 WeKnora legacy 流程
-
-而不是继续写成：
-
-- “当前 Daily 的标准主链路就是写 WeKnora + RAG 总结”
 
 ---
 
@@ -140,12 +129,10 @@ Daily 现在实际承担的目标是：
 
 - Daily 是一个批量任务执行器
 - 它当前负责 trigger 过滤、任务遍历和运行日志记录
-- 它内部仍保留部分 legacy 路径，尚未完全收敛到现行主架构
+
 
 ### 不再推荐表述
 
-- Daily 的核心目标是自动写入 WeKnora
-- Daily 的 Analyze 默认就是 WeKnora RAG
 - Daily 已经完全对齐当前 Orchestrator 主链路
 
 ---
@@ -154,13 +141,12 @@ Daily 现在实际承担的目标是：
 
 1. 把 `collect` 结果统一落到本地 memory / local knowledge 路径
 2. 把 `agent_task` 切换到 orchestrator 主链路，而不是直接 Worker
-3. 清理 `weknora_add_knowledge` / `weknora_rag_chat` 的旧调用
-4. 保留 RunContext 和事件日志设计
+3. 保留 RunContext 和事件日志设计
 
 ---
 
 ## 10. 最终判断
 
-Daily 当前不是“以 WeKnora 为中心的批处理知识流水线”，更准确的定位是：
+Daily 的定位是：
 
-> **一个仍含 legacy 路径的批量任务执行器，核心价值在任务调度与运行追踪，而不是外部知识库写入本身。**
+> **一个批量任务执行器，核心价值在任务调度与运行追踪。**
