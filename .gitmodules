@@ -1,6 +1,3 @@
-[submodule "WeKnora"]
-	path = WeKnora
-	url = git@github.com:IPADS-SAI/WeKnora.git
 [submodule "agentscope"]
 	path = agentscope
 	url = git@github.com:IPADS-SAI/agentscope.git

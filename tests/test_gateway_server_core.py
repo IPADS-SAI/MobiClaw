@@ -9,7 +9,7 @@ import pytest
 from fastapi import HTTPException
 
 from seneschal import gateway_server
-from seneschal.gateway_server import GatewayConfig, JobContext, TaskRequest
+from seneschal.gateway_server import EnvStructuredRequest, GatewayConfig, JobContext, TaskRequest
 
 
 def _cfg(*, api_key: str = "") -> GatewayConfig:
@@ -332,3 +332,167 @@ def test_read_recent_session_messages_skips_invalid_rows(tmp_path: Path) -> None
     assert len(messages) == 2
     assert messages[0]["role"] == "assistant"
     assert messages[1]["meta"] == {}
+
+
+def test_get_file_happy_and_forbidden(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "allowed"
+    root.mkdir(parents=True, exist_ok=True)
+    allowed = root / "result.txt"
+    allowed.write_text("ok", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("no", encoding="utf-8")
+
+    gateway_server._JOB_STORE.clear()
+    gateway_server._JOB_STORE["job-1"] = gateway_server.TaskResult(
+        job_id="job-1",
+        status="completed",
+        result={
+            "files": [
+                {"name": "result.txt", "path": str(allowed)},
+                {"name": "outside.txt", "path": str(outside)},
+            ]
+        },
+    )
+
+    monkeypatch.setattr(
+        gateway_server,
+        "load_config",
+        lambda: GatewayConfig(
+            api_key="",
+            callback_timeout_s=3.0,
+            callback_retry=1,
+            callback_retry_backoff_s=0.1,
+            public_base_url=None,
+            file_root=str(root),
+            feishu_app_id="",
+            feishu_app_secret="",
+            feishu_verification_token="",
+            feishu_encrypt_key="",
+            feishu_event_transport="off",
+        ),
+    )
+
+    ok = asyncio.run(gateway_server.get_file("job-1", "result.txt", authorization=None))
+    assert ok.filename == "result.txt"
+    assert str(allowed.resolve()) in str(ok.path)
+
+    with pytest.raises(HTTPException) as exc_forbidden:
+        asyncio.run(gateway_server.get_file("job-1", "outside.txt", authorization=None))
+    assert exc_forbidden.value.status_code == 403
+
+    with pytest.raises(HTTPException) as exc_not_found:
+        asyncio.run(gateway_server.get_file("job-1", "missing.txt", authorization=None))
+    assert exc_not_found.value.status_code == 404
+
+
+def test_put_env_schema_preserve_unmanaged(monkeypatch, tmp_path: Path) -> None:
+    saved_content = {"value": ""}
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+
+    def fake_read() -> str:
+        if saved_content["value"]:
+            return saved_content["value"]
+        return "OPENROUTER_API_KEY=old\nCUSTOM_X=1\n"
+
+    def fake_write(content: str) -> None:
+        saved_content["value"] = content
+        env_file.write_text(content, encoding="utf-8")
+
+    monkeypatch.setattr(gateway_server, "load_config", lambda: _cfg(api_key=""))
+    monkeypatch.setattr(gateway_server, "_read_env_content", fake_read)
+    monkeypatch.setattr(gateway_server, "_write_env_content", fake_write)
+    monkeypatch.setattr(gateway_server, "_env_file_path", lambda: env_file)
+
+    req = EnvStructuredRequest(
+        values={"OPENROUTER_API_KEY": "new-key", "SENESCHAL_LOG_LEVEL": "INFO"},
+        unmanaged=None,
+        preserve_unmanaged=True,
+    )
+    payload = asyncio.run(gateway_server.put_env_schema(req, authorization=None))
+
+    assert payload["ok"] is True
+    assert payload["values"]["OPENROUTER_API_KEY"] == "new-key"
+    assert payload["unmanaged"]["CUSTOM_X"] == "1"
+    assert "export OPENROUTER_API_KEY=\"new-key\"" in saved_content["value"]
+    assert "export CUSTOM_X=\"1\"" in saved_content["value"]
+
+
+class _DummyFeishuRequest:
+    def __init__(self, payload: dict, raw: bytes | None = None) -> None:
+        self._payload = payload
+        self._raw = raw if raw is not None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+    async def body(self) -> bytes:
+        return self._raw
+
+    async def json(self) -> dict:
+        return self._payload
+
+
+def test_feishu_events_url_verification(monkeypatch) -> None:
+    monkeypatch.setattr(gateway_server, "load_config", lambda: _cfg(api_key=""))
+    req = _DummyFeishuRequest({"type": "url_verification", "challenge": "abc"})
+
+    result = asyncio.run(gateway_server.feishu_events(req))
+    assert result == {"challenge": "abc"}
+
+
+def test_feishu_events_invalid_signature(monkeypatch) -> None:
+    monkeypatch.setattr(gateway_server, "load_config", lambda: _cfg(api_key=""))
+    monkeypatch.setattr(gateway_server, "_verify_feishu_signature", lambda **kwargs: False)
+    req = _DummyFeishuRequest({"type": "event_callback"})
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(gateway_server.feishu_events(req))
+    assert exc.value.status_code == 401
+
+
+def test_feishu_events_invalid_token(monkeypatch) -> None:
+    cfg = _cfg(api_key="")
+    cfg.feishu_verification_token = "expected"
+    monkeypatch.setattr(gateway_server, "load_config", lambda: cfg)
+    req = _DummyFeishuRequest({"type": "event_callback", "token": "bad"})
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(gateway_server.feishu_events(req))
+    assert exc.value.status_code == 401
+
+
+def test_feishu_events_message_accept(monkeypatch) -> None:
+    cfg = _cfg(api_key="")
+    cfg.feishu_verification_token = "ok-token"
+    monkeypatch.setattr(gateway_server, "load_config", lambda: cfg)
+
+    accepted_args: dict = {}
+
+    async def fake_accept_feishu_message(**kwargs):  # noqa: ANN003
+        accepted_args.update(kwargs)
+        return {"ok": True, "accepted": True, "job_id": "j1"}
+
+    monkeypatch.setattr(gateway_server, "_accept_feishu_message", fake_accept_feishu_message)
+
+    req = _DummyFeishuRequest(
+        {
+            "type": "event_callback",
+            "token": "ok-token",
+            "event": {
+                "message": {
+                    "content": "{\"text\":\"hello\"}",
+                    "chat_id": "chat-1",
+                    "message_id": "msg-1",
+                },
+                "sender": {
+                    "sender_id": {
+                        "open_id": "ou_1",
+                    }
+                },
+            },
+        }
+    )
+
+    result = asyncio.run(gateway_server.feishu_events(req))
+    assert result["accepted"] is True
+    assert accepted_args["chat_id"] == "chat-1"
+    assert accepted_args["open_id"] == "ou_1"
+    assert accepted_args["message_id"] == "msg-1"

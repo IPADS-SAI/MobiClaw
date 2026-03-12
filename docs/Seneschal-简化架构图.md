@@ -1,44 +1,53 @@
-# Seneschal 简化架构图（1 页总览）
+# Seneschal 简化架构图（按当前实际代码口径）
 
-## 组件关系
+## 1. 一页总览
 
 ```mermaid
 flowchart LR
-    U[用户 / CLI / 定时触发] --> APP[app.py]
-    APP --> WF[seneschal/workflows.py]
-    WF --> SA[Steward Agent]
-    WF --> WA[Worker Agent]
-    WF --> DT[DailyTasks Runner]
+    U[用户 / 外部调用方] --> E[CLI / Gateway / Chat / Daily]
+    E --> WF[workflows.py]
+    WF --> ORCH[orchestrator.py]
+    WF --> CHAT[Chat Session Flow]
 
-    SA --> T[seneschal/tools/*]
-    WA --> T
-    DT --> T
+    ORCH --> R[Router]
+    ORCH --> P[Planner]
+    ORCH --> S[Skill Selector]
+    ORCH --> W[Worker Agent]
+    ORCH --> ST[Steward Agent]
 
-    T --> MG[mobiagent_server]
-    T --> WK[WeKnora API]
+    W --> T[Local Tools\nweb / papers / shell / office / ocr / file / skills / memory]
+    ST --> MG[MobiAgent Gateway]
+    MG --> PHONE[Mobile Device Runtime]
 
-    MG --> MExec[MobiAgent 执行后端\nmock/proxy/task_queue/cli]
-    WK --> DB[(PostgreSQL/ParadeDB)]
-    WK --> RE[(Redis)]
-    WK --> DR[DocReader gRPC]
+    CHAT --> STATE[Sessions / Outputs / RunContext / Local Memory]
+    ORCH --> STATE
+    T --> STATE
+
+    LEG[WeKnora legacy compatibility] -.not current main path.- ORCH
 ```
 
-## 运行闭环
+## 2. 当前主链路
 
 ```text
-Collect -> Store -> Analyze -> Execute
+Input -> Dispatch -> Route -> Plan -> Execute -> Persist -> Return
 ```
 
-- Collect：`call_mobi_collect` / `call_mobi_collect_verified`
-- Store：`weknora_add_knowledge`
-- Analyze：`weknora_rag_chat` / `weknora_knowledge_search`
-- Execute：`call_mobi_action`
+- Input：CLI / Gateway / Chat / Daily
+- Dispatch：`workflows.py`
+- Route / Plan / Execute：`orchestrator.py`
+- Execute：Worker 本地工具链 或 Steward -> MobiAgent
+- Persist：session / outputs / RunContext / local memory
+- Return：reply / files / routing_trace / execution evidence
 
-## 详细文档
+## 3. 当前不再推荐的旧口径
 
-- `docs/Seneschal-项目架构说明.md`
-- `docs/Seneschal-详细架构图.md`
-- `docs/模块-seneschal-core.md`
-- `docs/模块-tools.md`
-- `docs/模块-dailytasks.md`
-- `docs/模块-gateway.md`
+以下表述不再适合描述当前项目：
+
+- “Seneschal = MobiAgent + WeKnora + Agent 编排”
+- “Store 默认写 WeKnora”
+- “Analyze 默认走 WeKnora RAG”
+- “--agent-task 默认直接 Worker”
+
+## 4. 当前推荐口径
+
+> Seneschal 当前是一套以 Gateway/Chat 为入口、以 Orchestrator + Agents 为核心、以 MobiAgent 和本地状态为基础设施的多 Agent 编排系统。

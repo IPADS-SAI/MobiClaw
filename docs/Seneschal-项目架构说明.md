@@ -1,238 +1,371 @@
-# Seneschal 项目架构说明（与当前代码一致）
+# Seneschal 项目架构说明（按当前实际代码口径）
 
-## 1. 项目定位
+## 1. 当前定位
 
-Seneschal 是一个“多 Agent + 多网关 + 知识库”的编排系统，核心职责是把不同能力串起来：
+Seneschal 当前实际是一个以 **多 Agent 编排** 为核心的执行层，负责把：
 
-1. 通过手机端执行网关采集/执行（MobiAgent Gateway）
-2. 把信息写入知识库并检索分析（WeKnora）
-3. 用 Agent 工作流组织完整闭环
+- Chat / Gateway / CLI / Daily 等入口
+- Orchestrator 的路由、规划、执行
+- Worker / Steward 的能力分工
+- MobiAgent 手机执行能力
+- 本地工具、本地状态、本地输出
 
-代码中主闭环是：`Collect -> Store -> Analyze -> Execute`。
+串成一条可运行的任务闭环。
+
+当前真实主链路不应再描述为 “MobiAgent + WeKnora + Seneschal” 三层协作。更准确的描述是：
+
+1. 输入从 `CLI / Gateway / Chat / Daily` 进入
+2. `workflows.py` 进行模式分发
+3. `orchestrator.py` 执行 `route -> plan -> execute`
+4. Worker / Steward 分别调用本地工具或 MobiAgent
+5. 结果写入本地 session / outputs / run logs / local memory
+
+一句话总结：
+
+> Seneschal 当前是一套以 `Gateway / Chat + Orchestrator + Agents + MobiAgent + 本地状态` 为核心的多 Agent 编排系统。
 
 ---
 
-## 2. 仓库结构
+## 2. 关于 WeKnora 的当前口径
+
+仓库中 **仍然保留** WeKnora 相关内容：
+
+- `seneschal/tools/weknora/`
+- `seneschal/tools/__init__.py` 中的 `weknora_*` 包装
+- `seneschal/config.py` 中的 `WEKNORA_*` 配置
+- `seneschal/dailytasks/runner.py` 中的 legacy 调用
+- 若干旧文档中的知识库/RAG 表述
+
+但从当前实际主链路看，WeKnora **已经不是现行核心依赖**。
+
+因此文档里应统一使用如下表述：
+
+- WeKnora 是 **legacy / 兼容残留**
+- 当前主架构 **不依赖 WeKnora 才能运行**
+- 如果后续要继续保留相关代码，应作为“历史兼容层”说明，而不是“当前架构核心模块”
+
+---
+
+## 3. 仓库结构
 
 ```text
 Seneschal/
-├── app.py                          # 程序入口，加载 .env 并运行 workflows.main
+├── app.py                          # 程序入口，加载 .env 并进入 workflows.main
 ├── seneschal/
-│   ├── workflows.py                # Demo/Interactive/Daily/AgentTask 入口
-│   ├── agents.py                   # Steward / Worker / Router / Planner / Skill Selector / User Agent 构建
-│   ├── config.py                   # LLM / WeKnora / Mobi / Brave / Routing 配置
-│   ├── orchestrator.py             # Router + Planner + Executor + Skill Selector
+│   ├── workflows.py                # 统一模式分发与 chat 会话流程
+│   ├── orchestrator.py             # route -> plan -> execute 主编排
+│   ├── agents.py                   # Chat / Worker / Steward / Router / Planner / Skill Selector
+│   ├── gateway_server.py           # Seneschal 对外 HTTP Gateway
 │   ├── run_context.py              # run_id 与 JSONL 事件日志
-│   ├── gateway_server.py           # Seneschal 对外任务网关
-│   ├── skills/                     # Skill 定义目录（按 SKILL.md 发现）
+│   ├── config.py                   # LLM / Mobi / Routing / legacy 配置
 │   ├── dailytasks/
-│   │   ├── runner.py               # 日常任务执行器
-│   │   └── tasks/tasks.json        # 任务定义
+│   │   ├── runner.py               # Daily 任务执行器（仍含 legacy 路径）
+│   │   └── tasks/tasks.json        # 日常任务定义
+│   ├── skills/                     # skill 目录
 │   └── tools/
-│       ├── __init__.py             # 工具聚合、WeKnora 高阶封装、缓存
-│       ├── mobi.py                 # 调用 mobiagent_server 的 collect/action
-│       ├── weknora*.py             # WeKnora API 客户端封装
-│       ├── web.py                  # brave + 网页抓取
-│       ├── papers.py               # arXiv / DBLP / PDF 处理
-│       ├── office.py               # DOCX / PDF / XLSX 文档处理
-│       ├── shell.py                # 命令白名单工具
-│       └── file.py                 # 本地文本写入
-├── mobiagent_server/server.py      # 手机执行网关（FastAPI）
-├── scripts/                        # 一键启动/停止/导入导出脚本
-├── configs/                        # WeKnora 导入配置样例
-└── docs/                           # 项目文档
+│       ├── mobi.py                 # MobiAgent collect/action 调用
+│       ├── web.py                  # Brave 与网页抓取
+│       ├── papers.py               # arXiv / DBLP / PDF
+│       ├── office.py               # DOCX / XLSX / PDF 工具
+│       ├── ppt.py                  # PPTX 读写与样式处理
+│       ├── ocr.py                  # OCR
+│       ├── shell.py                # 命令执行
+│       ├── file.py                 # 文本写入
+│       ├── memory.py               # 本地 memory / task history / steward knowledge
+│       ├── skill_runner.py         # 执行 skill 脚本
+│       └── weknora/                # legacy WeKnora 封装
+├── mobiagent_server/server.py      # 手机执行网关
+├── docs/                           # 项目文档
+└── outputs/                        # 任务输出目录
 ```
 
 ---
 
-## 3. 运行模式与入口
+## 4. 顶层分层
 
-`python app.py` 会进入 `seneschal/workflows.py`，支持 4 种模式：
-
-- 默认：Demo 对话（Steward）
-- `--interactive`：交互会话（Steward）
-- `--daily --daily-trigger xxx`：任务清单执行（Daily Runner）
-- `--agent-task "..." [--output path]`：通用任务执行（默认走 orchestrator）
-
-注意：
-
-- 当前 Demo 不是空白交互，而是执行一条预置消息：`开始今日的数据整理和分析，给出最近活动的总结和待办事项。`
-- `--agent-task` 默认不再是“直接走 Worker”，而是走 Router / Planner / Executor 多智能体编排。
-- 仅在显式传入 `--mode worker|steward|auto` 时，才使用 legacy 兼容路径。
-- Daily Runner 直接调用工具链，不通过 Steward 的 ReAct 推理循环。
-
----
-
-## 4. Agent 模块
-
-### 4.1 入口与运行模式
+### 4.1 入口层
 
 - `app.py`
-  - 启动时读取根目录 `.env`（仅补充未设置的环境变量）
-  - 调用 `seneschal.workflows.main()`
-- `workflows.py` 支持 4 类入口：
-  - 默认：演示对话
-  - `--interactive`：交互式会话
-  - `--daily`：按 trigger 执行日常任务采集
-  - `--agent-task`：智能路由多智能体编排（Router + Planner + Executor）
+- `seneschal.gateway_server`
+- Gateway Web UI
 
-其中 `--agent-task` 与 Gateway `/api/v1/task` 共享同一编排层：
-- Router：决定任务优先交给哪个 Agent（优先 LLM 路由，失败时规则回退）
-- Planner：复合任务拆分为阶段子任务（可并行），且只会在 Router 允许的 Agent 集合内规划
-- Skill Selector：为每个子任务选择最合适的 skill，并注入 prompt 上下文
-- Executor：按阶段调度多个 Agent 并聚合结果
-- Aggregator：汇总 reply、files 与 `routing_trace`
-- 兼容：仍保留 `mode=worker/steward/auto` 的 legacy 强制模式
+职责：
 
-### 4.2 Agent 层
+- 接用户输入
+- 加载环境变量
+- 决定进入哪种运行模式
 
-- 使用 `AgentScope` 的 `ReActAgent`
-- 系统提示词将流程固定为四步：Collect -> Store -> Analyze -> Execute
-- 当前 Agent 体系已不只包含 Steward / Worker / User，也包含 Router / Planner 等编排型 Agent
-- 注册工具（`seneschal/agents.py`）会按 Agent 职责不同进行差异化装配
-#### 4.2.1 Steward Agent
+### 4.2 工作流层
 
-`create_steward_agent()` 注册的关键工具：
+核心文件：`seneschal/workflows.py`
 
-- `call_mobi_collect_verified`
-- `call_mobi_action`
-- `weknora_add_knowledge`
-- `weknora_rag_chat`
-- `weknora_knowledge_search`
-- `weknora_list_knowledge_bases`
-- `fetch_url_text`
-- `run_shell_command`
-- `call_mobi_collect_with_retry_report`（封装重试证据包）
-- `delegate_to_worker`（子任务委派）
+职责：
 
-设计重点：
+- 分发 demo / interactive / agent-task / daily / gateway chat
+- 管理 chat 指令：`/new`、`/interrupt`、`/exit`
+- 恢复/保存 chat session
+- 对外输出 planner monitor 事件
 
-- 显式重试上限由 `STEWARD_MOBI_MAX_RETRIES` 控制（默认 2）。
-- 最终“任务是否完成”由 Agent 基于证据判断，不直接信任工具状态字段。
+### 4.3 编排层
 
-### 4.2.2 Worker Agent
+核心文件：`seneschal/orchestrator.py` + `seneschal/agents.py`
 
-`create_worker_agent()` 偏向“检索/处理/落盘”：
+职责：
 
-- Brave 搜索
-- arXiv / DBLP 学术检索
-- URL 抓取与可读化
-- 下载文件、提取 PDF 文本
-- shell 白名单命令
-- 写文件
-- WeKnora 检索
+- 路由：选哪个 Agent
+- 规划：拆多少阶段、多少子任务
+- 选技：每个子任务是否带 skill
+- 执行：顺序执行子任务并保留上下文
+- 聚合：回收 reply / files / trace
 
-仓库中已经新增 `seneschal/tools/office.py`，提供 DOCX / PDF / XLSX 文档处理能力
+### 4.4 工具与集成层
 
-### 4.2.3 Skill Selector
+主要模块：
 
-`seneschal/orchestrator.py` 会在执行每个子任务前执行 skill 选择流程：
+- `mobi.py`
+- `web.py`
+- `papers.py`
+- `shell.py`
+- `ocr.py`
+- `office.py`
+- `ppt.py`
+- `skill_runner.py`
+- `memory.py`
 
-- 扫描 `seneschal/skills/*/SKILL.md`
-- 基于任务文本和目标 Agent 做规则召回
-- 可选地使用 LLM 在候选中重排
-- 将选中的 skill 摘要注入目标 Agent prompt
-- 在 `routing_trace.skills.records` 中记录候选、来源、原因与最终选择
-- `routing_trace` 还会补充 `planner_allowed_agents` 等字段，便于复盘 Router 与 Planner 的约束关系
+职责：
 
-该能力是增强层：即使未选中 skill，任务仍会按原有链路继续执行。
+- 调用外部能力
+- 执行本地命令与文件处理
+- 保存和检索本地知识/记忆
 
-### 4.3 工具层（Mobi + WeKnora）
+### 4.5 状态与持久化层
 
-- `seneschal/tools/mobi.py`
-  - 调用网关：
-    - `POST /api/v1/collect`
-    - `POST /api/v1/action`
-  - 请求失败时自动降级到 `mock_data`
+主要内容：
 
-- `seneschal/tools/__init__.py`（WeKnora 高阶封装）
-  - 自动解析 KB/Agent/Session（含本地缓存 `seneschal/tools/weknora_cache.json`）
-  - `weknora_add_knowledge`：
-    - 通过 `create_knowledge_manual` 入库
-    - 默认补当天日期标签
-  - `weknora_rag_chat`：
-    - 默认开启 `agent_enabled`、`web_search_enabled`
-    - 404 时自动创建会话并重试
-
-### 4.4 Daily 任务执行器
-
-- 任务定义：`seneschal/dailytasks/tasks/tasks.json`
-- 选择逻辑：按 `trigger` 过滤任务
-- 执行逻辑：
-  1. `call_mobi_collect(prompt)`
-  2. `weknora_add_knowledge(content, metadata)`
-  3. 最后统一 `weknora_rag_chat` 生成总结
-- 每次运行生成 `run_id`，事件写入 `seneschal/logs/{run_id}.jsonl`
+- Chat sessions
+- `RunContext` JSONL
+- `outputs/`
+- 本地长期记忆
+- steward knowledge / task history
 
 ---
 
+## 5. 运行模式
 
-## 5. 网关模块
+### 5.1 Demo 模式
 
-### 5.1 `mobiagent_server/server.py`
+`python app.py`
 
-API：
+- 加载 `.env`
+- 进入 `workflows.main()`
+- 默认执行一条预设演示消息
+
+### 5.2 Interactive 模式
+
+`python app.py --interactive`
+
+- 在终端中持续收发消息
+- 默认由 Steward 处理
+
+### 5.3 Agent Task 模式
+
+`python app.py --agent-task "..."`
+
+- 当前默认不是“直接 Worker”
+- 而是走 `run_orchestrated_task()`
+- 由 Router / Planner / Executor 决定具体执行路径
+
+### 5.4 Chat / Gateway 模式
+
+`python -m seneschal.gateway_server`
+
+- 对外提供 FastAPI
+- 支持同步和异步任务
+- 支持 chat session 查询
+- 支持文件下载
+- 支持 webhook / 飞书
+
+### 5.5 Daily 模式
+
+`python app.py --daily --daily-trigger daily`
+
+- 从 `tasks.json` 选择任务
+- 批量执行 collect 或 agent_task
+- 当前仍保留部分 legacy 路径
+
+---
+
+## 6. Agent 架构
+
+### 6.1 Chat Agent
+
+职责：
+
+- 默认聊天入口
+- 承载多轮对话
+- 配合 `ChatSessionManager` 实现会话恢复与保存
+
+### 6.2 Worker Agent
+
+职责：
+
+- 通用单任务执行
+- 检索、抓取、处理、文档生成、文件输出
+- 使用本地工具链与 skill
+
+当前典型能力：
+
+- Brave / Web / arXiv / DBLP
+- OCR
+- shell
+- Word / Excel / PDF / PPT
+- 本地 memory / task history / steward knowledge
+
+### 6.3 Steward Agent
+
+职责：
+
+- 面向手机场景的闭环任务执行
+- 调用 MobiAgent 执行 collect / action
+- 基于执行证据自行判断任务是否完成
+- 必要时委派 Worker 做通用子任务
+
+### 6.4 Router Agent
+
+职责：
+
+- 判断任务更适合由 `worker` 还是 `steward` 执行
+- 输出 `target_agents / confidence / plan_required`
+
+### 6.5 Planner Agent
+
+职责：
+
+- 对复杂任务拆分阶段
+- 返回串行/并行子任务结构
+
+### 6.6 Skill Selector
+
+职责：
+
+- 扫描 `seneschal/skills/*/SKILL.md`
+- 规则召回 skill
+- 用 LLM 对候选做重排
+- 把 skill 上下文注入目标 Agent
+
+---
+
+## 7. MobiAgent 边界
+
+`mobiagent_server/server.py` 提供稳定边界：
 
 - `POST /api/v1/collect`
 - `POST /api/v1/action`
 - `GET /api/v1/jobs/{job_id}`
 - `POST /api/v1/jobs/{job_id}/result`
-- `GET /`
 
-模式：
+核心职责：
 
-- `mock`
-- `proxy`
-- `task_queue`
-- `cli`
+- 接受 collect / action 请求
+- 把 action 翻译成自然语言任务
+- 在 CLI / task_queue / proxy / mock 模式间切换
+- 收集截图、XML、actions、reasoning、OCR 等执行产物
+- 返回统一 execution evidence
 
-CLI 模式会：
+这意味着 MobiAgent 返回的是：
 
-- 生成任务文件与 data 目录
-- 执行外部 CLI 命令
-- 扫描图片/XML/action/react 构建 `execution_result.json`
-- 可对 `output_schema` 做 VLM 抽取
+- **执行证据**
 
-### 5.2 `seneschal/gateway_server.py`
+而不是：
 
-API：
+- **最终业务真值**
 
-- `POST /api/v1/task`（`async_mode` 支持异步）
+最终是否完成，由 Steward 自主判断。
+
+---
+
+## 8. Gateway 边界
+
+`seneschal/gateway_server.py` 当前承担完整任务网关能力。
+
+核心接口包括：
+
+- `POST /api/v1/task`
 - `GET /api/v1/jobs/{job_id}`
+- `GET /api/v1/chat/sessions`
+- `GET /api/v1/chat/sessions/{context_id}`
+- `GET /api/v1/env`
+- `GET /api/v1/env/schema`
 - `GET /api/v1/files/{job_id}/{file_name}`
 - `POST /api/v1/feishu/events`
-- `GET /health`
 
-内部逻辑：调用 `run_gateway_task()` 进入 orchestrator；异步任务结果存内存 `_JOB_STORE`，并支持文件下载链接、webhook 回调与飞书消息回发。
+职责：
 
----
-
-## 6. 配置要点
-
-`seneschal/config.py` 约定：
-
-- LLM：`OPENROUTER_*` 优先，回退 `OPENAI_*`；默认模型为 `google/gemini-3-flash-preview`
-- WeKnora：`WEKNORA_BASE_URL/WEKNORA_API_KEY/WEKNORA_KB_NAME/WEKNORA_AGENT_NAME/WEKNORA_SESSION_ID`
-- Mobi：`MOBI_AGENT_BASE_URL/MOBI_AGENT_API_KEY`
-- Brave：`BRAVE_API_KEY` 等
-- Routing：`SENESCHAL_ROUTING_DEFAULT_MODE/SENESCHAL_ROUTING_STRATEGY/SENESCHAL_ROUTER_TIMEOUT_S/SENESCHAL_PLANNER_TIMEOUT_S/SENESCHAL_SUBTASK_TIMEOUT_S`
-- Skill Selector：`SENESCHAL_SKILL_ENABLED/SENESCHAL_SKILL_ROOT_DIR/SENESCHAL_SKILL_MAX_PER_SUBTASK/SENESCHAL_SKILL_SELECTOR_TIMEOUT_S/SENESCHAL_SKILL_LLM_RERANK/SENESCHAL_SKILL_RULE_MAX_CANDIDATES/SENESCHAL_SKILL_HINT_OVERRIDE`
-
-`mobiagent_server` 约定：
-
-- `MOBIAGENT_SERVER_MODE`
-- `MOBIAGENT_CLI_CMD`
-- `MOBIAGENT_TASK_DIR/MOBIAGENT_DATA_DIR`
-- `MOBIAGENT_QUEUE_DIR/MOBIAGENT_RESULT_DIR`
-- `MOBIAGENT_GATEWAY_PORT`
+- 接收任务
+- 调 `run_gateway_task()`
+- 维护异步 job store
+- 追加 chat history
+- 暴露输出文件下载地址
+- 提供 console / chat / settings 页面
 
 ---
 
-## 7. 扩展建议
+## 9. 当前真正的状态层
 
-1. 增加新任务：修改 `tasks/tasks.json`
-2. 增加新工具：在 `seneschal/tools/` 新增并在 Agent 注册
-3. 增强执行器：替换 `MOBIAGENT_CLI_CMD` 或改 `proxy/task_queue` 后端
-4. 增强分析：通过 WeKnora 自定义 Agent、模型与检索策略配置
-5. 增强编排：扩展 Router / Planner / Skill Selector 的策略与观测能力
-6. 增强网关：为异步任务、文件暴露和飞书接入增加持久化与审计能力
+当前主链路依赖的持久化主要是本地状态，而不是外部知识库：
+
+- Chat session 目录
+- agent state
+- 历史消息
+- `outputs/job_xxx`
+- `RunContext` JSONL 日志
+- `memory.py` 中的长期记忆/本地知识
+
+因此“Store / Analyze”在当前项目里更准确的理解应该是：
+
+- 存到本地状态、本地知识或任务输出
+- 再由 Agent 基于本地数据、联网结果和手机证据继续分析
+
+而不是默认写入 WeKnora。
+
+---
+
+## 10. 配置说明
+
+### 10.1 当前核心配置
+
+- LLM：`OPENROUTER_*` 或 `OPENAI_*`
+- Mobi：`MOBI_AGENT_BASE_URL` / `MOBI_AGENT_API_KEY`
+- Routing：`SENESCHAL_ROUTING_*`
+- Skill：`SENESCHAL_SKILL_*`
+- Memory：`SENESCHAL_MEMORY_*`
+
+### 10.2 当前仍保留但属于 legacy 的配置
+
+- `WEKNORA_BASE_URL`
+- `WEKNORA_API_KEY`
+- `WEKNORA_KB_NAME`
+- `WEKNORA_AGENT_NAME`
+- `WEKNORA_SESSION_ID`
+
+这些字段仍在代码中，但不应继续被描述为“当前主链路必需配置”。
+
+---
+
+## 11. 扩展建议
+
+1. 把 `dailytasks/runner.py` 从 WeKnora 路径切到本地 memory / local knowledge 路径
+2. 清理 `gateway_server.py` 中 legacy 的 WeKnora 配置项
+3. 继续统一旧文档口径，避免出现两套架构叙述
+4. 增强跨模块集成测试，优先覆盖 Gateway -> Orchestrator -> Mobi 的主链路
+5. 如果确认不再使用 WeKnora，可逐步把相关封装移动到 `legacy/` 或单独模块
+
+---
+
+## 12. 最终结论
+
+Seneschal 当前不是“多 Agent + 多网关 + 知识库”的三层架构，而是：
+
+> **以 Chat/Gateway 为入口，以 Orchestrator + Agents 为核心，以 MobiAgent 和本地工具/本地状态为执行基础的多 Agent 编排系统。**
+
+WeKnora 当前应视为 **legacy 兼容残留**，而不是当前真实主架构的一部分。
