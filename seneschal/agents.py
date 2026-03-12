@@ -79,15 +79,21 @@ def _trim_for_log(text: str, max_chars: int = 260) -> str:
     return text[:max_chars].rstrip() + "..."
 
 
-def create_openai_model(*, stream: bool = True, temperature: float | None = None) -> OpenAIChatModel:
+def create_openai_model(
+    *,
+    stream: bool = True,
+    temperature: float | None = None,
+    model_name: str | None = None,
+) -> OpenAIChatModel:
     """创建 OpenAI 兼容的聊天模型实例。"""
     api_base = MODEL_CONFIG["api_base"]
     if not api_base.startswith("http://") and not api_base.startswith("https://"):
         api_base = "http://" + api_base
 
     temp = MODEL_CONFIG["temperature"] if temperature is None else temperature
+    selected_model_name = (model_name or "").strip() or MODEL_CONFIG["model_name"]
     return OpenAIChatModel(
-        model_name=MODEL_CONFIG["model_name"],
+        model_name=selected_model_name,
         api_key=MODEL_CONFIG["api_key"],
         stream=stream,
         client_kwargs={"base_url": api_base},
@@ -392,7 +398,11 @@ def create_router_agent() -> ReActAgent:
     return ReActAgent(
         name="Router",
         sys_prompt=sys_prompt,
-        model=create_openai_model(stream=True, temperature=0.1),
+        model=create_openai_model(
+            stream=True,
+            temperature=0.1,
+            model_name=MODEL_CONFIG.get("orchestrator_model_name"),
+        ),
         formatter=OpenAIChatFormatter(),
         # toolkit=Toolkit(),
         # memory=InMemoryMemory(),
@@ -413,7 +423,11 @@ def create_planner_agent() -> ReActAgent:
     return ReActAgent(
         name="Planner",
         sys_prompt=sys_prompt,
-        model=create_openai_model(stream=True, temperature=0.1),
+        model=create_openai_model(
+            stream=True,
+            temperature=0.1,
+            model_name=MODEL_CONFIG.get("orchestrator_model_name"),
+        ),
         formatter=OpenAIChatFormatter(),
         # toolkit=Toolkit(),
         # memory=InMemoryMemory(),
@@ -434,7 +448,11 @@ def create_skill_selector_agent() -> ReActAgent:
     return ReActAgent(
         name="SkillSelector",
         sys_prompt=sys_prompt,
-        model=create_openai_model(stream=True, temperature=0.1),
+        model=create_openai_model(
+            stream=True,
+            temperature=0.1,
+            model_name=MODEL_CONFIG.get("orchestrator_model_name"),
+        ),
         formatter=OpenAIChatFormatter(),
         max_iters=1,
     )
