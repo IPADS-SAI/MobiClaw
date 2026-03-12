@@ -7,7 +7,7 @@ from pathlib import Path
 from agentscope.message import Msg
 
 from seneschal import workflows
-from seneschal.agents import ChatSessionManager
+from seneschal.session import ChatSessionManager
 
 
 class _DummyChatAgent:
@@ -188,7 +188,7 @@ def test_chat_first_turn_introduces_once(monkeypatch, tmp_path: Path):
             context_id="intro_ctx",
         ),
     )
-    assert "Seneschal 的 chat 助手" in first["reply"]
+    assert "我是 MobiClaw 助手 MobiChatBot" in first["reply"]
 
     second = asyncio.run(
         workflows.run_gateway_task(
@@ -197,7 +197,7 @@ def test_chat_first_turn_introduces_once(monkeypatch, tmp_path: Path):
             context_id="intro_ctx",
         ),
     )
-    assert "Seneschal 的 chat 助手" not in second["reply"]
+    assert "我是 MobiClaw 助手 MobiChatBot" not in second["reply"]
 
 
 def test_chat_interrupt_without_active_reply(monkeypatch, tmp_path: Path):

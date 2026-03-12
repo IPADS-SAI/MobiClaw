@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from fastapi import UploadFile
 
 from seneschal import gateway_server
 from seneschal.gateway_server import EnvStructuredRequest, GatewayConfig, JobContext, TaskRequest
@@ -25,6 +27,11 @@ def _cfg(*, api_key: str = "") -> GatewayConfig:
         feishu_verification_token="",
         feishu_encrypt_key="",
         feishu_event_transport="off",
+        feishu_native_file_enabled=True,
+        feishu_native_image_enabled=True,
+        feishu_ack_enabled=True,
+        feishu_group_require_mention=True,
+        feishu_bot_open_id="",
     )
 
 
@@ -141,6 +148,11 @@ def test_file_exposure_and_result_decoration(tmp_path: Path) -> None:
         feishu_verification_token="",
         feishu_encrypt_key="",
         feishu_event_transport="off",
+        feishu_native_file_enabled=True,
+        feishu_native_image_enabled=True,
+        feishu_ack_enabled=True,
+        feishu_group_require_mention=True,
+        feishu_bot_open_id="",
     )
 
     assert gateway_server._can_expose_file(str(allowed), cfg) is True
@@ -159,6 +171,44 @@ def test_file_exposure_and_result_decoration(tmp_path: Path) -> None:
     assert len(files) == 1
     assert files[0]["name"] == "ok.txt"
     assert files[0]["download_url"].endswith("/api/v1/files/job-9/ok.txt")
+
+
+def test_file_exposure_allows_default_outputs_even_when_file_root_set(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    outputs_root = project_root / "outputs"
+    outputs_root.mkdir(parents=True, exist_ok=True)
+    output_file = outputs_root / "result.md"
+    output_file.write_text("ok", encoding="utf-8")
+
+    blocked_root = tmp_path / "blocked"
+    blocked_root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        gateway_server,
+        "_default_exposed_roots",
+        lambda: [outputs_root.resolve()],
+    )
+
+    cfg = GatewayConfig(
+        api_key="",
+        callback_timeout_s=3.0,
+        callback_retry=1,
+        callback_retry_backoff_s=0.1,
+        public_base_url="https://gw.example",
+        file_root=str(blocked_root),
+        feishu_app_id="",
+        feishu_app_secret="",
+        feishu_verification_token="",
+        feishu_encrypt_key="",
+        feishu_event_transport="off",
+        feishu_native_file_enabled=True,
+        feishu_native_image_enabled=True,
+        feishu_ack_enabled=True,
+        feishu_group_require_mention=True,
+        feishu_bot_open_id="",
+    )
+
+    assert gateway_server._can_expose_file(str(output_file), cfg) is True
 
 
 def test_build_callback_headers() -> None:
@@ -225,8 +275,7 @@ def test_run_job_success_non_chat(monkeypatch) -> None:
     assert stored.result is not None
     assert stored.result["context_id"] == "ctx-a"
     assert stored.result["decorated"] is True
-    assert len(append_calls) == 1
-    assert append_calls[0]["status"] == "completed"
+    assert len(append_calls) == 0
     assert deliver_calls == [job_id]
 
 
@@ -274,16 +323,16 @@ def test_run_job_failure_non_chat(monkeypatch) -> None:
     assert stored.error == "boom"
     assert stored.result is not None
     assert stored.result["context_id"] == "ctx-x"
-    assert len(append_calls) == 1
-    assert append_calls[0]["status"] == "failed"
+    assert len(append_calls) == 0
     assert deliver_calls == [job_id]
 
 
 def test_submit_task_sync_non_chat(monkeypatch) -> None:
     append_calls: list[dict] = []
+    captured: dict = {}
 
     async def fake_run_gateway_task(**kwargs):  # noqa: ANN003
-        del kwargs
+        captured.update(kwargs)
         return {"reply": "ok", "files": []}
 
     def fake_append(**kwargs):  # noqa: ANN003
@@ -299,6 +348,7 @@ def test_submit_task_sync_non_chat(monkeypatch) -> None:
         async_mode=False,
         mode="worker",
         context_id="ctx-42",
+        input_files=["/tmp/a.txt", "/tmp/b.md"],
     )
     raw_request = SimpleNamespace(base_url="https://gw.example/")
 
@@ -309,7 +359,32 @@ def test_submit_task_sync_non_chat(monkeypatch) -> None:
     assert result.result["reply"] == "ok"
     assert result.result["context_id"] == "ctx-42"
     assert result.result["decorated"] is True
-    assert len(append_calls) == 1
+    assert result.result["input_files"] == ["/tmp/a.txt", "/tmp/b.md"]
+    sent_task = str(captured.get("task") or "")
+    assert "附加输入文件（本地路径）如下" in sent_task
+    assert "- /tmp/a.txt" in sent_task
+    assert len(append_calls) == 0
+
+
+def test_upload_chat_files(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(gateway_server, "load_config", lambda: _cfg(api_key=""))
+    monkeypatch.setattr(gateway_server, "_chat_upload_root_dir", lambda: tmp_path / "uploads")
+
+    upload = UploadFile(
+        filename="notes.txt",
+        file=io.BytesIO(b"hello gateway"),
+        headers={"content-type": "text/plain"},
+    )
+
+    resp = asyncio.run(gateway_server.upload_chat_files(files=[upload], authorization=None))
+    files = resp.get("files")
+    assert isinstance(files, list)
+    assert len(files) == 1
+    item = files[0]
+    assert item["name"] == "notes.txt"
+    assert item["size"] == 13
+    assert item["mime_type"] == "text/plain"
+    assert Path(item["path"]).exists()
 
 
 def test_read_recent_session_messages_skips_invalid_rows(tmp_path: Path) -> None:
@@ -369,6 +444,11 @@ def test_get_file_happy_and_forbidden(monkeypatch, tmp_path: Path) -> None:
             feishu_verification_token="",
             feishu_encrypt_key="",
             feishu_event_transport="off",
+            feishu_native_file_enabled=True,
+            feishu_native_image_enabled=True,
+            feishu_ack_enabled=True,
+            feishu_group_require_mention=True,
+            feishu_bot_open_id="",
         ),
     )
 

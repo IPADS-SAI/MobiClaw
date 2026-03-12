@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response, status
+from fastapi import FastAPI, File, Header, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 import requests
@@ -142,6 +142,7 @@ class TaskRequest(BaseModel):
     webhook_token: str | None = None
     callback_headers: dict[str, str] = Field(default_factory=dict)
     schedule: ScheduleParam | None = Field(default=None, description="显式定时参数，为空则自动检测")
+    input_files: list[str] = Field(default_factory=list)
 
 
 class TaskResult(BaseModel):
@@ -329,6 +330,44 @@ def _chat_session_root_dir() -> Path:
     if configured:
         return Path(configured).expanduser()
     return Path(__file__).resolve().parents[1] / ".mobiclaw" / "session"
+
+
+def _chat_upload_root_dir() -> Path:
+    """返回 chat 上传文件目录。"""
+    return Path(__file__).resolve().parents[1] / ".mobiclaw" / "uploads"
+
+
+def _sanitize_upload_name(name: str) -> str:
+    """清洗上传文件名，避免路径穿透。"""
+    candidate = Path(str(name or "").strip()).name
+    return candidate or f"file_{uuid.uuid4().hex}"
+
+
+def _normalize_input_files(input_files: list[str] | None) -> list[str]:
+    """清洗并去重 input_files。"""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in input_files or []:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    return normalized
+
+
+def _inject_input_files_into_task(task: str, input_files: list[str] | None) -> tuple[str, list[str]]:
+    """将上传文件路径附加到任务文本，提示 Agent 读取分析。"""
+    normalized = _normalize_input_files(input_files)
+    if not normalized:
+        return str(task or ""), []
+    file_lines = "\n".join(f"- {path}" for path in normalized)
+    injected = (
+        f"{str(task or '').rstrip()}\n\n"
+        "附加输入文件（本地路径）如下，请优先读取并分析这些文件内容：\n"
+        f"{file_lines}"
+    ).strip()
+    return injected, normalized
 
 
 def _normalize_context_id(raw: str | None) -> str:
@@ -800,6 +839,25 @@ def _resolve_file_root(cfg: GatewayConfig) -> Path | None:
     return Path(cfg.file_root).expanduser().resolve()
 
 
+def _default_exposed_roots() -> list[Path]:
+    """返回网关内置允许暴露下载的安全目录。"""
+    project_root = Path(__file__).resolve().parents[1]
+    roots = [
+        (project_root / "outputs").resolve(),
+        _chat_upload_root_dir().resolve(),
+        _feishu_media_download_dir().resolve(),
+    ]
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(root)
+    return unique
+
+
 def _can_expose_file(path: str, cfg: GatewayConfig) -> bool:
     """判断文件是否允许通过下载接口暴露。"""
     root = _resolve_file_root(cfg)
@@ -810,6 +868,8 @@ def _can_expose_file(path: str, cfg: GatewayConfig) -> bool:
         return False
     if not resolved.exists() or not resolved.is_file():
         return False
+    if any(resolved == item or item in resolved.parents for item in _default_exposed_roots()):
+        return True
     if root is None:
         return True
     return resolved == root or root in resolved.parents
@@ -1473,6 +1533,7 @@ async def _run_job(
     context_id: str | None,
     external_context: dict[str, Any] | None = None,
     web_search_enabled: bool = True,
+    input_files: list[str] | None = None,
 ) -> None:
     """执行异步任务并更新任务状态。"""
     cfg = load_config()
@@ -1488,6 +1549,7 @@ async def _run_job(
                         "events": [],
                         "current_plan": None,
                     },
+                    "orchestrator_events": [],
                 },
             },
         )
@@ -1511,6 +1573,12 @@ async def _run_job(
                     progress["planner_monitor"] = planner
                 progress["session_id"] = str(payload.get("session_id") or "")
                 progress["mode"] = str(payload.get("mode") or mode or "")
+            elif channel == "orchestrator_progress":
+                events = progress.get("orchestrator_events")
+                if not isinstance(events, list):
+                    events = []
+                events.append(payload)
+                progress["orchestrator_events"] = events[-120:]
             else:
                 progress.update(payload)
             current_result["progress"] = progress
@@ -1534,15 +1602,10 @@ async def _run_job(
             result = dict(result or {})
             result.setdefault("context_id", resolved_context_id)
             result.setdefault("session_id", resolved_context_id)
-        if (mode or "").strip().lower() != "chat":
-            _append_chat_history(
-                context_id=resolved_context_id,
-                mode=mode,
-                job_id=job_id,
-                user_text=task,
-                assistant_text=str((result or {}).get("reply", "")),
-                status="completed",
-            )
+        normalized_input_files = _normalize_input_files(input_files)
+        if normalized_input_files:
+            result = dict(result or {})
+            result["input_files"] = normalized_input_files
         result = _decorate_result_with_files(job_id, result, request=None, cfg=cfg)
         completed = TaskResult(job_id=job_id, status="completed", result=result)
         async with _JOB_LOCK:
@@ -1567,15 +1630,6 @@ async def _run_job(
                     current.error = f"callback_failed: {exc}"
     except Exception as exc:
         resolved_context_id = _resolve_context_id(context_id, None)
-        if (mode or "").strip().lower() != "chat":
-            _append_chat_history(
-                context_id=resolved_context_id,
-                mode=mode,
-                job_id=job_id,
-                user_text=task,
-                assistant_text=str(exc),
-                status="failed",
-            )
         failed = TaskResult(
             job_id=job_id,
             status="failed",
@@ -1666,6 +1720,45 @@ def _verify_feishu_signature(
     return hmac.compare_digest(digest, signature)
 
 
+@app.post("/api/v1/chat/files")
+async def upload_chat_files(
+    files: list[UploadFile] = File(...),
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """上传 chat 附件并返回本地路径。"""
+    cfg = load_config()
+    _ensure_auth(authorization, cfg)
+
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    upload_root = _chat_upload_root_dir()
+    upload_root.mkdir(parents=True, exist_ok=True)
+    stored: list[dict[str, Any]] = []
+    stamp_dir = upload_root / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    stamp_dir.mkdir(parents=True, exist_ok=True)
+
+    for item in files:
+        name = _sanitize_upload_name(item.filename or "")
+        target = stamp_dir / f"{uuid.uuid4().hex}_{name}"
+        size = 0
+        try:
+            content = await item.read()
+            target.write_bytes(content)
+            size = len(content)
+        finally:
+            await item.close()
+        stored.append(
+            {
+                "name": name,
+                "path": str(target.resolve()),
+                "size": size,
+                "mime_type": item.content_type or (mimetypes.guess_type(name)[0] or "application/octet-stream"),
+            }
+        )
+    return {"files": stored}
+
+
 @app.post("/api/v1/task", response_model=TaskResult)
 async def submit_task(
     request: TaskRequest,
@@ -1719,6 +1812,8 @@ async def submit_task(
             },
         )
 
+    effective_task, normalized_input_files = _inject_input_files_into_task(request.task, request.input_files)
+
     if request.async_mode:
         job_id = uuid.uuid4().hex
         async with _JOB_LOCK:
@@ -1731,7 +1826,7 @@ async def submit_task(
         asyncio.create_task(
             _run_job(
                 job_id,
-                request.task,
+                effective_task,
                 request.output_path,
                 request.mode,
                 request.agent_hint,
@@ -1740,13 +1835,14 @@ async def submit_task(
                 request.context_id,
                 None,
                 request.web_search_enabled,
+                normalized_input_files,
             )
         )
         return _JOB_STORE[job_id]
 
     job_id = uuid.uuid4().hex
     result = await run_gateway_task(
-        task=request.task,
+        task=effective_task,
         output_path=request.output_path,
         mode=request.mode,
         agent_hint=request.agent_hint,
@@ -1760,15 +1856,9 @@ async def submit_task(
         result = dict(result or {})
         result.setdefault("context_id", resolved_context_id)
         result.setdefault("session_id", resolved_context_id)
-    if (request.mode or "").strip().lower() != "chat":
-        _append_chat_history(
-            context_id=resolved_context_id,
-            mode=request.mode,
-            job_id=job_id,
-            user_text=request.task,
-            assistant_text=str((result or {}).get("reply", "")),
-            status="completed",
-        )
+    if normalized_input_files:
+        result = dict(result or {})
+        result["input_files"] = normalized_input_files
     result = _decorate_result_with_files(job_id, result, request=raw_request, cfg=cfg)
     return TaskResult(job_id=job_id, status="completed", result=result)
 

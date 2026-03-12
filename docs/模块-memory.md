@@ -54,9 +54,7 @@
 
 #### 会话目录
 
-- `SENESCHAL_CHAT_SESSION_ROOT`
-
-注意：变量名虽然叫 `SENESCHAL_CHAT_SESSION_ROOT`，但当前 `GenericSessionManager` 会把它用于 chat 和 orchestrated task 等多种模式，不仅限于 chat。
+- 环境变量中`SENESCHAL_SESSION_ROOT`指定，默认为项目目录下的 `.mobiclaw/session` 目录。
 
 ---
 
@@ -103,11 +101,7 @@
 
 核心实现位于：
 
-- `seneschal/session/manager.py`
-
-当前项目中也保留了兼容导出：
-
-- `seneschal.agents.ChatSessionManager`
+- [`seneschal/session/manager.py`](../seneschal/session/manager.py)
 
 当前实际职责包括：
 
@@ -120,7 +114,7 @@
 
 ### 3.2 默认目录
 
-如果未设置 `SENESCHAL_CHAT_SESSION_ROOT`，默认目录为：
+如果未设置 `SENESCHAL_SESSION_ROOT`，默认目录为：
 
 ```text
 <repo-root>/.mobiclaw/session
@@ -224,7 +218,7 @@
 
 #### 4) 配置名带有 `CHAT`，但并非只给 chat 用
 
-`SENESCHAL_CHAT_SESSION_ROOT` 实际上被通用会话管理器用于：
+`SENESCHAL_SESSION_ROOT` 实际上被通用会话管理器用于：
 
 - chat
 - router
@@ -631,7 +625,7 @@ Daily 需要单独理解：
 
 三者作用完全不同。
 
-## 8.4 `SENESCHAL_CHAT_SESSION_ROOT` 会被多模式共用
+## 8.4 `SENESCHAL_SESSION_ROOT` 会被多模式共用
 
 名称容易让人误以为只用于 chat。
 

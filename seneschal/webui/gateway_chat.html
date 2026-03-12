@@ -91,6 +91,33 @@
         display: grid;
         gap: 8px;
       }
+      .loading-bar {
+        margin-top: 8px;
+        border: 1px solid #d4dfd5;
+        border-radius: 10px;
+        background: #f8fbf7;
+        padding: 8px 10px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        color: #355a4f;
+      }
+      .loading-bar[hidden] { display: none; }
+      .loading-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: #2e8b6a;
+        animation: loadingPulse 1s ease-in-out infinite;
+      }
+      .loading-dot:nth-child(2) { animation-delay: 0.15s; }
+      .loading-dot:nth-child(3) { animation-delay: 0.3s; }
+      @keyframes loadingPulse {
+        0%, 80%, 100% { opacity: 0.25; transform: scale(0.8); }
+        40% { opacity: 1; transform: scale(1); }
+      }
+      .loading-text { font-family: var(--mono); }
       .planner-box {
         margin-top: 10px;
         border: 1px solid var(--line);
@@ -161,6 +188,12 @@
       .msg.user { justify-self: end; background: #dff2e8; border: 1px solid #b6ddca; }
       .msg.agent { justify-self: start; background: #f6f8fa; border: 1px solid #d9e2e8; }
       .msg.system { justify-self: center; background: #fff8e6; border: 1px solid #f0d7a9; color: #7b5718; }
+      .msg.progress {
+        justify-self: start;
+        background: #eef5ff;
+        border: 1px solid #c8dcff;
+        color: #1e4f8a;
+      }
       .msg.error { justify-self: start; background: #fde8e8; border: 1px solid #f6bcbc; color: #8a1f1f; }
       .msg-meta { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
       .composer { margin-top: 10px; display: grid; gap: 8px; }
@@ -254,6 +287,12 @@
         <section class="panel">
           <h2>聊天窗口</h2>
           <div id="chat-box" class="chat-box"></div>
+          <div id="task-loading" class="loading-bar" hidden>
+            <span class="loading-dot"></span>
+            <span class="loading-dot"></span>
+            <span class="loading-dot"></span>
+            <span id="task-loading-text" class="loading-text">任务执行中，请稍候...</span>
+          </div>
           <div id="planner-box" class="planner-box">
             <div class="planner-head">
               <div class="planner-title">Planner 监控</div>
@@ -290,6 +329,10 @@
             </div>
 
             <textarea id="chat-input" placeholder="输入消息，或输入指令: /new /quit /interrupt"></textarea>
+            <div class="row-wrap">
+              <label>附件</label>
+              <input id="chat-files" type="file" multiple />
+            </div>
             <div id="cmd-suggest" class="cmd-suggest" hidden></div>
 
             <div class="row-wrap">
@@ -310,6 +353,7 @@
       let activeSessionId = "";
       const renderedJobs = new Set();
       const seenPlannerEventKeys = new Set();
+      const seenOrchestratorEventKeys = new Set();
       const messages = [];
       const commandSpecs = [
         { cmd: "/new", desc: "新建会话" },
@@ -342,11 +386,14 @@
         btnQueryJob: document.getElementById("btn-query-job"),
         chatInput: document.getElementById("chat-input"),
         cmdSuggest: document.getElementById("cmd-suggest"),
+        chatFiles: document.getElementById("chat-files"),
         btnSend: document.getElementById("btn-send"),
         btnClearChat: document.getElementById("btn-clear-chat"),
         plannerState: document.getElementById("planner-state"),
         plannerCurrent: document.getElementById("planner-current"),
         plannerEvents: document.getElementById("planner-events"),
+        taskLoading: document.getElementById("task-loading"),
+        taskLoadingText: document.getElementById("task-loading-text"),
       };
 
       function nowTime() {
@@ -360,6 +407,17 @@
       function setSessionStatus(text, kind = "ok") {
         const color = kind === "error" ? "#b42318" : "#105f4a";
         el.sessionStatus.innerHTML = `状态: <strong style="color:${color}">${text}</strong>`;
+      }
+
+      function setTaskLoading(active, text = "") {
+        if (!el.taskLoading || !el.taskLoadingText) return;
+        if (active) {
+          el.taskLoading.hidden = false;
+          el.taskLoadingText.textContent = text || "任务执行中，请稍候...";
+          return;
+        }
+        el.taskLoading.hidden = true;
+        el.taskLoadingText.textContent = "任务执行中，请稍候...";
       }
 
       function normalizeBaseUrl(raw) {
@@ -436,6 +494,7 @@
         const r = String(role || "").trim().toLowerCase();
         if (r === "assistant" || r === "agent" || r === "bot") return "agent";
         if (r === "user") return "user";
+        if (r === "progress") return "progress";
         if (r === "error") return "error";
         return "system";
       }
@@ -457,7 +516,31 @@
           meta.className = "msg-meta";
           meta.textContent = m.meta || "";
           const body = document.createElement("div");
-          body.textContent = m.text;
+          const text = String(m.text || "");
+          const lines = text.split("\n");
+          lines.forEach((line, idx) => {
+            const match = line.match(/^(\s*-\s*)([^:]+):\s*(https?:\/\/\S+|\/api\/v1\/files\/\S+)\s*$/);
+            if (match) {
+              const prefix = document.createElement("span");
+              prefix.textContent = `${match[1]}${match[2]}: `;
+              body.appendChild(prefix);
+              const link = document.createElement("a");
+              const rawUrl = String(match[3] || "").trim();
+              const cfg = getConfig();
+              link.href = /^https?:\/\//i.test(rawUrl)
+                ? rawUrl
+                : `${cfg.baseUrl}${rawUrl.startsWith("/") ? "" : "/"}${rawUrl}`;
+              link.textContent = "下载文件";
+              link.target = "_blank";
+              link.rel = "noopener noreferrer";
+              body.appendChild(link);
+            } else {
+              body.appendChild(document.createTextNode(line));
+            }
+            if (idx < lines.length - 1) {
+              body.appendChild(document.createElement("br"));
+            }
+          });
           box.appendChild(meta);
           box.appendChild(body);
           el.chatBox.appendChild(box);
@@ -535,6 +618,33 @@
         }
       }
 
+      function emitOrchestratorIncrementalMessages(events) {
+        if (!Array.isArray(events) || events.length === 0) return;
+        for (const event of events) {
+          if (!event || typeof event !== "object") continue;
+          const eventKey = String(event.event_key || "").trim();
+          if (!eventKey || seenOrchestratorEventKeys.has(eventKey)) continue;
+          seenOrchestratorEventKeys.add(eventKey);
+
+          const stage = Number(event.stage || 0) || 0;
+          const subtask = Number(event.subtask || 0) || 0;
+          const agent = String(event.agent || "").trim() || "agent";
+          const state = String(event.state || "").trim().toLowerCase() || "started";
+          const task = summarizeText(event.task || "", 140);
+          const preview = summarizeText(event.reply_preview || "", 180);
+          const err = summarizeText(event.error || "", 160);
+          const eventAt = String(event.event_at || nowTime());
+
+          let text = `Stage ${stage}`;
+          if (subtask > 0) text += `.${subtask}`;
+          text += ` · ${agent} · ${state}`;
+          if (task) text += `\n任务: ${task}`;
+          if (preview && state !== "started") text += `\n输出: ${preview}`;
+          if (err) text += `\n错误: ${err}`;
+          pushMessage("system", text, `Orchestrator · ${eventAt}`);
+        }
+      }
+
       function renderPlannerMonitor() {
         if (!el.plannerState || !el.plannerCurrent || !el.plannerEvents) return;
         el.plannerState.textContent = plannerMonitor.enabled ? "已启用" : "未启用";
@@ -609,6 +719,7 @@
         plannerMonitor.events = [];
         plannerMonitor.updatedAt = "";
         seenPlannerEventKeys.clear();
+        seenOrchestratorEventKeys.clear();
         renderPlannerMonitor();
       }
 
@@ -716,7 +827,61 @@
         return String(sessionObj.context_id || sessionObj.session_id || "").trim();
       }
 
-      function appendAgentOutput(taskResult) {
+      function isTextLikeFile(name, mimeType = "") {
+        const mime = String(mimeType || "").trim().toLowerCase();
+        if (mime.startsWith("text/")) return true;
+        if (mime.includes("json") || mime.includes("xml") || mime.includes("yaml") || mime.includes("csv")) return true;
+        const suffix = String(name || "").toLowerCase().split(".").pop() || "";
+        return ["md", "txt", "json", "csv", "tsv", "log", "xml", "yaml", "yml"].includes(suffix);
+      }
+
+      async function fetchTextPreview(downloadUrl, maxLen = 320) {
+        const raw = String(downloadUrl || "").trim();
+        if (!raw) return "";
+        const cfg = getConfig();
+        const url = /^https?:\/\//i.test(raw)
+          ? raw
+          : `${cfg.baseUrl}${raw.startsWith("/") ? "" : "/"}${raw}`;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        try {
+          const resp = await fetch(url, {
+            method: "GET",
+            headers: authHeaders({}),
+            signal: controller.signal,
+          });
+          if (!resp.ok) return "";
+          const text = await resp.text();
+          const normalized = String(text || "").replace(/\s+/g, " ").trim();
+          if (!normalized) return "";
+          return normalized.length > maxLen ? `${normalized.slice(0, maxLen)}...` : normalized;
+        } catch (_) {
+          return "";
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+
+      async function renderResultFiles(files) {
+        if (!Array.isArray(files) || files.length === 0) return;
+        const lines = ["产出文件:"];
+        for (const file of files) {
+          if (!file || typeof file !== "object") continue;
+          const name = String(file.name || "file").trim() || "file";
+          const downloadUrl = String(file.download_url || "").trim();
+          const path = String(file.path || "").trim();
+          lines.push(`- ${name}: ${downloadUrl || path || "(no path)"}`);
+          if (downloadUrl && isTextLikeFile(name, file.mime_type || "")) {
+            const preview = await fetchTextPreview(downloadUrl, 280);
+            if (preview) {
+              lines.push(`  preview: ${preview}`);
+            }
+          }
+        }
+        pushMessage("system", lines.join("\n"), `FILES · ${nowTime()}`);
+      }
+
+      async function appendAgentOutput(taskResult) {
         if (!taskResult || !taskResult.job_id) return;
         updatePlannerMonitor(taskResult.result || {});
         if (renderedJobs.has(taskResult.job_id)) return;
@@ -738,7 +903,7 @@
             const subtaskText = String(item.task || "").trim();
             const reply = String(item.reply || "").trim() || "(无文本输出)";
             const text = subtaskText ? `子任务: ${subtaskText}\n\n${reply}` : reply;
-            pushMessage("agent", text, `Stage ${idx + 1}.${subIdx + 1} · ${agent} · ${nowTime()}`);
+            pushMessage("progress", text, `Stage ${idx + 1}.${subIdx + 1} · ${agent} · ${nowTime()}`);
           });
         });
 
@@ -757,6 +922,7 @@
           setActiveSession(contextId);
           upsertSession(contextId);
         }
+        await renderResultFiles(Array.isArray(result.files) ? result.files : []);
       }
 
       function stopPolling() {
@@ -764,6 +930,7 @@
           clearInterval(pollingTimer);
           pollingTimer = null;
         }
+        setTaskLoading(false);
       }
 
       async function queryJob(jobId) {
@@ -775,9 +942,12 @@
         });
         if (resp && resp.result && resp.status === "running") {
           updatePlannerMonitor(resp.result);
+          const progress = resp.result.progress && typeof resp.result.progress === "object" ? resp.result.progress : {};
+          emitOrchestratorIncrementalMessages(Array.isArray(progress.orchestrator_events) ? progress.orchestrator_events : []);
         }
         if (resp.status === "completed" || resp.status === "failed") {
-          appendAgentOutput(resp);
+          await appendAgentOutput(resp);
+          setTaskLoading(false);
         }
         return resp;
       }
@@ -803,6 +973,7 @@
         };
 
         // 立即拉取一次，避免短任务在首个 interval 前就完成导致看不到中间进度
+        setTaskLoading(true, `任务执行中（job=${jobId}）...`);
         pollOnce().catch((err) => {
           if (isAbortLikeError(err)) {
             return;
@@ -840,6 +1011,23 @@
         const mode = String(raw || "chat").trim().toLowerCase();
         if (mode === "chat") return "chat";
         return mode || "chat";
+      }
+
+      async function uploadSelectedFiles() {
+        const selected = Array.from(el.chatFiles?.files || []);
+        if (selected.length === 0) return [];
+        const form = new FormData();
+        selected.forEach((file) => form.append("files", file, file.name || "file"));
+        const resp = await requestJson("/api/v1/chat/files", {
+          method: "POST",
+          headers: authHeaders({}),
+          body: form,
+        });
+        const uploaded = Array.isArray(resp?.files) ? resp.files : [];
+        if (el.chatFiles) {
+          el.chatFiles.value = "";
+        }
+        return uploaded.filter((item) => item && typeof item === "object");
       }
 
       function commandPrefixInfo(raw, selectionStart) {
@@ -943,6 +1131,11 @@
           pushMessage("system", "已自动切换为异步模式，以支持 Planner 实时监控。", `SYSTEM · ${nowTime()}`);
         }
         const webSearchEnabled = !!el.chatWebSearch.checked;
+        const uploadedFiles = await uploadSelectedFiles();
+        if (uploadedFiles.length > 0) {
+          const names = uploadedFiles.map((item) => String(item.name || "file")).join(", ");
+          pushMessage("system", `已附加文件：${names}`, `SYSTEM · ${nowTime()}`);
+        }
         const payload = {
           task: userText,
           async_mode: asyncMode,
@@ -956,6 +1149,7 @@
           webhook_url: null,
           webhook_token: null,
           callback_headers: {},
+          input_files: uploadedFiles.map((item) => String(item.path || "").trim()).filter(Boolean),
         };
 
         pushMessage(
@@ -964,22 +1158,29 @@
           `SYSTEM · ${nowTime()}`,
         );
 
-        const resp = await requestJson("/api/v1/task", {
-          method: "POST",
-          headers: authHeaders({ "Content-Type": "application/json" }),
-          body: JSON.stringify(payload),
-        });
-        if (resp && resp.result) {
-          updatePlannerMonitor(resp.result);
-        }
+        setTaskLoading(true, "任务执行中，请稍候...");
+        try {
+          const resp = await requestJson("/api/v1/task", {
+            method: "POST",
+            headers: authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify(payload),
+          });
+          if (resp && resp.result) {
+            updatePlannerMonitor(resp.result);
+          }
 
-        el.currentJob.value = resp.job_id || "";
-        if (asyncMode && resp.job_id) {
-          setSessionStatus(`异步任务已提交: ${resp.job_id}`, "ok");
-          startPolling(resp.job_id);
-        } else {
-          appendAgentOutput(resp);
-          setSessionStatus(`任务完成: ${resp.status || "completed"}`, "ok");
+          el.currentJob.value = resp.job_id || "";
+          if (asyncMode && resp.job_id) {
+            setSessionStatus(`异步任务已提交: ${resp.job_id}`, "ok");
+            startPolling(resp.job_id);
+          } else {
+            await appendAgentOutput(resp);
+            setSessionStatus(`任务完成: ${resp.status || "completed"}`, "ok");
+            setTaskLoading(false);
+          }
+        } catch (err) {
+          setTaskLoading(false);
+          throw err;
         }
       }
 
@@ -1000,6 +1201,7 @@
           webhook_url: null,
           webhook_token: null,
           callback_headers: {},
+          input_files: [],
         };
         const resp = await requestJson("/api/v1/task", {
           method: "POST",
@@ -1007,7 +1209,7 @@
           body: JSON.stringify(payload),
         });
         el.currentJob.value = resp.job_id || "";
-        appendAgentOutput(resp);
+        await appendAgentOutput(resp);
       }
 
       async function handleCommand(raw) {
