@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import asyncio
 import base64
+import functools
 from functools import lru_cache
 import logging
 import os
@@ -33,7 +34,7 @@ from agentscope.tool import Toolkit, ToolResponse
 from agentscope.plan import PlanNotebook, Plan, SubTask
 
 
-from .config import CUSTOM_AGENT_CONFIG, MODEL_CONFIG, MEMORY_CONFIG, RAG_CONFIG, ROUTING_CONFIG
+from .config import CUSTOM_AGENT_CONFIG, MODEL_CONFIG, MEMORY_CONFIG, RAG_CONFIG, ROUTING_CONFIG, SCHEDULE_CONFIG
 from .tools import (
     arxiv_search,
     brave_search,
@@ -407,6 +408,48 @@ def _as_str_list(value: Any) -> list[str]:
 
 
 def _builtin_agent_capabilities() -> list[AgentCapability]:
+    """返回路由可用的 Agent 能力描述字典。
+
+    返回值说明：
+        dict[str, dict[str, object]]: 以 agent 名称为键、能力画像为值的映射。
+    """
+
+    worker_role = "负责通用检索、网页阅读、学术资料收集、生成和阅读各类文档、智能管家知识库检索、本地工具执行"
+    if RAG_CONFIG["task_history_enabled"]:
+        worker_role += "、历史任务检索"
+    if MEMORY_CONFIG["enabled"]:
+        worker_role += "、长期记忆管理"
+    if SCHEDULE_CONFIG["enabled"]:
+        worker_role += "、定时任务管理"
+    worker_role += "，飞书相关的聊天历史检索（使用飞书连接时）"
+    
+    worker_strengths = [
+        "Brave/网页/arXiv/DBLP 检索",
+        "下载文件与 PDF 文本提取",
+        "Word/Excel/PDF 文档读写与编辑",
+        "Shell 与本地文件写入",
+        "智能管家知识库检索",
+    ]
+    if RAG_CONFIG["task_history_enabled"]:
+        worker_strengths.append("历史任务记录检索")
+    if MEMORY_CONFIG["enabled"]:
+        worker_strengths.append("长期记忆读写（记录用户偏好、事实信息等跨会话信息）")
+    if SCHEDULE_CONFIG["enabled"]:
+        worker_strengths.append("定时任务管理（创建、查看、取消）")
+
+    worker_typical_tasks = [
+        "检索最新论文并总结",
+        "整理或生成 Word/Excel/PDF 文档",
+        "抓取网页并提炼可执行结论",
+        "检索智能管家存储的知识（如手机采集的 OCR 文字、对话记录等）",
+    ]
+    if RAG_CONFIG["task_history_enabled"]:
+        worker_typical_tasks.append("查询之前做过的任务或历史记录")
+    if MEMORY_CONFIG["enabled"]:
+        worker_typical_tasks.append("记住用户偏好或更新长期记忆")
+    if SCHEDULE_CONFIG["enabled"]:
+        worker_typical_tasks.append("查看、创建或取消定时任务")
+
     return [
         AgentCapability(
             name="steward",
@@ -425,23 +468,9 @@ def _builtin_agent_capabilities() -> list[AgentCapability]:
         ),
         AgentCapability(
             name="worker",
-            role="负责通用检索、网页阅读、学术资料收集、生成和阅读各类文档、历史任务检索、知识库检索、长期记忆管理，本地工具执行，飞书相关的聊天历史检索（使用飞书连接时）",
-            strengths=[
-                "Brave/网页/arXiv/DBLP 检索",
-                "下载文件与 PDF 文本提取",
-                "Word/Excel/PDF 文档读写与编辑",
-                "Shell 与本地文件写入",
-                "历史任务记录检索与知识库检索",
-                "长期记忆读写（记录用户偏好、事实信息等跨会话信息）",
-            ],
-            typical_tasks=[
-                "检索最新论文并总结",
-                "整理或生成 Word/Excel/PDF 文档",
-                "抓取网页并提炼可执行结论",
-                "查询之前做过的任务或历史记录",
-                "检索智能管家存储的知识（如手机采集的 OCR 文字、对话记录等）",
-                "记住用户偏好或更新长期记忆",
-            ],
+            role=worker_role,
+            strengths=worker_strengths,
+            typical_tasks=worker_typical_tasks,
             boundaries=[
                 "不直接执行手机 GUI 操作",
             ],
@@ -663,7 +692,10 @@ def create_skill_selector_agent() -> ReActAgent:
     )
 
 
-def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
+def create_worker_agent(
+    skill_context: str | None = None,
+    job_context: dict[str, Any] | None = None,
+) -> ReActAgent:
     """创建 Worker Agent，用于子任务委派。"""
     toolkit = Toolkit()
 
@@ -764,11 +796,7 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
         write_text_file,
         func_description="写入本地文本文件，用于保存结果或日志。",
     )
-    if RAG_CONFIG["task_history_enabled"]:
-        toolkit.register_tool_function(
-            search_task_history,
-            func_description="检索历史任务执行记录和相关文档，用于回答关于之前做过的任务的问题。",
-        )
+        
     toolkit.register_tool_function(
         search_steward_knowledge,
         func_description="检索本地知识库中已存储的信息（由智能管家从手机中提取并存储）。",
@@ -859,6 +887,10 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
 - 不做多步长对话，输出最终结论或可执行结果。
 """
     if RAG_CONFIG["task_history_enabled"]:
+        toolkit.register_tool_function(
+            search_task_history,
+            func_description="检索历史任务执行记录和相关文件，用于回答关于之前做过的任务的问题。",
+        )
         sys_prompt += "- 如果用户询问之前做过的任务，使用 \"search_task_history\" 检索历史记录。\n"
 
     if MEMORY_CONFIG["enabled"]:
@@ -872,6 +904,29 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
         sys_prompt += (
             "- 你拥有 \"update_long_term_memory\" 工具，可更新长期记忆。"
             "当用户明确要求记住某些偏好或信息时，先读取现有记忆内容，合并后写回。\n"
+        )
+
+    if SCHEDULE_CONFIG["enabled"]:
+        from .tools.schedule import list_scheduled_tasks, cancel_scheduled_task, create_scheduled_task
+
+        bound_create = functools.partial(create_scheduled_task, bound_job_context=job_context or {})
+        bound_create.__name__ = "create_scheduled_task"
+        bound_create.__doc__ = create_scheduled_task.__doc__
+        toolkit.register_tool_function(
+            bound_create,
+            func_description='创建定时任务。传入 task（核心任务描述，去除时间信息）和 time_description（自然语言时间描述，如"每天早上8点"（周期任务）、"下午2点10分"（单次任务））。系统会自动解析时间并创建定时调度。',
+        )
+        toolkit.register_tool_function(
+            list_scheduled_tasks,
+            func_description="列出所有定时任务及其状态信息（schedule_id、任务内容、状态、调度类型、描述、cron 表达式等）。",
+        )
+        toolkit.register_tool_function(
+            cancel_scheduled_task,
+            func_description="取消指定的定时任务。需要提供 schedule_id，可先通过 list_scheduled_tasks 查询。",
+        )
+        sys_prompt += (
+            '- 如果用户想创建定时任务（如"每天帮我搜新闻"），使用 "create_scheduled_task" 创建，传入核心任务和时间描述。\n'
+            "- 如果用户想查看或取消定时任务，使用 \"list_scheduled_tasks\" 查看列表，使用 \"cancel_scheduled_task\" 取消指定任务。\n"
         )
 
     sys_prompt += _build_memory_prompt()
@@ -1170,16 +1225,15 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
 - `status`, `latest_run_dir`, `latest_index_file`, `latest_screenshot_path`, `latest_reasoning`, `latest_ocr_preview`, `next_action_recommendation`
 
 ### 存储 (Store)
-- 使用 `store_steward_knowledge` 工具将收集到的信息存入知识库
+- 使用 `store_steward_knowledge` 工具将收集到的信息存入管家知识库
 - 确保所有有价值的信息都被持久化保存
 
-### 分析 (Analyze)
-- 使用 `search_steward_knowledge` 检索知识库中已存储的数据
-- 根据检索到的原始片段，自行分析总结待办事项、账单、重要提醒等
-
 ### 检索 (Retrieve)
-- 查找之前存储的数据（OCR、对话记录等），使用 `search_steward_knowledge`
+- 查找之前存储的管家知识库（OCR、对话记录等），使用 `search_steward_knowledge`
 - 对外部页面查询可用 `fetch_url_text` 获取原始文本
+
+### 分析 (Analyze)
+- 根据管家知识库检索到的原始片段，自行分析总结待办事项、账单、重要提醒等
 
 ### 委派 (Delegate)
 - 可将通用检索、浏览器查询或本地命令任务交给 `delegate_to_worker`
