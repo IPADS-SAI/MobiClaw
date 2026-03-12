@@ -47,7 +47,7 @@ RAG_CONFIG = {
     "embedding_dimensions": int(os.environ.get("SENESCHAL_RAG_EMBEDDING_DIMENSIONS", "1536")),
     "chunk_size": int(os.environ.get("SENESCHAL_RAG_CHUNK_SIZE", "512")),
     "index_file_content": os.environ.get("SENESCHAL_RAG_INDEX_FILE_CONTENT", "0").strip() not in {"0", "false", "False"},
-    "task_history_enabled": os.environ.get("SENESCHAL_RAG_ENABLED", "0").strip() not in {"0", "false", "False"},
+    "task_history_enabled": os.environ.get("SENESCHAL_RAG_STORE_HISTORY", "1").strip() not in {"0", "false", "False"},
 }
 
 # Brave Search 配置 (联网搜索)
@@ -78,8 +78,14 @@ ROUTING_CONFIG = {
     "skill_hint_override": os.environ.get("SENESCHAL_SKILL_HINT_OVERRIDE", "1").strip() not in {"0", "false", "False"},
 }
 
+# 定时任务调度配置
+SCHEDULE_CONFIG = {
+    "enabled": os.environ.get("SENESCHAL_SCHEDULE_ENABLED", "1").strip() not in {"0", "false", "False"},
+    "store_path": os.environ.get("SENESCHAL_SCHEDULE_STORE_PATH", "~/.seneschal/schedules.json")
+}
+
 # 长期记忆配置
 MEMORY_CONFIG = {
-    "enabled": os.environ.get("SENESCHAL_MEMORY_ENABLED", "0").strip() not in {"0", "false", "False"},
+    "enabled": os.environ.get("SENESCHAL_MEMORY_ENABLED", "1").strip() not in {"0", "false", "False"},
     "file_path": os.environ.get("SENESCHAL_MEMORY_FILE", "~/.seneschal/MEMORY.md"),
 }
