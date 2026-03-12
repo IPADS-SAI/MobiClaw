@@ -56,6 +56,8 @@ from .tools import (
     search_task_history,
     search_steward_knowledge,
     store_steward_knowledge,
+    fetch_feishu_chat_history,
+    get_feishu_message,
     update_long_term_memory,
     write_xlsx_from_records,
     write_xlsx_from_rows,
@@ -352,7 +354,7 @@ def get_agent_capability_descriptions() -> dict[str, dict[str, object]]:
         ),
         AgentCapability(
             name="worker",
-            role="负责通用检索、网页阅读、学术资料收集、生成和阅读各类文档、历史任务检索、知识库检索、长期记忆管理，和本地工具执行",
+            role="负责通用检索、网页阅读、学术资料收集、生成和阅读各类文档、历史任务检索、知识库检索、长期记忆管理，本地工具执行，飞书相关的聊天历史检索（使用飞书连接时）",
             strengths=[
                 "Brave/网页/arXiv/DBLP 检索",
                 "下载文件与 PDF 文本提取",
@@ -550,6 +552,23 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
     )
 
     toolkit.register_tool_function(
+        fetch_feishu_chat_history,
+        func_description=(
+            "读取飞书会话历史消息列表。"
+            "chat_id 必须传真实会话/用户 ID（如 oc_... 或 ou_...），不能传 auto；"
+            "container_id_type 可选 auto/chat/user，默认 auto；"
+            "history_range 可选 today/yesterday/7d/all，默认 today；"
+            "当 history_range=today 且消息少于 10 条时，会自动向更早消息补齐到最多 10 条；"
+            "page_token 可用于非 today 查询的续页。"
+        ),
+    )
+
+    toolkit.register_tool_function(
+        get_feishu_message,
+        func_description="按消息 ID 获取飞书消息详情，用于排查和精确分析。",
+    )
+
+    toolkit.register_tool_function(
         read_pptx_summary,
         func_description="读取 PPTX/PPT 文件，返回每张幻灯片的标题、正文文本、备注、形状数量和图片数量的结构化摘要。",
     )
@@ -591,13 +610,15 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
     sys_prompt = """你是 Seneschal 的 Worker Agent，负责处理通用问题与单一子任务。
 
 工作准则：
-- 只聚焦当前任务，给出简明直接的结果。
+- 只聚焦当前任务（如果当前是一个子任务，只聚焦于子任务），给出简明直接的结果。
 - 必要时使用工具检索或执行本地命令。
 - 如果提供了相应的skill，请优先使用skill中指定的工具和方法，运行skill中的脚本，请务必使用 "run_skill_script"，而非"run_shell_command"。
 - 使用 "run_skill_script" 时，必须提供 command 和 execution_dir；优先使用 Activated Skills 中给出的 execution_dir。
-- 如果需要联网搜索新闻或网页来源，优先使用 "brave_search" 获取候选链接与摘要。
+- 如果需要联网搜索新闻或网页来源，优先使用 "brave_search" 获取新闻/web内容。
 - 如果检索学术论文，优先使用 "arxiv_search" 获取元数据与 PDF 链接。
 - 如果检索会议论文，优先使用 "dblp_conference_search" 获取论文清单与链接，然后去arxiv上搜索对应的论文。
+- 如果已经下载过论文/文件了，优先通过临时文件目录，查找之前下载的文件，避免重复上网搜索和下载。
+- 如果已经搜索过论文/文件了，优先通过之前的历史对话获取信息，避免重复联网检索。
 - 如果任务中有今天，明天等相对日期的描述，你可以通过shell中的date命令，获取具体的日期。
 - 拿到候选链接后，优先使用 "fetch_url_readable_text" 抓取正文；需要原始 HTML 时再使用 "fetch_url_text"。
 - 需要从网页中发现相关链接时使用 "fetch_url_links"，再逐条抓取与筛选。
@@ -606,8 +627,12 @@ def create_worker_agent(skill_context: str | None = None) -> ReActAgent:
 - 处理 Word/Excel/PDF 文档时，使用 docx/xlsx/pdf 相关工具完成读取或生成。
 - 需要输出文件时，可用 "write_text_file" 落盘。
 - 如果用户询问之前智能管家从手机中提取并存储的知识，使用 "search_steward_knowledge" 检索。
+- 如果用户要求总结飞书群聊历史或按消息 ID 查询，请使用飞书历史消息工具。
+- 如果消息中包含 [Feishu Context]，调用飞书历史工具时必须优先使用其中的 chat_id/open_id/message_id，不得猜测或改写。
+- 若 [Feishu Context] 缺少必需 ID，应先明确指出缺失项并向用户索取，不要编造参数。
 - 输出格式遵循用户要求；未指定时默认使用 Markdown。
 - 必须输出最终文本结论或可执行结果；不要输出空的工具调用。
+- 即使已经把结果写入文件，也必须在当前回复中给出完整结论（至少包含关键结论与主要依据）；禁止只回复“已落盘+文件路径”。
 - 不做多步长对话，输出最终结论或可执行结果。
 """
     if RAG_CONFIG["task_history_enabled"]:
@@ -947,6 +972,7 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
 - 如果某一步失败，要尝试其他方法或向用户说明
 - 在执行敏感操作前，需要用户确认（除非用户明确授权自动执行）
 - 保持回复简洁专业，优先使用中文交流
+- 即使过程产出了落盘文件，也必须在当前回复正文给出明确结论与关键内容；不能只回复文件路径。
 - 如果任务主要是通用网页/论文检索，优先委派给 Worker，避免重复调用端侧工具
 - 若路由层已明确指定本 Agent，仅处理职责范围内任务，不要无限自委派
 
@@ -1011,6 +1037,7 @@ def create_chat_agent(*, web_search_enabled: bool = True) -> ReActAgent:
     - 与用户进行连续、多轮的自然语言对话；
     - 直接回答用户问题，必要时说明不确定性；
     - 语气简洁、专业、清晰。
+    - 若有文件落盘，也必须在当前回复中直接给出答案要点，不能只给文件路径。
 """
     return ReActAgent(
         name="MobiChatBot",
