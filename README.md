@@ -258,6 +258,61 @@ python app.py --agent-task "从 arXiv 搜索今天的 Agent 论文并总结" --m
 - Router 超时：默认回退到 `worker`
 - Planner 超时：默认退化为单子任务 `worker`
 
+### 配置驱动自定义 Agent
+
+当前支持通过配置文件自动注册自定义 Agent，并默认参与 Router/Planner 的候选集合。
+
+- 配置文件路径：`seneschal/configs/custom_agent.json`
+- 可选覆盖：环境变量 `SENESCHAL_CUSTOM_AGENT_CONFIG_PATH`
+- 加载时机：进程启动加载一次
+- 校验策略：`tools` 严格校验；若包含未知工具名，该 Agent 会被跳过并记录 warning
+
+配置项说明：
+
+- 必填字段：
+- `agent_name`：Agent 名称（路由标识，内部会标准化为小写）
+- `role`：该 Agent 的职责描述（供 Router 能力画像使用）
+- `system_prompt`：该 Agent 的系统提示词
+- 可选字段：
+- `tools`：工具名列表（必须来自系统已注册工具名）
+- `strengths`：能力优势列表
+- `typical_tasks`：典型任务列表
+- `boundaries`：能力边界列表
+- `model_name`：该 Agent 专用模型（不填则沿用默认模型）
+- `temperature`：该 Agent 温度参数
+- `max_iters`：该 Agent 最大迭代轮数（1-50）
+
+示例：
+
+```json
+{
+  "agents": [
+    {
+      "agent_name": "research_assistant",
+      "role": "负责论文与网页信息的深度检索和结构化总结",
+      "system_prompt": "你是 Seneschal 的 Research Assistant。你只处理检索、阅读、对比与总结类任务。",
+      "tools": [
+        "brave_search",
+        "fetch_url_readable_text",
+        "arxiv_search",
+        "download_file",
+        "extract_pdf_text"
+      ],
+      "strengths": ["跨来源信息检索与交叉验证"],
+      "typical_tasks": ["检索并总结某个主题的最新论文"],
+      "boundaries": ["不执行手机 GUI 操作"],
+      "temperature": 0.2,
+      "max_iters": 12
+    }
+  ]
+}
+```
+
+使用方式：
+
+- 自动路由：提交普通任务即可，Router 会把它作为候选 Agent
+- 显式指定：可通过 `agent_hint` / `--agent-hint` 直接指定自定义 Agent
+
 ### Skill 自动选择
 
 当前版本新增 Skill 选择机制：

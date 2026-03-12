@@ -1073,6 +1073,13 @@ def _build_agent(
 ):
     """按名称构建对应执行 Agent。"""
     normalized = (agent_name or "").strip().lower()
+
+    custom_factory = getattr(agents_module, "create_configured_agent_by_name", None)
+    if callable(custom_factory):
+        custom_agent = custom_factory(normalized, skill_context=skill_context)
+        if custom_agent is not None:
+            return custom_agent
+
     factory = getattr(agents_module, f"create_{normalized}_agent", None)
     if callable(factory):
         try:
@@ -1305,34 +1312,46 @@ async def run_orchestrated_task(
     max_subtasks = int(ROUTING_CONFIG["max_subtasks"])
     planner_allowed_agents = _planner_allowed_agents(decision)
     plan_control_path = "direct"
+    single_non_steward_direct = (
+        len(decision.target_agents) == 1 and decision.target_agents[0] != "steward"
+    )
     if decision.plan_required or len(decision.target_agents) > 1:
-        try:
-            stages = await asyncio.wait_for(
-                _llm_plan(task, decision, max_subtasks=max_subtasks),
-                timeout=planner_timeout_s,
-            )
-            plan_source = "llm"
-            plan_control_path = "planner_llm"
+        if single_non_steward_direct:
+            stages = [[{"agent": decision.target_agents[0], "task": task.strip()}]]
+            plan_source = "direct_single_non_steward"
+            plan_control_path = "direct_single_non_steward"
             logger.info(
-                "orchestrator.plan.ok timeout_s=%.2f stages=%d",
-                planner_timeout_s,
-                len(stages),
+                "orchestrator.plan.skip_single_non_steward target=%s",
+                decision.target_agents[0],
             )
-        except asyncio.TimeoutError:
-            timeout_default_agent = "worker" if "worker" in _available_agent_names() else _default_agent_name()
-            stages = [[{"agent": timeout_default_agent, "task": task.strip()}]]
-            plan_source = "timeout_worker"
-            plan_control_path = "planner_timeout_worker"
-            logger.warning(
-                "orchestrator.plan.timeout timeout_s=%.2f; fallback=%s",
-                planner_timeout_s,
-                timeout_default_agent,
-            )
-        except Exception:
-            stages = _fallback_plan(task, decision, max_subtasks=max_subtasks)
-            plan_source = "fallback"
-            plan_control_path = "planner_error_fallback"
-            logger.exception("orchestrator.plan.error fallback=rule")
+        else:
+            try:
+                stages = await asyncio.wait_for(
+                    _llm_plan(task, decision, max_subtasks=max_subtasks),
+                    timeout=planner_timeout_s,
+                )
+                plan_source = "llm"
+                plan_control_path = "planner_llm"
+                logger.info(
+                    "orchestrator.plan.ok timeout_s=%.2f stages=%d",
+                    planner_timeout_s,
+                    len(stages),
+                )
+            except asyncio.TimeoutError:
+                timeout_default_agent = "worker" if "worker" in _available_agent_names() else _default_agent_name()
+                stages = [[{"agent": timeout_default_agent, "task": task.strip()}]]
+                plan_source = "timeout_worker"
+                plan_control_path = "planner_timeout_worker"
+                logger.warning(
+                    "orchestrator.plan.timeout timeout_s=%.2f; fallback=%s",
+                    planner_timeout_s,
+                    timeout_default_agent,
+                )
+            except Exception:
+                stages = _fallback_plan(task, decision, max_subtasks=max_subtasks)
+                plan_source = "fallback"
+                plan_control_path = "planner_error_fallback"
+                logger.exception("orchestrator.plan.error fallback=rule")
     else:
         stages = [[{"agent": decision.target_agents[0], "task": task.strip()}]]
         plan_source = "direct"

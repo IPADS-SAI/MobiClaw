@@ -3,11 +3,51 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
+from pathlib import Path
 from .env import load_project_env
 
 
+logger = logging.getLogger(__name__)
+
+
 load_project_env()
+
+
+def _custom_agent_config_path() -> Path:
+    raw = (os.environ.get("SENESCHAL_CUSTOM_AGENT_CONFIG_PATH") or "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return Path(__file__).resolve().parent / "configs" / "custom_agent.json"
+
+
+def _load_custom_agents() -> list[dict[str, object]]:
+    path = _custom_agent_config_path()
+    if not path.exists() or not path.is_file():
+        return []
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("custom agent config parse failed: path=%s error=%s", path, exc)
+        return []
+
+    if isinstance(payload, dict):
+        payload = payload.get("agents", [])
+
+    if not isinstance(payload, list):
+        logger.warning("custom agent config must be list or {\"agents\": [...]}: path=%s", path)
+        return []
+
+    agents: list[dict[str, object]] = []
+    for item in payload:
+        if isinstance(item, dict):
+            agents.append(item)
+        else:
+            logger.warning("custom agent config item ignored (not object): path=%s item=%r", path, item)
+    return agents
 
 # LLM 模型配置 - 优先从环境变量读取，否则使用默认值
 MODEL_CONFIG = {
@@ -88,4 +128,10 @@ SCHEDULE_CONFIG = {
 MEMORY_CONFIG = {
     "enabled": os.environ.get("SENESCHAL_MEMORY_ENABLED", "1").strip() not in {"0", "false", "False"},
     "file_path": os.environ.get("SENESCHAL_MEMORY_FILE", "~/.seneschal/MEMORY.md"),
+}
+
+# 自定义 Agent 配置（配置驱动自动注册）
+CUSTOM_AGENT_CONFIG = {
+    "path": str(_custom_agent_config_path()),
+    "agents": _load_custom_agents(),
 }
