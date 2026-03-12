@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import mimetypes
 import re
 import time
 from datetime import datetime
@@ -105,7 +106,7 @@ def _collect_file_paths(text: str, output_path: str | None = None) -> list[Path]
     if output_path:
         paths.append(Path(output_path).expanduser())
 
-    for raw in re.findall(r"\[File\]\s+Wrote:\s*(.+)", text or ""):
+    for raw in re.findall(r"\[(?:File|Download)\]\s+Wrote:\s*(.+)", text or ""):
         candidate = raw.strip()
         if candidate:
             paths.append(Path(candidate).expanduser())
@@ -132,11 +133,15 @@ def _build_file_entries(paths: list[Path]) -> list[dict[str, Any]]:
         if not resolved.exists() or not resolved.is_file():
             continue
         stat = resolved.stat()
+        mime_type = mimetypes.guess_type(str(resolved))[0] or "application/octet-stream"
+        kind = "image" if mime_type.startswith("image/") else "document"
         entries.append(
             {
                 "path": str(resolved),
                 "name": resolved.name,
                 "size": stat.st_size,
+                "mime_type": mime_type,
+                "kind": kind,
             }
         )
     return entries
@@ -153,6 +158,29 @@ def _merge_file_paths(existing: list[Path], incoming: list[Path]) -> list[Path]:
         seen.add(key)
         merged.append(path)
     return merged
+
+
+def _collect_tmp_dir_file_paths(temp_dir: str | None, *, max_files: int = 200) -> list[Path]:
+    """从任务临时目录递归收集文件路径，作为工具输出兜底。"""
+    if not temp_dir:
+        return []
+
+    root = Path(temp_dir).expanduser()
+    if not root.exists() or not root.is_dir():
+        return []
+
+    files: list[Path] = []
+    try:
+        for item in root.rglob("*"):
+            if item.is_file():
+                files.append(item)
+    except OSError:
+        return []
+
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    if max_files > 0:
+        files = files[:max_files]
+    return files
 
 
 def _trim_for_prompt(text: str, max_chars: int) -> str:
@@ -195,6 +223,32 @@ def _build_upstream_context(
             sections.append(f"- {path}")
 
     return _trim_for_prompt("\n".join(sections), max_chars)
+
+
+def _build_external_context_text(external_context: dict[str, Any] | None) -> str:
+    """将外部上下文渲染为可供 Agent 使用的提示片段。"""
+    if not isinstance(external_context, dict) or not external_context:
+        return ""
+
+    feishu = external_context.get("feishu")
+    if not isinstance(feishu, dict):
+        return ""
+
+    chat_id = str(feishu.get("chat_id") or "").strip()
+    open_id = str(feishu.get("open_id") or "").strip()
+    message_id = str(feishu.get("message_id") or "").strip()
+    if not (chat_id or open_id or message_id):
+        return ""
+
+    return "\n".join(
+        [
+            "[Feishu Context]",
+            "以下 ID 来自网关收到的真实飞书事件，调用飞书工具时请优先使用，不要猜测或改写：",
+            f"- chat_id: {chat_id or '(empty)'}",
+            f"- open_id: {open_id or '(empty)'}",
+            f"- message_id: {message_id or '(empty)'}",
+        ]
+    )
 
 
 def _parse_json_object(text: str) -> dict[str, Any] | None:
@@ -1032,6 +1086,7 @@ async def _run_one_agent(
     temp_dir: str | None = None,
     selected_skills: list[str] | None = None,
     prior_context: str | None = None,
+    external_context_text: str | None = None,
 ) -> dict[str, Any]:
     """执行单个子任务并返回结构化结果。"""
     skill_list = selected_skills or []
@@ -1045,6 +1100,8 @@ async def _run_one_agent(
             + "\n\n"
             + msg_content
         )
+    if external_context_text:
+        msg_content = external_context_text + "\n\n" + msg_content
 
     if output_path:
         msg_content += (
@@ -1110,6 +1167,7 @@ async def run_orchestrated_task(
     skill_hint: str | None = None,
     routing_strategy: str | None = None,
     context_id: str | None = None,
+    external_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """执行完整的多智能体编排任务。
 
@@ -1123,12 +1181,14 @@ async def run_orchestrated_task(
         skill_hint: 可选技能提示（支持逗号分隔）。
         routing_strategy: 可选路由策略覆盖值。
         context_id: 预留的多轮上下文标识。
+        external_context: 外部上下文（如飞书事件中提取的 ID）。
     返回值说明：
         dict[str, Any]: 含最终回复、路由轨迹、执行明细与文件信息。
     """
     del context_id  # Reserved for future multi-turn persistence identifier.
 
     task_start = time.perf_counter()
+    external_context_text = _build_external_context_text(external_context)
     normalized_mode = (mode or "").strip().lower() or ROUTING_CONFIG["default_mode"]
     strategy = (routing_strategy or ROUTING_CONFIG["strategy"]).strip().lower()
     router_timeout_s = float(ROUTING_CONFIG["router_timeout_s"])
@@ -1315,6 +1375,7 @@ async def run_orchestrated_task(
                         temp_dir=job_tmp_dir,
                         selected_skills=skill_decision.selected_skills,
                         prior_context=prior_context,
+                        external_context_text=external_context_text,
                     ),
                     timeout=subtask_timeout_s,
                 )
@@ -1338,6 +1399,13 @@ async def run_orchestrated_task(
                 shared_file_paths,
                 _collect_file_paths(str(result.get("reply") or ""), output_path=hint_path),
             )
+            shared_file_paths = _merge_file_paths(
+                shared_file_paths,
+                _collect_tmp_dir_file_paths(
+                    job_tmp_dir,
+                    max_files=int(ROUTING_CONFIG.get("tmp_scan_max_files", 200)),
+                ),
+            )
 
         stage_elapsed_ms = int((time.perf_counter() - stage_start) * 1000)
         stage_traces.append(
@@ -1360,6 +1428,13 @@ async def run_orchestrated_task(
     file_paths = _merge_file_paths(
         shared_file_paths,
         _collect_file_paths(reply, output_path=resolved_output_path),
+    )
+    file_paths = _merge_file_paths(
+        file_paths,
+        _collect_tmp_dir_file_paths(
+            job_tmp_dir,
+            max_files=int(ROUTING_CONFIG.get("tmp_scan_max_files", 200)),
+        ),
     )
     files = _build_file_entries(file_paths)
     total_elapsed_ms = int((time.perf_counter() - task_start) * 1000)
@@ -1390,6 +1465,7 @@ async def run_orchestrated_task(
             "timing": {
                 "total_elapsed_ms": total_elapsed_ms,
             },
+            "external_context": external_context or {},
             "decision": {
                 "target_agents": decision.target_agents,
                 "reason": decision.reason,
