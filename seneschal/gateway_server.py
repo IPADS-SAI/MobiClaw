@@ -204,6 +204,11 @@ _ENV_SETTINGS_SCHEMA: list[dict[str, Any]] = [
             {"key": "OPENROUTER_API_KEY", "label": "OpenRouter API Key", "type": "password"},
             {"key": "OPENROUTER_BASE_URL", "label": "OpenRouter Base URL", "type": "text"},
             {"key": "OPENROUTER_MODEL", "label": "OpenRouter Model", "type": "text"},
+            {
+                "key": "OPENROUTER_MODEL_FOR_ORCHESTRATOR",
+                "label": "OpenRouter Model (Router/Planner/Selector)",
+                "type": "text",
+            },
         ],
     },
     {
