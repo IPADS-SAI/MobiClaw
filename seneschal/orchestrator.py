@@ -958,7 +958,7 @@ async def _llm_plan(task: str, decision: RouteDecision, max_subtasks: int) -> li
     planner_allowed = _planner_allowed_agents(decision)
     default_plan_agent = planner_allowed[0] if planner_allowed else _default_agent_name()
     prompt = (
-        "你是任务规划器。请把用户任务拆成可执行阶段，并且**快速**做出相应。\n"
+        "你是任务规划器。请把用户任务拆成可执行阶段（粗粒度拆分，只有任务足够复杂或者前后任务使用的Agent不同，才需要拆分），并且**快速**做出相应。\n"
         "如果是涉及手机类应用（例如微博，微信，饿了么等），请按照不同的应用拆分任务。如果任务只涉及一个应用，则无需拆分。\n"
         "输出严格 JSON，格式为:\n"
         '{"stages":[[{"agent":"agent_name","task":"..."}]]}\n\n'
@@ -1105,6 +1105,8 @@ async def _run_one_agent(
 
     if output_path:
         msg_content += (
+            "\n\n重要回复要求：必须在最终回复正文中直接给出完整答案或完整总结；"
+            "禁止只回复‘已落盘/见文件路径’。若同时生成了文件，可在正文后附文件路径。"
             "\n\n全部任务完成后，最终输出文件路径或文件名(绝对路径): "
             + str(output_path or "")
             + "\n任务执行过程的临时目录，例如下载或者生成文件的目录(绝对路径): "
@@ -1113,6 +1115,8 @@ async def _run_one_agent(
         )
     else:
         msg_content += (
+            "\n\n重要回复要求：必须在最终回复正文中直接给出完整答案或完整总结；"
+            "禁止只回复‘已落盘/见文件路径’。"
             "\n\n任务执行过程的临时目录，例如下载或者生成文件的目录(绝对路径): "
             + str(temp_dir or "")
             + "\n如需落盘，请自行选择合适工具完成。"
@@ -1143,20 +1147,21 @@ async def _run_one_agent(
 
 
 def _aggregate_replies(executions: list[dict[str, Any]]) -> str:
-    """聚合多子任务回复文本为最终回复。"""
+    """返回最终子任务（最后一个 agent）的回复文本。"""
     if not executions:
         return ""
-    if len(executions) == 1:
-        return str(executions[0].get("reply") or "")
 
-    blocks: list[str] = []
-    for idx, item in enumerate(executions, start=1):
-        blocks.append(
-            f"[{idx}] Agent={item.get('agent')}\n"
-            f"Task: {item.get('task')}\n"
-            f"Reply:\n{item.get('reply') or ''}"
-        )
-    return "\n\n".join(blocks).strip()
+    # Prefer the last subtask's reply so gateway/terminal output stays concise.
+    last_reply = str(executions[-1].get("reply") or "").strip()
+    if last_reply:
+        return last_reply
+
+    # Fallback: if the last reply is empty, walk backwards to find the latest non-empty one.
+    for item in reversed(executions[:-1]):
+        text = str(item.get("reply") or "").strip()
+        if text:
+            return text
+    return ""
 
 
 async def run_orchestrated_task(

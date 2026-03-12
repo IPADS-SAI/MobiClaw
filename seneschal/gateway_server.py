@@ -1387,7 +1387,7 @@ async def _run_job(
     routing_strategy: str | None,
     context_id: str | None,
     external_context: dict[str, Any] | None = None,
-    web_search_enabled: bool,
+    web_search_enabled: bool = True,
 ) -> None:
     """执行异步任务并更新任务状态。"""
     cfg = load_config()
