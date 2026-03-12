@@ -17,6 +17,7 @@ import hmac
 import json
 import mimetypes
 import os
+import tempfile
 import re
 import shutil
 from collections import deque
@@ -24,6 +25,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 import threading
 import time
+from tkinter import NO
 import uuid
 from datetime import datetime, timezone
 from dataclasses import asdict, dataclass
@@ -86,6 +88,11 @@ class GatewayConfig:
     feishu_verification_token: str
     feishu_encrypt_key: str
     feishu_event_transport: str
+    feishu_native_file_enabled: bool
+    feishu_native_image_enabled: bool
+    feishu_ack_enabled: bool
+    feishu_group_require_mention: bool
+    feishu_bot_open_id: str
 
 
 def load_config() -> GatewayConfig:
@@ -102,6 +109,11 @@ def load_config() -> GatewayConfig:
         feishu_verification_token=os.environ.get("FEISHU_VERIFICATION_TOKEN", "").strip(),
         feishu_encrypt_key=os.environ.get("FEISHU_ENCRYPT_KEY", "").strip(),
         feishu_event_transport=os.environ.get("FEISHU_EVENT_TRANSPORT", "both").strip().lower() or "both",
+        feishu_native_file_enabled=os.environ.get("FEISHU_NATIVE_FILE_ENABLED", "1").strip() not in {"0", "false", "False"},
+        feishu_native_image_enabled=os.environ.get("FEISHU_NATIVE_IMAGE_ENABLED", "1").strip() not in {"0", "false", "False"},
+        feishu_ack_enabled=os.environ.get("FEISHU_ACK_ENABLED", "1").strip() not in {"0", "false", "False"},
+        feishu_group_require_mention=os.environ.get("FEISHU_GROUP_REQUIRE_MENTION", "1").strip() not in {"0", "false", "False"},
+        feishu_bot_open_id=os.environ.get("FEISHU_BOT_OPEN_ID", "").strip(),
     )
 
 
@@ -210,6 +222,11 @@ _ENV_SETTINGS_SCHEMA: list[dict[str, Any]] = [
             {"key": "OPENROUTER_API_KEY", "label": "OpenRouter API Key", "type": "password"},
             {"key": "OPENROUTER_BASE_URL", "label": "OpenRouter Base URL", "type": "text"},
             {"key": "OPENROUTER_MODEL", "label": "OpenRouter Model", "type": "text"},
+            {
+                "key": "OPENROUTER_MODEL_FOR_ORCHESTRATOR",
+                "label": "OpenRouter Model (Router/Planner/Selector)",
+                "type": "text",
+            },
         ],
     },
     {
@@ -577,16 +594,27 @@ async def _execute_scheduled_job(
 ) -> str:
     """定时任务触发时的执行回调：创建 gateway job 并异步运行。"""
     job_id = uuid.uuid4().hex
+    external_context = None
     async with _JOB_LOCK:
         _JOB_STORE[job_id] = TaskResult(job_id=job_id, status="queued")
-        _JOB_CONTEXT[job_id] = JobContext(
-            webhook_url=job_context.get("webhook_url"),
-            webhook_token=job_context.get("webhook_token"),
-            callback_headers=job_context.get("callback_headers"),
-            feishu_chat_id=job_context.get("feishu_chat_id"),
-            feishu_user_open_id=job_context.get("feishu_user_open_id"),
+        ctx = JobContext(
+            webhook_url=job_context.get("webhook_url", None),
+            webhook_token=job_context.get("webhook_token", None),
+            callback_headers=job_context.get("callback_headers", None),
+            feishu_chat_id=job_context.get("feishu_chat_id", None),
+            feishu_user_open_id=job_context.get("feishu_user_open_id", None),
+            feishu_message_id=job_context.get("feishu_message_id", None),
             feishu_receive_id_type=job_context.get("feishu_receive_id_type", "chat_id"),
         )
+        _JOB_CONTEXT[job_id] = ctx
+        if ctx.feishu_chat_id or ctx.feishu_user_open_id or ctx.feishu_message_id:
+            external_context = {
+                "feishu": {
+                    "chat_id": ctx.feishu_chat_id,
+                    "open_id": ctx.feishu_user_open_id,
+                    "message_id": ctx.feishu_message_id,
+                }
+            }
     asyncio.create_task(
         _run_job(
             job_id,
@@ -597,6 +625,7 @@ async def _execute_scheduled_job(
             skill_hint=skill_hint,
             routing_strategy=routing_strategy,
             context_id=context_id,
+            external_context=external_context,
             web_search_enabled=web_search_enabled,
         )
     )
@@ -831,12 +860,200 @@ def _parse_feishu_text_from_content(content: str) -> str:
     return str(payload.get("text") or "").strip()
 
 
+def _parse_feishu_content(content: str) -> dict[str, Any]:
+    """解析飞书消息内容，支持 text/image/file。"""
+    parsed = (content or "").strip()
+    if not parsed:
+        return {"type": "text", "text": "", "raw": ""}
+    try:
+        payload = json.loads(parsed)
+    except json.JSONDecodeError:
+        return {"type": "text", "text": parsed, "raw": parsed}
+
+    text = str(payload.get("text") or "").strip()
+    image_key = str(payload.get("image_key") or "").strip()
+    file_key = str(payload.get("file_key") or "").strip()
+    if text:
+        return {"type": "text", "text": text, "raw": parsed}
+    if image_key:
+        return {"type": "image", "image_key": image_key, "raw": parsed}
+    if file_key:
+        return {"type": "file", "file_key": file_key, "raw": parsed}
+    return {"type": "unknown", "raw": parsed}
+
+
+def _feishu_media_download_dir() -> Path:
+    """返回飞书媒体缓存目录。"""
+    configured = (os.environ.get("FEISHU_MEDIA_DOWNLOAD_DIR") or "").strip()
+    path = Path(configured).expanduser() if configured else Path(tempfile.gettempdir()) / "seneschal_feishu_media"
+    path.mkdir(parents=True, exist_ok=True)
+    return path.resolve()
+
+
+def _download_feishu_message_resource(
+    cfg: GatewayConfig,
+    *,
+    message_id: str,
+    resource_key: str,
+    resource_type: str,
+) -> str | None:
+    """按消息资源接口下载飞书图片/文件。"""
+    token = _get_feishu_tenant_token(cfg)
+    if not token or not message_id or not resource_key:
+        return None
+
+    kind = resource_type if resource_type in {"image", "file"} else "file"
+    url = f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/resources/{resource_key}"
+    resp = requests.get(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+        params={"type": kind},
+        timeout=cfg.callback_timeout_s,
+    )
+    resp.raise_for_status()
+
+    content_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+    ext = mimetypes.guess_extension(content_type) or (".png" if kind == "image" else ".bin")
+    if not ext.startswith("."):
+        ext = ".bin"
+    save_path = _feishu_media_download_dir() / f"{kind}_{message_id}_{resource_key}{ext}"
+    save_path.write_bytes(resp.content)
+    return str(save_path)
+
+
+def _build_task_from_feishu_event(content: str, message_id: str | None, cfg: GatewayConfig) -> str:
+    """将飞书消息转成可执行任务文本。"""
+    parsed = _parse_feishu_content(content)
+    msg_type = str(parsed.get("type") or "text")
+    if msg_type == "text":
+        return str(parsed.get("text") or "").strip()
+
+    if msg_type in {"image", "file"} and message_id:
+        key_name = "image_key" if msg_type == "image" else "file_key"
+        resource_key = str(parsed.get(key_name) or "").strip()
+        if not resource_key:
+            return ""
+        try:
+            local_path = _download_feishu_message_resource(
+                cfg,
+                message_id=message_id,
+                resource_key=resource_key,
+                resource_type=msg_type,
+            )
+        except Exception as exc:
+            logger.warning("Failed to download Feishu %s resource: %s", msg_type, exc)
+            local_path = None
+
+        if local_path:
+            if msg_type == "image":
+                return f"请分析这张图片内容并给出结论。图片本地路径: {local_path}"
+            return f"请读取并总结这个文件内容。文件本地路径: {local_path}"
+        return f"收到飞书{msg_type}消息，资源键: {resource_key}。请提示用户重试或改为文字描述。"
+
+    return ""
+
+
+def _is_image_file(path: str) -> bool:
+    """判断本地文件是否为图片。"""
+    mime = mimetypes.guess_type(path)[0] or ""
+    return mime.startswith("image/")
+
+
+def _is_text_like_file(path: str, mime_type: str | None = None) -> bool:
+    """判断文件是否更适合文本回传而非原生媒体上传。"""
+    mime = (mime_type or mimetypes.guess_type(path)[0] or "").strip().lower()
+    if mime.startswith("text/"):
+        return True
+    if mime in {
+        "application/json",
+        "application/xml",
+        "application/yaml",
+        "application/x-yaml",
+        "application/toml",
+    }:
+        return True
+
+    suffix = Path(path).suffix.lower()
+    return suffix in {
+        ".md",
+        ".txt",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".csv",
+        ".tsv",
+        ".log",
+        ".xml",
+    }
+
+
+def _extract_open_id_from_mention(mention: Any) -> str:
+    """从飞书 mention 结构中提取 open_id（兼容 dict/SDK 对象）。"""
+    if isinstance(mention, dict):
+        ident = mention.get("id") if isinstance(mention.get("id"), dict) else {}
+        return str(ident.get("open_id") or "").strip()
+
+    ident = getattr(mention, "id", None)
+    if ident is None:
+        return ""
+    return str(getattr(ident, "open_id", "") or "").strip()
+
+
+def _extract_mentioned_open_ids(mentions: Any, content: str) -> set[str]:
+    """抽取消息中被 @ 的 open_id，缺失时尝试从内容判定是否存在 at 标签。"""
+    result: set[str] = set()
+    if isinstance(mentions, list):
+        for mention in mentions:
+            oid = _extract_open_id_from_mention(mention)
+            if oid:
+                result.add(oid)
+
+    if result:
+        return result
+
+    raw = (content or "").strip()
+    if "<at " in raw or "@" in raw:
+        return {"__any_mention__"}
+    return set()
+
+
+def _should_accept_feishu_message(
+    cfg: GatewayConfig,
+    *,
+    chat_type: str | None,
+    content: str,
+    mentions: Any,
+) -> tuple[bool, str | None]:
+    """决定是否处理飞书消息：群聊默认要求 @ 机器人。"""
+    if not cfg.feishu_group_require_mention:
+        return True, None
+
+    normalized_chat_type = (chat_type or "").strip().lower()
+    if normalized_chat_type and normalized_chat_type != "group":
+        return True, None
+
+    mentioned_ids = _extract_mentioned_open_ids(mentions, content)
+    if not mentioned_ids:
+        return False, "group_message_without_mention"
+
+    bot_open_id = (cfg.feishu_bot_open_id or "").strip()
+    if not bot_open_id:
+        # 未配置 bot open_id 时，至少要求群消息存在 @ 才处理。
+        return True, None
+
+    if bot_open_id in mentioned_ids:
+        return True, None
+    return False, "mentioned_other_user_not_bot"
+
+
 async def _enqueue_feishu_job(
     task: str,
     *,
     chat_id: str | None,
     open_id: str | None,
     message_id: str | None,
+    external_context: dict[str, Any] | None = None,
 ) -> str:
     """创建飞书触发的异步任务并入队执行。"""
     job_id = uuid.uuid4().hex
@@ -858,6 +1075,7 @@ async def _enqueue_feishu_job(
             skill_hint=None,
             routing_strategy=None,
             context_id=message_id or chat_id or open_id,
+            external_context=external_context,
         )
     )
     return job_id
@@ -869,9 +1087,27 @@ async def _accept_feishu_message(
     chat_id: str | None,
     open_id: str | None,
     message_id: str | None,
+    chat_type: str | None = None,
+    mentions: Any = None,
 ) -> dict[str, Any]:
     """接收飞书消息并转换为网关任务。"""
-    task = _parse_feishu_text_from_content(content)
+    cfg = load_config()
+    accepted, reason = _should_accept_feishu_message(
+        cfg,
+        chat_type=chat_type,
+        content=content,
+        mentions=mentions,
+    )
+    if not accepted:
+        logger.info(
+            "Feishu event ignored by mention filter, message_id=%s reason=%s chat_type=%s",
+            message_id or "",
+            reason or "",
+            (chat_type or "").strip().lower() or "unknown",
+        )
+        return {"ok": True, "accepted": False, "reason": reason or "filtered"}
+
+    task = _build_task_from_feishu_event(content, message_id, cfg)
     if not task:
         return {"ok": True, "accepted": False, "reason": "empty_task"}
 
@@ -880,7 +1116,22 @@ async def _accept_feishu_message(
         chat_id=chat_id,
         open_id=open_id,
         message_id=message_id,
+        external_context={
+            "feishu": {
+                "chat_id": chat_id,
+                "open_id": open_id,
+                "message_id": message_id,
+            }
+        },
     )
+    if cfg.feishu_ack_enabled:
+        receive_id = chat_id or open_id
+        receive_type = "chat_id" if chat_id else "open_id"
+        if receive_id:
+            try:
+                await asyncio.to_thread(_send_feishu_ack, cfg, receive_id, receive_type)
+            except Exception as exc:
+                logger.warning("Failed to send Feishu ack: %s", exc)
     logger.info("Feishu event accepted, job_id=%s message_id=%s", job_id, message_id or "")
     return {"ok": True, "accepted": True, "job_id": job_id}
 
@@ -930,6 +1181,8 @@ def _start_feishu_long_connection(cfg: GatewayConfig) -> None:
 
             content = str(getattr(message, "content", "") or "")
             chat_id = str(getattr(message, "chat_id", "") or "").strip() or None
+            chat_type = str(getattr(message, "chat_type", "") or "").strip() or None
+            mentions = getattr(message, "mentions", None)
             message_id = str(getattr(message, "message_id", "") or "").strip() or None
             open_id = str(getattr(sender_id, "open_id", "") or "").strip() or None
 
@@ -944,6 +1197,8 @@ def _start_feishu_long_connection(cfg: GatewayConfig) -> None:
                         chat_id=chat_id,
                         open_id=open_id,
                         message_id=message_id,
+                        chat_type=chat_type,
+                        mentions=mentions,
                     ),
                     _MAIN_LOOP,
                 )
@@ -1043,17 +1298,127 @@ def _get_feishu_tenant_token(cfg: GatewayConfig) -> str | None:
 
 def _send_feishu_text(cfg: GatewayConfig, receive_id: str, receive_id_type: str, text: str) -> None:
     """发送飞书文本消息。"""
+    _send_feishu_message(cfg, receive_id, receive_id_type, "text", {"text": text})
+
+
+def _send_feishu_message(
+    cfg: GatewayConfig,
+    receive_id: str,
+    receive_id_type: str,
+    msg_type: str,
+    content_payload: dict[str, Any],
+) -> None:
+    """发送飞书通用消息。"""
     token = _get_feishu_tenant_token(cfg)
     if not token:
         return
-    content = json.dumps({"text": text}, ensure_ascii=False)
+    content = json.dumps(content_payload, ensure_ascii=False)
     resp = requests.post(
         f"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type={receive_id_type}",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        json={"receive_id": receive_id, "msg_type": "text", "content": content},
+        json={"receive_id": receive_id, "msg_type": msg_type, "content": content},
         timeout=cfg.callback_timeout_s,
     )
     resp.raise_for_status()
+
+
+def _feishu_response_debug_body(resp: requests.Response, max_len: int = 1200) -> str:
+    """提取飞书响应体调试文本（优先 JSON，降级 text）。"""
+    body = ""
+    try:
+        body = json.dumps(resp.json(), ensure_ascii=False)
+    except Exception:
+        body = (resp.text or "").strip()
+    if len(body) > max_len:
+        return body[:max_len] + "..."
+    return body
+
+
+def _upload_feishu_file(cfg: GatewayConfig, file_path: str) -> str | None:
+    """上传本地文件到飞书，返回 file_key。"""
+    token = _get_feishu_tenant_token(cfg)
+    if not token:
+        return None
+    path = Path(file_path)
+    if not path.exists() or not path.is_file():
+        return None
+    with path.open("rb") as fp:
+        resp = requests.post(
+            "https://open.feishu.cn/open-apis/im/v1/files",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"file_type": "stream", "file_name": path.name},
+            files={"file": (path.name, fp, mimetypes.guess_type(path.name)[0] or "application/octet-stream")},
+            timeout=cfg.callback_timeout_s,
+        )
+    resp.raise_for_status()
+    payload = resp.json() if resp.content else {}
+    if payload.get("code") != 0:
+        return None
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    return str(data.get("file_key") or "").strip() or None
+
+
+def _upload_feishu_image(cfg: GatewayConfig, image_path: str) -> str | None:
+    """上传本地图片到飞书，返回 image_key。"""
+    token = _get_feishu_tenant_token(cfg)
+    if not token:
+        return None
+    path = Path(image_path)
+    if not path.exists() or not path.is_file():
+        return None
+    with path.open("rb") as fp:
+        resp = requests.post(
+            "https://open.feishu.cn/open-apis/im/v1/images",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"image_type": "message"},
+            files={"image": (path.name, fp, mimetypes.guess_type(path.name)[0] or "image/png")},
+            timeout=cfg.callback_timeout_s,
+        )
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError:
+        logger.warning(
+            "Feishu image upload http_error status=%s path=%s response=%s",
+            resp.status_code,
+            image_path,
+            _feishu_response_debug_body(resp),
+        )
+        raise
+    payload = resp.json() if resp.content else {}
+    if payload.get("code") != 0:
+        logger.warning(
+            "Feishu image upload api_error code=%s msg=%s path=%s response=%s",
+            payload.get("code"),
+            payload.get("msg"),
+            image_path,
+            _feishu_response_debug_body(resp),
+        )
+        return None
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    return str(data.get("image_key") or "").strip() or None
+
+
+def _send_feishu_file(cfg: GatewayConfig, receive_id: str, receive_id_type: str, file_path: str) -> bool:
+    """发送飞书原生文件消息。"""
+    file_key = _upload_feishu_file(cfg, file_path)
+    if not file_key:
+        return False
+    _send_feishu_message(cfg, receive_id, receive_id_type, "file", {"file_key": file_key})
+    return True
+
+
+def _send_feishu_image(cfg: GatewayConfig, receive_id: str, receive_id_type: str, image_path: str) -> bool:
+    """发送飞书原生图片消息。"""
+    image_key = _upload_feishu_image(cfg, image_path)
+    if not image_key:
+        return False
+    _send_feishu_message(cfg, receive_id, receive_id_type, "image", {"image_key": image_key})
+    return True
+
+
+def _send_feishu_ack(cfg: GatewayConfig, receive_id: str, receive_id_type: str) -> None:
+    """发送受理反馈。"""
+    _send_feishu_text(cfg, receive_id, receive_id_type, "已收到消息，正在处理中，请稍候。")
 
 
 async def _deliver_result(job_id: str, result: TaskResult, cfg: GatewayConfig) -> None:
@@ -1073,6 +1438,28 @@ async def _deliver_result(job_id: str, result: TaskResult, cfg: GatewayConfig) -
     if receive_id:
         text = _build_feishu_text(result)
         await asyncio.to_thread(_send_feishu_text, cfg, receive_id, ctx.feishu_receive_id_type, text)
+        files = result.result.get("files") if isinstance(result.result, dict) else []
+        for item in files if isinstance(files, list) else []:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "").strip()
+            mime_type = str(item.get("mime_type") or "").strip().lower() or None
+            if not path:
+                continue
+            if _is_text_like_file(path, mime_type):
+                logger.info("Skip native Feishu media for text-like file path=%s", path)
+                continue
+            try:
+                if _is_image_file(path) and cfg.feishu_native_image_enabled:
+                    sent = await asyncio.to_thread(_send_feishu_image, cfg, receive_id, ctx.feishu_receive_id_type, path)
+                    if sent:
+                        continue
+                if cfg.feishu_native_file_enabled:
+                    sent = await asyncio.to_thread(_send_feishu_file, cfg, receive_id, ctx.feishu_receive_id_type, path)
+                    if not sent:
+                        logger.warning("Failed to upload Feishu native file path=%s", path)
+            except Exception as exc:
+                logger.warning("Failed to send native Feishu media path=%s error=%s", path, exc)
 
 
 async def _run_job(
@@ -1084,12 +1471,12 @@ async def _run_job(
     skill_hint: str | None,
     routing_strategy: str | None,
     context_id: str | None,
+    external_context: dict[str, Any] | None = None,
     web_search_enabled: bool = True,
 ) -> None:
     """执行异步任务并更新任务状态。"""
     cfg = load_config()
     async with _JOB_LOCK:
-        ctx = _JOB_CONTEXT.get(job_id)
         _JOB_STORE[job_id] = TaskResult(
             job_id=job_id,
             status="running",
@@ -1104,10 +1491,6 @@ async def _run_job(
                 },
             },
         )
-    
-    # job context包含飞书chat id，webhook url等信息
-    # 需要透传给worker agent，才能在create_scheduled_task创建新job时，保证结果正确返回给同一个用户
-    job_ctx_dict = asdict(ctx) if ctx is not None else None
 
     async def _update_job_progress(payload: dict[str, Any]) -> None:
         if not isinstance(payload, dict):
@@ -1142,9 +1525,9 @@ async def _run_job(
             skill_hint=skill_hint,
             routing_strategy=routing_strategy,
             context_id=context_id,
+            external_context=external_context,
             web_search_enabled=web_search_enabled,
-            progress_callback=_update_job_progress,
-            job_context=job_ctx_dict,
+            progress_callback=_update_job_progress
         )
         resolved_context_id = _resolve_context_id(context_id, result)
         if resolved_context_id:
@@ -1355,6 +1738,7 @@ async def submit_task(
                 request.skill_hint,
                 request.routing_strategy,
                 request.context_id,
+                None,
                 request.web_search_enabled,
             )
         )
@@ -1696,6 +2080,8 @@ async def feishu_events(
         chat_id=str(message.get("chat_id") or "").strip() or None,
         open_id=str(sender_id.get("open_id") or "").strip() or None,
         message_id=str(message.get("message_id") or "").strip() or None,
+        chat_type=str(message.get("chat_type") or "").strip() or None,
+        mentions=message.get("mentions"),
     )
 
 

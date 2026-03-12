@@ -601,7 +601,7 @@ def _collect_file_paths(text: str, output_path: str | None = None) -> list[Path]
     if output_path:
         paths.append(Path(output_path).expanduser())
 
-    for raw in re.findall(r"\[File\]\s+Wrote:\s*(.+)", text or ""):
+    for raw in re.findall(r"\[(?:File|Download)\]\s+Wrote:\s*(.+)", text or ""):
         candidate = raw.strip()
         if candidate:
             paths.append(Path(candidate).expanduser())
@@ -646,9 +646,9 @@ async def run_gateway_task(
     skill_hint: str | None = None,
     routing_strategy: str | None = None,
     context_id: str | None = None,
+    external_context: dict[str, Any] | None = None,
     web_search_enabled: bool = True,
     progress_callback: PlannerProgressCallback | None = None,
-    job_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """通过编排器执行网关任务。
 
@@ -662,6 +662,7 @@ async def run_gateway_task(
         skill_hint: 可选技能提示。
         routing_strategy: 可选路由策略覆盖值。
         context_id: 可选上下文 ID（用于多轮扩展）。
+        external_context: 可选外部上下文（如飞书事件 ID）。
         web_search_enabled: chat 模式下是否启用联网搜索工具。
     返回值说明：
         dict[str, Any]: 编排执行结果。
@@ -689,7 +690,7 @@ async def run_gateway_task(
         skill_hint=skill_hint,
         routing_strategy=routing_strategy,
         context_id=context_id,
-        job_context=job_context,
+        external_context=external_context,
     )
 
 

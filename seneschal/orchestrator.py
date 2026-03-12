@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import mimetypes
 import re
 import time
 from datetime import datetime
@@ -105,7 +106,7 @@ def _collect_file_paths(text: str, output_path: str | None = None) -> list[Path]
     if output_path:
         paths.append(Path(output_path).expanduser())
 
-    for raw in re.findall(r"\[File\]\s+Wrote:\s*(.+)", text or ""):
+    for raw in re.findall(r"\[(?:File|Download)\]\s+Wrote:\s*(.+)", text or ""):
         candidate = raw.strip()
         if candidate:
             paths.append(Path(candidate).expanduser())
@@ -132,11 +133,15 @@ def _build_file_entries(paths: list[Path]) -> list[dict[str, Any]]:
         if not resolved.exists() or not resolved.is_file():
             continue
         stat = resolved.stat()
+        mime_type = mimetypes.guess_type(str(resolved))[0] or "application/octet-stream"
+        kind = "image" if mime_type.startswith("image/") else "document"
         entries.append(
             {
                 "path": str(resolved),
                 "name": resolved.name,
                 "size": stat.st_size,
+                "mime_type": mime_type,
+                "kind": kind,
             }
         )
     return entries
@@ -153,6 +158,29 @@ def _merge_file_paths(existing: list[Path], incoming: list[Path]) -> list[Path]:
         seen.add(key)
         merged.append(path)
     return merged
+
+
+def _collect_tmp_dir_file_paths(temp_dir: str | None, *, max_files: int = 200) -> list[Path]:
+    """从任务临时目录递归收集文件路径，作为工具输出兜底。"""
+    if not temp_dir:
+        return []
+
+    root = Path(temp_dir).expanduser()
+    if not root.exists() or not root.is_dir():
+        return []
+
+    files: list[Path] = []
+    try:
+        for item in root.rglob("*"):
+            if item.is_file():
+                files.append(item)
+    except OSError:
+        return []
+
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    if max_files > 0:
+        files = files[:max_files]
+    return files
 
 
 def _trim_for_prompt(text: str, max_chars: int) -> str:
@@ -195,6 +223,32 @@ def _build_upstream_context(
             sections.append(f"- {path}")
 
     return _trim_for_prompt("\n".join(sections), max_chars)
+
+
+def _build_external_context_text(external_context: dict[str, Any] | None) -> str:
+    """将外部上下文渲染为可供 Agent 使用的提示片段。"""
+    if not isinstance(external_context, dict) or not external_context:
+        return ""
+
+    feishu = external_context.get("feishu")
+    if not isinstance(feishu, dict):
+        return ""
+
+    chat_id = str(feishu.get("chat_id") or "").strip()
+    open_id = str(feishu.get("open_id") or "").strip()
+    message_id = str(feishu.get("message_id") or "").strip()
+    if not (chat_id or open_id or message_id):
+        return ""
+
+    return "\n".join(
+        [
+            "[Feishu Context]",
+            "以下 ID 来自网关收到的真实飞书事件，调用飞书工具时请优先使用，不要猜测或改写：",
+            f"- chat_id: {chat_id or '(empty)'}",
+            f"- open_id: {open_id or '(empty)'}",
+            f"- message_id: {message_id or '(empty)'}",
+        ]
+    )
 
 
 def _parse_json_object(text: str) -> dict[str, Any] | None:
@@ -919,7 +973,7 @@ async def _llm_plan(task: str, decision: RouteDecision, max_subtasks: int) -> li
     planner_allowed = _planner_allowed_agents(decision)
     default_plan_agent = planner_allowed[0] if planner_allowed else _default_agent_name()
     prompt = (
-        "你是任务规划器。请把用户任务拆成可执行阶段，并且**快速**做出相应。\n"
+        "你是任务规划器。请把用户任务拆成可执行阶段（粗粒度拆分，只有任务足够复杂或者前后任务使用的Agent不同，才需要拆分），并且**快速**做出相应。\n"
         "如果是涉及手机类应用（例如微博，微信，饿了么等），请按照不同的应用拆分任务。如果任务只涉及一个应用，则无需拆分。\n"
         "输出严格 JSON，格式为:\n"
         '{"stages":[[{"agent":"agent_name","task":"..."}]]}\n\n'
@@ -1056,12 +1110,21 @@ async def _run_one_agent(
     temp_dir: str | None = None,
     selected_skills: list[str] | None = None,
     prior_context: str | None = None,
-    job_context: dict[str, Any] | None = None,
+    external_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """执行单个子任务并返回结构化结果。"""
     skill_list = selected_skills or []
     skill_context = _skill_prompt_context(skill_list)
-    agent = _build_agent(agent_name, skill_context=skill_context, job_context=job_context)
+
+    # 重新组装，和JobContext字段对齐，透传给worker agent，用于创建定时任务
+    job_ctx_dict = {
+        "feishu_chat_id": external_context.get("feishu", {}).get("chat_id", None),
+        "feishu_user_open_id": external_context.get("feishu", {}).get("open_id", None),
+        "feishu_message_id": external_context.get("feishu", {}).get("message_id", None),
+    }
+    job_ctx_dict["feishu_receive_id_type"] = "chat_id" if job_ctx_dict["feishu_chat_id"] else "open_id"
+    
+    agent = _build_agent(agent_name, skill_context=skill_context, job_context=job_ctx_dict)
     msg_content = task.strip()
     if prior_context:
         msg_content = (
@@ -1070,9 +1133,13 @@ async def _run_one_agent(
             + "\n\n"
             + msg_content
         )
+    if external_context:
+        msg_content = _build_external_context_text(external_context) + "\n\n" + msg_content
 
     if output_path:
         msg_content += (
+            "\n\n重要回复要求：必须在最终回复正文中直接给出完整答案或完整总结；"
+            "禁止只回复‘已落盘/见文件路径’。若同时生成了文件，可在正文后附文件路径。"
             "\n\n全部任务完成后，最终输出文件路径或文件名(绝对路径): "
             + str(output_path or "")
             + "\n任务执行过程的临时目录，例如下载或者生成文件的目录(绝对路径): "
@@ -1081,6 +1148,8 @@ async def _run_one_agent(
         )
     else:
         msg_content += (
+            "\n\n重要回复要求：必须在最终回复正文中直接给出完整答案或完整总结；"
+            "禁止只回复‘已落盘/见文件路径’。"
             "\n\n任务执行过程的临时目录，例如下载或者生成文件的目录(绝对路径): "
             + str(temp_dir or "")
             + "\n如需落盘，请自行选择合适工具完成。"
@@ -1111,20 +1180,21 @@ async def _run_one_agent(
 
 
 def _aggregate_replies(executions: list[dict[str, Any]]) -> str:
-    """聚合多子任务回复文本为最终回复。"""
+    """返回最终子任务（最后一个 agent）的回复文本。"""
     if not executions:
         return ""
-    if len(executions) == 1:
-        return str(executions[0].get("reply") or "")
 
-    blocks: list[str] = []
-    for idx, item in enumerate(executions, start=1):
-        blocks.append(
-            f"[{idx}] Agent={item.get('agent')}\n"
-            f"Task: {item.get('task')}\n"
-            f"Reply:\n{item.get('reply') or ''}"
-        )
-    return "\n\n".join(blocks).strip()
+    # Prefer the last subtask's reply so gateway/terminal output stays concise.
+    last_reply = str(executions[-1].get("reply") or "").strip()
+    if last_reply:
+        return last_reply
+
+    # Fallback: if the last reply is empty, walk backwards to find the latest non-empty one.
+    for item in reversed(executions[:-1]):
+        text = str(item.get("reply") or "").strip()
+        if text:
+            return text
+    return ""
 
 
 async def run_orchestrated_task(
@@ -1135,7 +1205,7 @@ async def run_orchestrated_task(
     skill_hint: str | None = None,
     routing_strategy: str | None = None,
     context_id: str | None = None,
-    job_context: dict[str, Any] | None = None,
+    external_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """执行完整的多智能体编排任务。
 
@@ -1149,6 +1219,7 @@ async def run_orchestrated_task(
         skill_hint: 可选技能提示（支持逗号分隔）。
         routing_strategy: 可选路由策略覆盖值。
         context_id: 预留的多轮上下文标识。
+        external_context: 外部上下文（如飞书事件中提取的 ID）。
     返回值说明：
         dict[str, Any]: 含最终回复、路由轨迹、执行明细与文件信息。
     """
@@ -1341,7 +1412,7 @@ async def run_orchestrated_task(
                         temp_dir=job_tmp_dir,
                         selected_skills=skill_decision.selected_skills,
                         prior_context=prior_context,
-                        job_context=job_context,
+                        external_context=external_context,
                     ),
                     timeout=subtask_timeout_s,
                 )
@@ -1365,6 +1436,13 @@ async def run_orchestrated_task(
                 shared_file_paths,
                 _collect_file_paths(str(result.get("reply") or ""), output_path=hint_path),
             )
+            shared_file_paths = _merge_file_paths(
+                shared_file_paths,
+                _collect_tmp_dir_file_paths(
+                    job_tmp_dir,
+                    max_files=int(ROUTING_CONFIG.get("tmp_scan_max_files", 200)),
+                ),
+            )
 
         stage_elapsed_ms = int((time.perf_counter() - stage_start) * 1000)
         stage_traces.append(
@@ -1387,6 +1465,13 @@ async def run_orchestrated_task(
     file_paths = _merge_file_paths(
         shared_file_paths,
         _collect_file_paths(reply, output_path=resolved_output_path),
+    )
+    file_paths = _merge_file_paths(
+        file_paths,
+        _collect_tmp_dir_file_paths(
+            job_tmp_dir,
+            max_files=int(ROUTING_CONFIG.get("tmp_scan_max_files", 200)),
+        ),
     )
     files = _build_file_entries(file_paths)
     total_elapsed_ms = int((time.perf_counter() - task_start) * 1000)
@@ -1417,6 +1502,7 @@ async def run_orchestrated_task(
             "timing": {
                 "total_elapsed_ms": total_elapsed_ms,
             },
+            "external_context": external_context or {},
             "decision": {
                 "target_agents": decision.target_agents,
                 "reason": decision.reason,

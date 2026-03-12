@@ -8,3 +8,5 @@ env.md
 mobiagent_server/data/
 mobiagent_server/tasks/
 seneschal/output/
+.mobiclaw/
+.codex/
