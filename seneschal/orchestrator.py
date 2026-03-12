@@ -1054,6 +1054,13 @@ def _fallback_plan(task: str, decision: RouteDecision, max_subtasks: int) -> lis
 def _build_agent(agent_name: str, skill_context: str | None = None):
     """按名称构建对应执行 Agent。"""
     normalized = (agent_name or "").strip().lower()
+
+    custom_factory = getattr(agents_module, "create_configured_agent_by_name", None)
+    if callable(custom_factory):
+        custom_agent = custom_factory(normalized, skill_context=skill_context)
+        if custom_agent is not None:
+            return custom_agent
+
     factory = getattr(agents_module, f"create_{normalized}_agent", None)
     if callable(factory):
         try:
