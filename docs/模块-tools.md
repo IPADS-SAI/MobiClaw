@@ -1,240 +1,289 @@
-# 模块文档：seneschal/tools 工具层
+# 模块文档：seneschal/tools 工具层（按当前实际代码口径）
 
-本文档说明工具层的能力分类、返回契约、容错策略和扩展实践。
+本文档说明当前工具层的能力分类、主链路接入情况，以及 legacy 工具的现实定位。
 
 ---
 
 ## 1. 模块范围
 
-- 聚合与高阶封装
-  - `seneschal/tools/__init__.py`
-- Mobi 工具
-  - `seneschal/tools/mobi.py`
-- WeKnora API 客户端
-  - `seneschal/tools/weknora.py`
-  - `seneschal/tools/weknora/*`
-- 联网与抓取
-  - `seneschal/tools/web.py`
-- 论文工具
-  - `seneschal/tools/papers.py`
-- 本地工具
-  - `seneschal/tools/shell.py`
-  - `seneschal/tools/file.py`
-- Office 文档工具
-  - `seneschal/tools/office.py`
+当前工具层可按 4 类理解：
+
+### 1.1 当前主链路工具
+
+- `seneschal/tools/mobi.py`
+- `seneschal/tools/web.py`
+- `seneschal/tools/papers.py`
+- `seneschal/tools/shell.py`
+- `seneschal/tools/file.py`
+- `seneschal/tools/ocr.py`
+- `seneschal/tools/office.py`
+- `seneschal/tools/ppt.py`
+- `seneschal/tools/memory.py`
+- `seneschal/tools/skill_runner.py`
+
+### 1.2 聚合导出层
+
+- `seneschal/tools/__init__.py`
+- `seneschal/tools.py`
+
+### 1.3 当前仍保留但属于 legacy 的工具
+
+- `seneschal/tools/weknora.py`
+- `seneschal/tools/weknora/*`
 
 ---
 
-## 2. 统一返回契约
+## 2. 当前工具层的真实定位
+
+当前工具层不应再被理解为“手机 + WeKnora + 网络工具”的并列结构。
+
+更准确的现实是：
+
+1. **Mobi 工具**：手机执行边界
+2. **Web / Papers 工具**：联网信息获取
+3. **Local 工具**：shell / ocr / file / office / ppt / skill
+4. **Memory 工具**：本地长期记忆、本地知识、任务历史
+5. **Legacy 工具**：WeKnora 封装
+
+也就是说，当前工具层的主轴已经变成：
+
+> **Mobi + Local Tools + Local Memory**
+
+---
+
+## 3. 统一返回契约
 
 大部分工具函数返回 `ToolResponse`：
 
-- `content`: 文本块列表（可直接给 Agent 作为上下文）
-- `metadata`: 结构化字段（建议用于程序判断/复盘）
+- `content`：给 Agent 看的人类可读内容
+- `metadata`：给程序判断的结构化字段
 
-开发建议：
+当前推荐约定：
 
-- `content` 面向“可读性”
-- `metadata` 面向“可判断性”
-- 错误要同时放入可读信息与结构化标记
+- `content` 强调可读摘要
+- `metadata` 强调可判断性和复盘能力
+- 错误同时保存在文本与结构化字段里
 
 ---
 
-## 3. Mobi 工具族（`mobi.py`）
+## 4. Mobi 工具族
 
-## 3.1 核心能力
+文件：
 
-- `call_mobi_collect(task_desc, timeout=...)`
-- `call_mobi_collect_verified(...)`
-- `call_mobi_action(action_type, payload, ...)`
+- `seneschal/tools/mobi.py`
 
-## 3.2 行为特点
+核心能力：
 
-- 通过 HTTP 请求 `mobiagent_server`
-- 对 collect/action 提供统一封装
-- 网关失败时可退回 mock（用于开发联调）
+- `call_mobi_collect`
+- `call_mobi_collect_verified`
+- `call_mobi_action`
 
-## 3.3 返回值关注字段
+当前现实作用：
 
-实践中可重点看：
+- 是 Steward 主链路最关键的工具边界
+- 负责把 collect/action 请求转给 `mobiagent_server`
+- 负责把执行结果封成统一 `ToolResponse`
+
+实践里重点关注的 metadata：
 
 - `success`
-- `run_dir` / `index_file`
+- `run_dir`
+- `index_file`
 - `screenshot_path`
 - `ocr_text`
 - `status_hint`
-- `action_count` / `step_count`
+- `step_count`
+- `action_count`
+- `last_reasoning`
 
 ---
 
-## 4. WeKnora 工具族（`__init__.py` + `weknora.py`）
+## 5. Web / Papers 工具族
 
-## 4.1 常用高阶工具
+### 5.1 Web 工具
 
-- `weknora_add_knowledge(content, title, metadata)`
-- `weknora_rag_chat(query, ...)`
-- `weknora_knowledge_search(query, ...)`
-- `weknora_list_knowledge_bases()`
+文件：
 
-## 4.2 缓存设计
+- `seneschal/tools/web.py`
 
-缓存文件：`seneschal/tools/weknora_cache.json`
+能力：
 
-缓存对象：
+- `brave_search`
+- `fetch_url_text`
+- `fetch_url_readable_text`
+- `fetch_url_links`
 
-- knowledge base name -> id/info
-- agent name -> id
-- session_id
+推荐顺序：
 
-目的：
+1. `brave_search`
+2. `fetch_url_readable_text`
+3. `fetch_url_links`
+4. 必要时再看 `fetch_url_text`
 
-- 减少 list API 次数
-- 稳定名称解析
-- 避免重复创建 session
+### 5.2 Papers 工具
 
-## 4.3 自动解析与回退
+文件：
 
-高阶封装会自动做：
+- `seneschal/tools/papers.py`
 
-- `kb_name` -> `kb_id` 解析
-- `agent_name` -> `agent_id` 解析
-- 会话不存在时创建 session 并重试
-
-当远端异常时会保留错误信息，方便 Agent 自主恢复策略（重试、降级、提示用户）。
-
----
-
-## 5. Web 工具族（`web.py`）
-
-## 5.1 能力
-
-- `brave_search`：获取候选来源
-- `fetch_url_text`：抓原始文本
-- `fetch_url_readable_text`：抓可读正文
-- `fetch_url_links`：提取页面链接
-
-## 5.2 推荐使用顺序
-
-1. `brave_search` 初筛来源
-2. `fetch_url_readable_text` 抓正文
-3. `fetch_url_links` 扩展来源链
-4. 需要原始结构时再用 `fetch_url_text`
-
----
-
-## 6. Papers 工具族（`papers.py`）
-
-## 6.1 能力
+能力：
 
 - `arxiv_search`
 - `dblp_conference_search`
 - `download_file`
 - `extract_pdf_text`
 
-## 6.2 典型工作流
-
-1. 先 `dblp_conference_search` 找会议论文列表
-2. 再 `arxiv_search` 找对应 preprint/PDF
-3. `download_file` 下载 PDF
-4. `extract_pdf_text` 抽取内容并总结
+当前它们是 Worker 主链路的重要组成部分。
 
 ---
 
-## 7. 本地工具（安全约束）
+## 6. Local 工具族
 
-## 7.1 shell 工具
+### 6.1 shell
 
-`run_shell_command` 具备安全限制：
+文件：
 
-- 白名单命令（`SENESCHAL_SHELL_ALLOWLIST`）
-- 禁止危险 token（如 `|`, `;`, `&&`, 重定向等）
+- `seneschal/tools/shell.py`
+
+特性：
+
+- 白名单约束
+- 禁止危险 token
 
 适合：
 
-- 快速读取文件、查看时间、目录检查
+- 轻量读取
+- 简单环境查询
+- 快速辅助命令
 
-不适合：
+### 6.2 file
 
-- 多命令串联、复杂脚本执行
+文件：
 
-## 7.2 file 工具
+- `seneschal/tools/file.py`
 
-`write_text_file` 用于将 Agent 结果落盘。建议：
+能力：
 
-- 明确输出路径
-- 明确覆盖/追加策略
-- 结果中带上写入路径回执
+- 文本落盘
+
+### 6.3 ocr
+
+文件：
+
+- `seneschal/tools/ocr.py`
+
+能力：
+
+- 本地图片 OCR
+
+### 6.4 office / ppt
+
+文件：
+
+- `seneschal/tools/office.py`
+- `seneschal/tools/ppt.py`
+
+能力：
+
+- DOCX / XLSX / PDF 读写
+- PPTX 创建、编辑、插图、样式处理
+
+这些工具当前已经进入 Worker 主链路能力集，不应再被视为“未接入实验工具”。
+
+### 6.5 skill_runner
+
+文件：
+
+- `seneschal/tools/skill_runner.py`
+
+作用：
+
+- 执行 skill 中声明的脚本
+- 配合 Skill Selector 成为 Worker/Steward 的增强层
 
 ---
 
-## 8. Office 文档工具（`office.py`）
+## 7. Memory 工具族
 
-## 8.1 当前能力
+文件：
 
-- `read_docx_text`：读取 DOCX 文本，并按 `SENESCHAL_DOCX_MAX_CHARS` 做截断
-- `create_docx_from_text`：由纯文本生成 DOCX
-- `edit_docx`：对现有 DOCX 做替换、追加段落和简单表格写入
-- `create_pdf_from_text`：由纯文本生成 PDF
-- `read_xlsx_summary`：读取 XLSX/XLSM 的工作表摘要与预览
-- `write_xlsx_from_records` / `write_xlsx_from_rows`：写入 Excel 文件
+- `seneschal/tools/memory.py`
 
-## 8.2 路径与安全约束
+当前这是工具层里非常关键但旧文档经常低估的一块。
 
-- 写入型接口统一受 `SENESCHAL_FILE_WRITE_ROOT` 限制
-- `read_docx_text` 额外受 `SENESCHAL_DOCX_MAX_CHARS` 限制
-- 依赖缺失时会在 `ToolResponse.metadata.error` 中返回 `missing_dependency`
+它负责的不是外部知识库，而是本地状态能力：
 
-## 8.3 当前接入状态
+- 长期记忆
+- 本地任务历史
+- steward knowledge
 
-这些 Office 能力已经在代码中实现，但截至当前版本：
-
-- 尚未通过 `seneschal/tools.py` 兼容导出层向外暴露
-- 尚未注册到 `create_worker_agent()` / `create_steward_agent()` 的默认工具集
-
-因此它们目前更适合被视为“已实现但未接入主链路”的工具能力。
+这也解释了为什么当前系统的 Store / Analyze 更偏向本地状态，而不是 WeKnora。
 
 ---
 
-## 9. 工具扩展指南
+## 8. WeKnora 工具的当前定位
 
-## 9.1 新增工具的最小步骤
+当前仍保留：
 
-1. 在对应文件实现 async 函数，返回 `ToolResponse`
-2. 在 `seneschal/tools/__init__.py` 导出
-3. 在 `agents.py` 注册到 Steward 或 Worker
-4. 为工具写 `func_description`（给 LLM 的“使用说明”）
-5. 在 docs 补充工具用途与示例
+- `weknora_add_knowledge`
+- `weknora_rag_chat`
+- `weknora_knowledge_search`
+- `weknora_list_knowledge_bases`
 
-## 9.2 `func_description` 编写建议
+但当前应明确把它们标成：
 
-描述里至少包含：
+> **legacy compatibility tools**
 
-- 输入格式
-- 输出关键字段
-- 失败时含义
-- 适用场景与禁用场景
+原因：
 
-这样可显著降低 Agent 误用概率。
+- Chat 主链路不依赖它们
+- Gateway 主链路不依赖它们
+- Orchestrator 主干不依赖它们
+- Worker 主能力不依赖它们
+- 只有部分旧 Daily 路径仍保留调用
 
-## 9.3 错误处理建议
+因此当前文档不应再把 WeKnora 工具与 Mobi 工具并列写成“当前双核心”。
 
-- HTTP 错误：保留状态码与错误体摘要
-- 解析错误：返回原始片段 + parse_error 字段
-- 外部依赖不可用：明确“可重试/不可重试”
+---
+
+## 9. 工具扩展建议
+
+### 9.1 新增主链路工具
+
+步骤：
+
+1. 在对应文件实现函数并返回 `ToolResponse`
+2. 在聚合层导出
+3. 在 `agents.py` 注册到 Worker 或 Steward
+4. 补 `func_description`
+5. 补文档和测试
+
+### 9.2 新增 legacy 工具
+
+如果只是为了保留历史兼容：
+
+- 不建议混入当前主链路说明
+- 最好明确标注为 legacy
 
 ---
 
 ## 10. 调试与排障
 
-- 工具返回为空：检查 `ToolResponse.content` 是否构造
-- metadata 缺字段：检查下游 API 原始返回
-- WeKnora 解析失败：删除本地 cache 后重试
-- Shell 被拒绝：确认命令是否在 allowlist 且不含危险 token
+- Mobi 无结果：检查 `mobiagent_server` 状态、认证和 mode
+- Web 无结果：检查搜索 Key 与网络访问
+- Shell 被拒：检查 allowlist 与危险 token
+- 文件未落盘：检查写入根目录限制
+- OCR 异常：检查依赖和图片路径
+- Daily 仍触发 WeKnora：说明走到了 legacy 路径，而不是当前推荐路径
 
 ---
 
-## 10. 与 Agent 的协作约定
+## 11. 当前结论
 
-- Steward 关注“任务闭环”和“证据充分性”
-- Worker 关注“检索质量”和“结果交付”
-- 工具层应尽量无业务判断，让 Agent 决策层保留灵活性
+当前工具层的正确理解不是：
+
+- Mobi + WeKnora + Web
+
+而是：
+
+> **Mobi + Local Tools + Local Memory + Legacy Compatibility**
