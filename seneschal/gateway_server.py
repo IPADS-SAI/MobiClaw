@@ -26,7 +26,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response, status
@@ -40,6 +40,13 @@ logger = logging.getLogger(__name__)
 
 load_project_env()
 
+from .config import RAG_CONFIG, SCHEDULE_CONFIG
+from .scheduler import (
+    ScheduleDetectionResult,
+    get_active_manager,
+    start_scheduler,
+    shutdown_scheduler,
+)
 from .workflows import run_gateway_task
 
 
@@ -98,6 +105,15 @@ def load_config() -> GatewayConfig:
     )
 
 
+class ScheduleParam(BaseModel):
+    """显式指定的定时任务参数（供 API 调用方使用）。"""
+
+    schedule_type: str = Field(description="once（单次）或 cron（周期）")
+    cron_expr: str | None = Field(default=None, description="5 字段 cron 表达式，周几用 mon-sun")
+    run_at: str | None = Field(default=None, description="ISO 8601 datetime，仅 once 类型")
+    description: str | None = Field(default=None, description="人类可读的时间描述")
+
+
 class TaskRequest(BaseModel):
     """任务提交请求体。"""
 
@@ -113,6 +129,7 @@ class TaskRequest(BaseModel):
     webhook_url: str | None = None
     webhook_token: str | None = None
     callback_headers: dict[str, str] = Field(default_factory=dict)
+    schedule: ScheduleParam | None = Field(default=None, description="显式定时参数，为空则自动检测")
 
 
 class TaskResult(BaseModel):
@@ -546,19 +563,68 @@ def _read_recent_session_messages(session_dir: Path, limit: int) -> list[dict[st
     return list(items)
 
 
+async def _execute_scheduled_job(
+    *,
+    schedule_id: str,
+    task: str,
+    mode: str,
+    agent_hint: str | None,
+    skill_hint: str | None,
+    routing_strategy: str | None,
+    context_id: str | None,
+    web_search_enabled: bool,
+    job_context: dict[str, Any],
+) -> str:
+    """定时任务触发时的执行回调：创建 gateway job 并异步运行。"""
+    job_id = uuid.uuid4().hex
+    async with _JOB_LOCK:
+        _JOB_STORE[job_id] = TaskResult(job_id=job_id, status="queued")
+        _JOB_CONTEXT[job_id] = JobContext(
+            webhook_url=job_context.get("webhook_url"),
+            webhook_token=job_context.get("webhook_token"),
+            callback_headers=job_context.get("callback_headers"),
+            feishu_chat_id=job_context.get("feishu_chat_id"),
+            feishu_user_open_id=job_context.get("feishu_user_open_id"),
+            feishu_receive_id_type=job_context.get("feishu_receive_id_type", "chat_id"),
+        )
+    asyncio.create_task(
+        _run_job(
+            job_id,
+            task,
+            output_path=None,
+            mode=mode,
+            agent_hint=agent_hint,
+            skill_hint=skill_hint,
+            routing_strategy=routing_strategy,
+            context_id=context_id,
+            web_search_enabled=web_search_enabled,
+        )
+    )
+    logger.info("Scheduled task %s triggered, job_id=%s", schedule_id, job_id)
+    return job_id
+
+
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
-    """应用生命周期：初始化主事件循环并按配置启动飞书长连接。"""
+    """应用生命周期：初始化主事件循环、调度器与飞书长连接。"""
     global _MAIN_LOOP
     _MAIN_LOOP = asyncio.get_running_loop()
     cfg = load_config()
+
+    if SCHEDULE_CONFIG["enabled"]:
+        await start_scheduler(job_executor=_execute_scheduled_job)
+    else:
+        logger.info("Scheduled tasks disabled by SCHEDULE_CONFIG")
 
     logger.info("Feishu transport mode: %s", cfg.feishu_event_transport)
     if _should_start_feishu_long_conn(cfg):
         _start_feishu_long_connection(cfg)
     else:
         logger.info("Feishu long connection disabled by FEISHU_EVENT_TRANSPORT")
+
     yield
+
+    await shutdown_scheduler()
 
 
 app = FastAPI(title="Seneschal Gateway", version="0.1.0", lifespan=_lifespan)
@@ -995,6 +1061,7 @@ async def _deliver_result(job_id: str, result: TaskResult, cfg: GatewayConfig) -
     async with _JOB_LOCK:
         ctx = _JOB_CONTEXT.get(job_id)
     if ctx is None:
+        logger.warning(f"Job context not found for job_id={job_id}. Skipping result delivery")
         return
 
     payload = result.model_dump()
@@ -1017,11 +1084,12 @@ async def _run_job(
     skill_hint: str | None,
     routing_strategy: str | None,
     context_id: str | None,
-    web_search_enabled: bool,
+    web_search_enabled: bool = True,
 ) -> None:
     """执行异步任务并更新任务状态。"""
     cfg = load_config()
     async with _JOB_LOCK:
+        ctx = _JOB_CONTEXT.get(job_id)
         _JOB_STORE[job_id] = TaskResult(
             job_id=job_id,
             status="running",
@@ -1036,6 +1104,10 @@ async def _run_job(
                 },
             },
         )
+    
+    # job context包含飞书chat id，webhook url等信息
+    # 需要透传给worker agent，才能在create_scheduled_task创建新job时，保证结果正确返回给同一个用户
+    job_ctx_dict = asdict(ctx) if ctx is not None else None
 
     async def _update_job_progress(payload: dict[str, Any]) -> None:
         if not isinstance(payload, dict):
@@ -1072,6 +1144,7 @@ async def _run_job(
             context_id=context_id,
             web_search_enabled=web_search_enabled,
             progress_callback=_update_job_progress,
+            job_context=job_ctx_dict,
         )
         resolved_context_id = _resolve_context_id(context_id, result)
         if resolved_context_id:
@@ -1092,7 +1165,6 @@ async def _run_job(
         async with _JOB_LOCK:
             _JOB_STORE[job_id] = completed
         try:
-            from .config import RAG_CONFIG
             if RAG_CONFIG["task_history_enabled"]:
                 from .tools import store_task_result
                 await store_task_result(
@@ -1217,12 +1289,52 @@ async def submit_task(
     raw_request: Request,
     authorization: str | None = Header(default=None),
 ) -> TaskResult:
-    """提交任务接口，支持同步与异步两种执行模式。"""
+    """提交任务接口，支持同步、异步与定时三种执行模式。"""
     cfg = load_config()
     _ensure_auth(authorization, cfg)
 
     if not request.task.strip():
         raise HTTPException(status_code=400, detail="Task must not be empty")
+
+    # --- 定时任务：仅处理 API 显式调度参数 ---
+    if request.schedule and get_active_manager() is not None:
+        detection = ScheduleDetectionResult(
+            is_scheduled=True,
+            core_task=request.task,
+            schedule_type=request.schedule.schedule_type,
+            cron_expr=request.schedule.cron_expr,
+            run_at=request.schedule.run_at,
+            human_description=request.schedule.description or "",
+        )
+        scheduled_task = await get_active_manager().add_scheduled_task(
+            detection=detection,
+            original_task=request.task,
+            source="api",
+            mode="router",
+            agent_hint=request.agent_hint,
+            skill_hint=request.skill_hint,
+            routing_strategy=request.routing_strategy,
+            web_search_enabled=request.web_search_enabled,
+            job_context={
+                "webhook_url": request.webhook_url,
+                "webhook_token": request.webhook_token,
+                "callback_headers": request.callback_headers,
+            },
+        )
+        return TaskResult(
+            job_id=scheduled_task.schedule_id,
+            status="scheduled",
+            result={
+                "schedule_id": scheduled_task.schedule_id,
+                "schedule_type": scheduled_task.schedule_type,
+                "human_description": scheduled_task.human_description,
+                "core_task": scheduled_task.core_task,
+                "message": (
+                    f"已创建定时任务：{scheduled_task.human_description} "
+                    f"执行「{scheduled_task.core_task}」"
+                ),
+            },
+        )
 
     if request.async_mode:
         job_id = uuid.uuid4().hex
@@ -1378,6 +1490,43 @@ async def get_job(job_id: str) -> TaskResult:
     if job.result:
         job.result = _decorate_result_with_files(job_id, job.result, request=None, cfg=cfg)
     return job
+
+
+@app.get("/api/v1/schedules")
+async def list_schedules(
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """列出所有定时任务。"""
+    cfg = load_config()
+    _ensure_auth(authorization, cfg)
+
+    if get_active_manager() is None:
+        return {"schedules": [], "enabled": False}
+
+    tasks = await get_active_manager().list_tasks()
+    return {
+        "schedules": [asdict(t) for t in tasks],
+        "enabled": True,
+    }
+
+
+@app.delete("/api/v1/schedules/{schedule_id}")
+async def cancel_schedule(
+    schedule_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """取消指定定时任务。"""
+    cfg = load_config()
+    _ensure_auth(authorization, cfg)
+
+    if get_active_manager() is None:
+        raise HTTPException(status_code=503, detail="Scheduler not enabled")
+
+    cancelled = await get_active_manager().cancel_task(schedule_id)
+    if not cancelled:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    return {"ok": True, "schedule_id": schedule_id, "status": "cancelled"}
 
 
 @app.get("/api/v1/env")

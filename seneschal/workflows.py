@@ -648,6 +648,7 @@ async def run_gateway_task(
     context_id: str | None = None,
     web_search_enabled: bool = True,
     progress_callback: PlannerProgressCallback | None = None,
+    job_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """通过编排器执行网关任务。
 
@@ -688,6 +689,7 @@ async def run_gateway_task(
         skill_hint=skill_hint,
         routing_strategy=routing_strategy,
         context_id=context_id,
+        job_context=job_context,
     )
 
 

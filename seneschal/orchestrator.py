@@ -716,6 +716,21 @@ def _rule_route(task: str) -> RouteDecision:
         "过去",
         "任务记录",
         "做过",
+        "取消定时",
+        "取消任务",
+        "定时任务",
+        "定时",
+        "定期",
+        "每天",
+        "每日",
+        "每周",
+        "每月",
+        "cancel",
+        "schedule",
+        "every day",
+        "every week",
+        "daily",
+        "weekly",
     }
     steward_keys = {
         "微信",
@@ -997,15 +1012,22 @@ def _fallback_plan(task: str, decision: RouteDecision, max_subtasks: int) -> lis
     return stages or [[{"agent": _default_agent_name(), "task": task.strip()}]]
 
 
-def _build_agent(agent_name: str, skill_context: str | None = None):
+def _build_agent(
+    agent_name: str,
+    skill_context: str | None = None,
+    job_context: dict[str, Any] | None = None,
+):
     """按名称构建对应执行 Agent。"""
     normalized = (agent_name or "").strip().lower()
     factory = getattr(agents_module, f"create_{normalized}_agent", None)
     if callable(factory):
         try:
-            return factory(skill_context=skill_context)
+            return factory(skill_context=skill_context, job_context=job_context)
         except TypeError:
-            return factory()
+            try:
+                return factory(skill_context=skill_context)
+            except TypeError:
+                return factory()
 
     fallback = _default_agent_name()
     if normalized != fallback:
@@ -1016,11 +1038,13 @@ def _build_agent(agent_name: str, skill_context: str | None = None):
         )
     fallback_factory = getattr(agents_module, f"create_{fallback}_agent", None)
     if callable(fallback_factory):
-        return fallback_factory()
+        try:
+            return fallback_factory(job_context=job_context)
+        except TypeError:
+            return fallback_factory()
 
-    # Defensive fallback to keep runtime compatible if registry and factories drift.
     if fallback == "worker":
-        return create_worker_agent(skill_context=skill_context)
+        return create_worker_agent(skill_context=skill_context, job_context=job_context)
     return create_steward_agent(skill_context=skill_context)
 
 
@@ -1032,11 +1056,12 @@ async def _run_one_agent(
     temp_dir: str | None = None,
     selected_skills: list[str] | None = None,
     prior_context: str | None = None,
+    job_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """执行单个子任务并返回结构化结果。"""
     skill_list = selected_skills or []
     skill_context = _skill_prompt_context(skill_list)
-    agent = _build_agent(agent_name, skill_context=skill_context)
+    agent = _build_agent(agent_name, skill_context=skill_context, job_context=job_context)
     msg_content = task.strip()
     if prior_context:
         msg_content = (
@@ -1110,6 +1135,7 @@ async def run_orchestrated_task(
     skill_hint: str | None = None,
     routing_strategy: str | None = None,
     context_id: str | None = None,
+    job_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """执行完整的多智能体编排任务。
 
@@ -1315,6 +1341,7 @@ async def run_orchestrated_task(
                         temp_dir=job_tmp_dir,
                         selected_skills=skill_decision.selected_skills,
                         prior_context=prior_context,
+                        job_context=job_context,
                     ),
                     timeout=subtask_timeout_s,
                 )
