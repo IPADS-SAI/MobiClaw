@@ -9,7 +9,7 @@ from agentscope.message import Msg
 
 from seneschal import gateway_server
 from seneschal import workflows
-from seneschal.agents import ChatSessionManager
+from seneschal.session import ChatSessionManager
 
 
 class _DummyChatAgent:
