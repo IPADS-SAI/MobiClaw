@@ -63,7 +63,7 @@ def test_run_skill_script_invalid_execution_dir() -> None:
 def test_skill_prompt_context_includes_execution_dir() -> None:
     context = orchestrator._skill_prompt_context(["pptx"])
     assert "[Skill: pptx]" in context
-    assert "execution_dir:" in context
+    assert "execution_dir (just for skill scripts):" in context
 
 
 def test_run_skill_script_restores_previous_dir(monkeypatch) -> None:
