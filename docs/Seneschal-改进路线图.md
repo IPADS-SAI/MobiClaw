@@ -10,7 +10,7 @@
 
 - 编排入口与多模式运行（demo / interactive / daily / agent_task）；
 - Steward + Worker 双 Agent 协作；
-- MobiAgent 手机操作网关与 WeKnora 知识库工具；
+- MobiAgent 手机操作网关；
 - 基础 Daily 任务执行与 run_id 事件日志。
 
 但离“个人助理框架”还有关键缺口：
@@ -31,7 +31,7 @@
 1. **Intent & Planning 层**：用户意图解析、任务拆解、约束提取、计划生成（可修订）。
 2. **Execution Orchestration 层**：步骤调度、并行/串行、失败重试、超时管理、恢复点。
 3. **Tool & Device 层**：MobiAgent、Web、Shell、File、第三方 API 统一抽象。
-4. **Memory & Knowledge 层**：WeKnora 中长期记忆、会话摘要、事实库、用户画像与任务历史。
+4. **Memory & Knowledge 层**：本地长期记忆、会话摘要、事实库、用户画像与任务历史。
 5. **Evaluation & Safety 层**：在线监控、离线评测、策略护栏、敏感操作确认。
 6. **Product Gateway 层**：同步/异步任务 API、事件流、可观测仪表板。
 
@@ -96,24 +96,7 @@
 - 引入工具注册中心（capability registry），按场景动态启用工具。
 
 **验收标准**：Agent 能稳定读取结构化返回，不再依赖自由文本解析。
-
-#### P1-3 WeKnora 深度融合（重点）
-
-围绕 WeKnora 建立“三类记忆”：
-
-1. **事实记忆**：联系人、账号、地点、偏好、设备；
-2. **任务记忆**：历史任务、失败原因、可复用计划模板；
-3. **上下文记忆**：近期会话摘要、临时目标、待办状态。
-
-并建立“写入策略”：
-
-- 每次任务结束自动生成 `task_summary`、`lessons_learned`；
-- 仅高价值信息入长期记忆，临时上下文设置 TTL；
-- 为知识条目增加 `source`, `timestamp`, `confidence`, `privacy_level` 元数据。
-
-**验收标准**：跨天任务可延续上下文，减少重复确认与重复检索。
-
-#### P1-4 Agentscope 协同能力体系化
+#### P1-3 Agentscope 协同能力体系化
 
 - 使用 Agentscope 的 agent 定制能力建立“角色模板库”：
   - 日程助理、信息检索助理、购物执行助理、风险提醒助理。
@@ -200,9 +183,8 @@
 ### P1 强化（第二阶段）
 
 1. Planner/Executor/Reviewer 协作流。
-2. WeKnora 长期记忆 schema 与写入策略。
-3. Agentscope 多角色模板与协作策略。
-4. 任务复盘与失败学习自动写回知识库。
+2. Agentscope 多角色模板与协作策略。
+3. 任务复盘与失败学习自动写回知识库。
 
 ### P2 增长（第三阶段）
 
@@ -224,7 +206,6 @@
 ### M2（10 周）
 
 - 多 Agent 协作流上线；
-- WeKnora 记忆体系稳定运行；
 - 复杂任务成功率相比基线提升 25%+。
 
 ### M3（16 周）
@@ -239,7 +220,6 @@
 
 1. 在不破坏现有入口（`app.py` / `workflows.py`）前提下，先替换 `gateway_server` 的任务存储与状态机。
 2. 保留 Steward 作为总控，新增 Planner/Reviewer 作为可选模式开关（灰度发布）。
-3. 复用现有 WeKnora 工具接口，优先增加 metadata 标准与写入策略，不急于大改 API。
-4. DailyTasks 先升级为“可计划 + 可回放 + 可复盘”的批处理框架，再逐步接入实时触发。
+3. DailyTasks 先升级为"可计划 + 可回放 + 可复盘"的批处理框架，再逐步接入实时触发。
 
 > 以上路线可确保“先稳住可用性，再做能力跃迁”，避免一次性重构导致系统不可用。
