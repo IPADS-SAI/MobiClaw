@@ -23,6 +23,7 @@ dependencies = [
     # --- Document processing (lazy-imported in tools/) ---
     "pypdf<=6.5.0",       # papers.py; version cap matches agentscope[pdf-reader]
     "openpyxl",           # office.py
+    "reportlab",
     "python-pptx>=0.6.23",
     "python-docx",        # office.py  (imported as 'docx')
     # --- RAG / vector store ---
