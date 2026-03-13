@@ -231,17 +231,6 @@ _ENV_SETTINGS_SCHEMA: list[dict[str, Any]] = [
         ],
     },
     {
-        "id": "weknora",
-        "title": "WeKnora",
-        "items": [
-            {"key": "WEKNORA_BASE_URL", "label": "WeKnora Base URL", "type": "text"},
-            {"key": "WEKNORA_API_KEY", "label": "WeKnora API Key", "type": "password"},
-            {"key": "WEKNORA_KB_NAME", "label": "知识库名称", "type": "text"},
-            {"key": "WEKNORA_AGENT_NAME", "label": "Agent 名称", "type": "text"},
-            {"key": "WEKNORA_SESSION_ID", "label": "Session ID", "type": "text"},
-        ],
-    },
-    {
         "id": "brave",
         "title": "Brave Search",
         "items": [
@@ -301,26 +290,6 @@ _ENV_SETTINGS_SCHEMA: list[dict[str, Any]] = [
             {"key": "FEISHU_APP_SECRET", "label": "App Secret", "type": "password"},
             {"key": "FEISHU_VERIFICATION_TOKEN", "label": "Verification Token", "type": "text"},
             {"key": "FEISHU_ENCRYPT_KEY", "label": "Encrypt Key", "type": "text"},
-        ],
-    },
-    {
-        "id": "weknora_models",
-        "title": "WeKnora Models",
-        "items": [
-            {"key": "WEKNORA_MODEL_RERANK_ID", "label": "Rerank ID", "type": "text"},
-            {"key": "WEKNORA_MODEL_RERANK_NAME", "label": "Rerank Name", "type": "text"},
-            {"key": "WEKNORA_MODEL_RERANK_API_KEY", "label": "Rerank API Key", "type": "password"},
-            {"key": "WEKNORA_MODEL_RERANK_BASE_URL", "label": "Rerank Base URL", "type": "text"},
-            {"key": "WEKNORA_MODEL_KNOWLEDGE_QA_ID", "label": "KnowledgeQA ID", "type": "text"},
-            {"key": "WEKNORA_MODEL_KNOWLEDGE_QA_NAME", "label": "KnowledgeQA Name", "type": "text"},
-            {"key": "WEKNORA_MODEL_KNOWLEDGE_QA_ALT_ID", "label": "KnowledgeQA Alt ID", "type": "text"},
-            {"key": "WEKNORA_MODEL_KNOWLEDGE_QA_ALT_NAME", "label": "KnowledgeQA Alt Name", "type": "text"},
-            {"key": "WEKNORA_MODEL_VLM_ID", "label": "VLM ID", "type": "text"},
-            {"key": "WEKNORA_MODEL_VLM_NAME", "label": "VLM Name", "type": "text"},
-            {"key": "WEKNORA_MODEL_EMBEDDING_ID", "label": "Embedding ID", "type": "text"},
-            {"key": "WEKNORA_MODEL_EMBEDDING_NAME", "label": "Embedding Name", "type": "text"},
-            {"key": "WEKNORA_MODEL_EMBEDDING_API_KEY", "label": "Embedding API Key/表达式", "type": "text", "raw": True},
-            {"key": "WEKNORA_MODEL_EMBEDDING_BASE_URL", "label": "Embedding Base URL", "type": "text"},
         ],
     },
 ]

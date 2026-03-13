@@ -11,7 +11,6 @@ if __spec__ is not None:
     __spec__.submodule_search_locations = __path__
 
 mobi = importlib.import_module("seneschal.tools.mobi")
-weknora = importlib.import_module("seneschal.tools.weknora")
 shell = importlib.import_module("seneschal.tools.shell")
 file_tools = importlib.import_module("seneschal.tools.file")
 web = importlib.import_module("seneschal.tools.web")
@@ -22,10 +21,6 @@ ocr = importlib.import_module("seneschal.tools.ocr")
 call_mobi_action = mobi.call_mobi_action
 call_mobi_collect = mobi.call_mobi_collect
 call_mobi_collect_verified = mobi.call_mobi_collect_verified
-weknora_add_knowledge = weknora.weknora_add_knowledge
-weknora_knowledge_search = weknora.weknora_knowledge_search
-weknora_list_knowledge_bases = weknora.weknora_list_knowledge_bases
-weknora_rag_chat = weknora.weknora_rag_chat
 run_shell_command = shell.run_shell_command
 write_text_file = file_tools.write_text_file
 fetch_url_text = web.fetch_url_text
@@ -49,10 +44,6 @@ __all__ = [
     "call_mobi_action",
     "call_mobi_collect",
     "call_mobi_collect_verified",
-    "weknora_add_knowledge",
-    "weknora_knowledge_search",
-    "weknora_list_knowledge_bases",
-    "weknora_rag_chat",
     "run_shell_command",
     "write_text_file",
     "fetch_url_text",

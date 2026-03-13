@@ -26,24 +26,17 @@
 - `seneschal/tools/__init__.py`
 - `seneschal/tools.py`
 
-### 1.3 当前仍保留但属于 legacy 的工具
-
-- `seneschal/tools/weknora.py`
-- `seneschal/tools/weknora/*`
-
 ---
 
 ## 2. 当前工具层的真实定位
 
-当前工具层不应再被理解为“手机 + WeKnora + 网络工具”的并列结构。
-
+更准确的现实是：
 更准确的现实是：
 
 1. **Mobi 工具**：手机执行边界
 2. **Web / Papers 工具**：联网信息获取
 3. **Local 工具**：shell / ocr / file / office / ppt / skill
 4. **Memory 工具**：本地长期记忆、本地知识、任务历史
-5. **Legacy 工具**：WeKnora 封装
 
 也就是说，当前工具层的主轴已经变成：
 
@@ -217,36 +210,10 @@
 - 本地任务历史
 - steward knowledge
 
-这也解释了为什么当前系统的 Store / Analyze 更偏向本地状态，而不是 WeKnora。
 
 ---
 
-## 8. WeKnora 工具的当前定位
-
-当前仍保留：
-
-- `weknora_add_knowledge`
-- `weknora_rag_chat`
-- `weknora_knowledge_search`
-- `weknora_list_knowledge_bases`
-
-但当前应明确把它们标成：
-
-> **legacy compatibility tools**
-
-原因：
-
-- Chat 主链路不依赖它们
-- Gateway 主链路不依赖它们
-- Orchestrator 主干不依赖它们
-- Worker 主能力不依赖它们
-- 只有部分旧 Daily 路径仍保留调用
-
-因此当前文档不应再把 WeKnora 工具与 Mobi 工具并列写成“当前双核心”。
-
----
-
-## 9. 工具扩展建议
+## 8. 工具扩展建议
 
 ### 9.1 新增主链路工具
 
@@ -267,23 +234,18 @@
 
 ---
 
-## 10. 调试与排障
+## 8. 调试与排障
 
 - Mobi 无结果：检查 `mobiagent_server` 状态、认证和 mode
 - Web 无结果：检查搜索 Key 与网络访问
 - Shell 被拒：检查 allowlist 与危险 token
 - 文件未落盘：检查写入根目录限制
 - OCR 异常：检查依赖和图片路径
-- Daily 仍触发 WeKnora：说明走到了 legacy 路径，而不是当前推荐路径
 
 ---
 
-## 11. 当前结论
-
-当前工具层的正确理解不是：
-
-- Mobi + WeKnora + Web
+## 8. 当前结论
 
 而是：
 
-> **Mobi + Local Tools + Local Memory + Legacy Compatibility**
+> **Mobi + Local Tools + Local Memory**

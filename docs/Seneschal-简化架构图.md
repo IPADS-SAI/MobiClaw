@@ -23,7 +23,6 @@ flowchart LR
     ORCH --> STATE
     T --> STATE
 
-    LEG[WeKnora legacy compatibility] -.not current main path.- ORCH
 ```
 
 ## 2. 当前主链路
@@ -43,9 +42,6 @@ Input -> Dispatch -> Route -> Plan -> Execute -> Persist -> Return
 
 以下表述不再适合描述当前项目：
 
-- “Seneschal = MobiAgent + WeKnora + Agent 编排”
-- “Store 默认写 WeKnora”
-- “Analyze 默认走 WeKnora RAG”
 - “--agent-task 默认直接 Worker”
 
 ## 4. 当前推荐口径
