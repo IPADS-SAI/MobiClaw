@@ -28,157 +28,41 @@ import time
 # from tkinter import NO
 import uuid
 from datetime import datetime, timezone
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from typing import Any
 
 from fastapi import FastAPI, File, Header, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-from pydantic import BaseModel, Field
 import requests
 
-from .env import load_project_env
+from ..env import load_project_env
 
 logger = logging.getLogger(__name__)
 
 load_project_env()
 
-from .config import RAG_CONFIG, SCHEDULE_CONFIG
-from .scheduler import (
+from ..config import RAG_CONFIG, SCHEDULE_CONFIG
+from ..scheduler import (
     ScheduleDetectionResult,
     get_active_manager,
     start_scheduler,
     shutdown_scheduler,
 )
-from .workflows import run_gateway_task
-
-
-def _configure_logging() -> None:
-    """Ensure gateway and orchestrator logs are visible under module startup."""
-    level_name = (os.environ.get("SENESCHAL_LOG_LEVEL", "INFO") or "INFO").strip().upper()
-    level = getattr(logging, level_name, logging.INFO)
-
-    root_logger = logging.getLogger()
-    if not root_logger.handlers:
-        logging.basicConfig(
-            level=level,
-            format="%(asctime)s %(levelname)s %(name)s : %(message)s",
-        )
-    else:
-        # Keep existing handlers from uvicorn, only raise/lower threshold.
-        root_logger.setLevel(level)
-
-    logging.getLogger("seneschal").setLevel(level)
+from ..workflows import run_gateway_task
+from .models import (
+    EnvContentRequest,
+    EnvStructuredRequest,
+    GatewayConfig,
+    JobContext,
+    ScheduleParam,
+    TaskRequest,
+    TaskResult,
+    _configure_logging,
+    load_config,
+)
 
 
 _configure_logging()
-
-
-@dataclass
-class GatewayConfig:
-    """网关运行配置。"""
-
-    api_key: str
-    callback_timeout_s: float
-    callback_retry: int
-    callback_retry_backoff_s: float
-    public_base_url: str | None
-    file_root: str | None
-    feishu_app_id: str
-    feishu_app_secret: str
-    feishu_verification_token: str
-    feishu_encrypt_key: str
-    feishu_event_transport: str
-    feishu_native_file_enabled: bool
-    feishu_native_image_enabled: bool
-    feishu_ack_enabled: bool
-    feishu_group_require_mention: bool
-    feishu_bot_open_id: str
-
-
-def load_config() -> GatewayConfig:
-    """从环境变量读取网关配置并构建配置对象。"""
-    return GatewayConfig(
-        api_key=os.environ.get("SENESCHAL_GATEWAY_API_KEY", ""),
-        callback_timeout_s=float(os.environ.get("SENESCHAL_GATEWAY_CALLBACK_TIMEOUT", "10")),
-        callback_retry=max(1, int(os.environ.get("SENESCHAL_GATEWAY_CALLBACK_RETRY", "3"))),
-        callback_retry_backoff_s=float(os.environ.get("SENESCHAL_GATEWAY_CALLBACK_BACKOFF", "1.0")),
-        public_base_url=(os.environ.get("SENESCHAL_GATEWAY_PUBLIC_BASE_URL") or "").strip() or None,
-        file_root=(os.environ.get("SENESCHAL_GATEWAY_FILE_ROOT") or "").strip() or None,
-        feishu_app_id=os.environ.get("FEISHU_APP_ID", "").strip(),
-        feishu_app_secret=os.environ.get("FEISHU_APP_SECRET", "").strip(),
-        feishu_verification_token=os.environ.get("FEISHU_VERIFICATION_TOKEN", "").strip(),
-        feishu_encrypt_key=os.environ.get("FEISHU_ENCRYPT_KEY", "").strip(),
-        feishu_event_transport=os.environ.get("FEISHU_EVENT_TRANSPORT", "both").strip().lower() or "both",
-        feishu_native_file_enabled=os.environ.get("FEISHU_NATIVE_FILE_ENABLED", "1").strip() not in {"0", "false", "False"},
-        feishu_native_image_enabled=os.environ.get("FEISHU_NATIVE_IMAGE_ENABLED", "1").strip() not in {"0", "false", "False"},
-        feishu_ack_enabled=os.environ.get("FEISHU_ACK_ENABLED", "1").strip() not in {"0", "false", "False"},
-        feishu_group_require_mention=os.environ.get("FEISHU_GROUP_REQUIRE_MENTION", "1").strip() not in {"0", "false", "False"},
-        feishu_bot_open_id=os.environ.get("FEISHU_BOT_OPEN_ID", "").strip(),
-    )
-
-
-class ScheduleParam(BaseModel):
-    """显式指定的定时任务参数（供 API 调用方使用）。"""
-
-    schedule_type: str = Field(description="once（单次）或 cron（周期）")
-    cron_expr: str | None = Field(default=None, description="5 字段 cron 表达式，周几用 mon-sun")
-    run_at: str | None = Field(default=None, description="ISO 8601 datetime，仅 once 类型")
-    description: str | None = Field(default=None, description="人类可读的时间描述")
-
-
-class TaskRequest(BaseModel):
-    """任务提交请求体。"""
-
-    task: str
-    async_mode: bool = Field(default=False)
-    output_path: str | None = None
-    mode: str = Field(default="chat")
-    agent_hint: str | None = None
-    skill_hint: str | None = None
-    routing_strategy: str | None = None
-    context_id: str | None = None
-    web_search_enabled: bool = Field(default=True)
-    webhook_url: str | None = None
-    webhook_token: str | None = None
-    callback_headers: dict[str, str] = Field(default_factory=dict)
-    schedule: ScheduleParam | None = Field(default=None, description="显式定时参数，为空则自动检测")
-    input_files: list[str] = Field(default_factory=list)
-
-
-class TaskResult(BaseModel):
-    """任务状态与结果响应体。"""
-
-    job_id: str
-    status: str
-    result: dict[str, Any] | None = None
-    error: str | None = None
-
-
-class EnvContentRequest(BaseModel):
-    """`.env` 文件更新请求体。"""
-
-    content: str = Field(default="")
-
-
-class EnvStructuredRequest(BaseModel):
-    """结构化 `.env` 配置更新请求体。"""
-
-    values: dict[str, str] = Field(default_factory=dict)
-    unmanaged: dict[str, str] | None = None
-    preserve_unmanaged: bool = Field(default=True)
-
-
-@dataclass
-class JobContext:
-    """异步任务上下文（回调地址与飞书投递信息）。"""
-
-    webhook_url: str | None = None
-    webhook_token: str | None = None
-    callback_headers: dict[str, str] | None = None
-    feishu_chat_id: str | None = None
-    feishu_user_open_id: str | None = None
-    feishu_message_id: str | None = None
-    feishu_receive_id_type: str = "chat_id"
 
 
 _JOB_STORE: dict[str, TaskResult] = {}
@@ -186,413 +70,48 @@ _JOB_CONTEXT: dict[str, JobContext] = {}
 _JOB_LOCK = asyncio.Lock()
 _MAIN_LOOP: asyncio.AbstractEventLoop | None = None
 _FEISHU_WS_THREAD: threading.Thread | None = None
-_WEBUI_CHAT = Path(__file__).resolve().parent / "webui" / "gateway_chat.html"
-_WEBUI_INDEX = Path(__file__).resolve().parent / "webui" / "gateway_console.html"
-_WEBUI_SETTINGS = Path(__file__).resolve().parent / "webui" / "gateway_settings.html"
-_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
-_CHAT_SESSION_NAME_RE = re.compile(r"^(?P<prefix>\d{8}_\d{6}_\d{6})-(?P<storage_context_id>.+)$")
-_STORAGE_CONTEXT_ID_RE = re.compile(r"^(?P<mode>[0-9A-Za-z]+)_(?P<stamp>\d{14,20})_(?P<context_id>.+)$")
-_ENV_SETTINGS_SCHEMA: list[dict[str, Any]] = [
-    {
-        "id": "runtime",
-        "title": "Runtime",
-        "items": [
-            {"key": "SENESCHAL_LOG_LEVEL", "label": "日志级别", "type": "select", "options": ["DEBUG", "INFO", "WARNING", "ERROR"]},
-            {"key": "SENESCHAL_FILE_WRITE_ROOT", "label": "文件输出根目录", "type": "text"},
-            {"key": "SENESCHAL_CHAT_SESSION_ROOT", "label": "Chat 会话目录", "type": "text"},
-        ],
-    },
-    {
-        "id": "gateway",
-        "title": "Gateway",
-        "items": [
-            {"key": "SENESCHAL_GATEWAY_HOST", "label": "监听主机", "type": "text"},
-            {"key": "SENESCHAL_GATEWAY_PORT", "label": "监听端口", "type": "number"},
-            {"key": "SENESCHAL_GATEWAY_API_KEY", "label": "API Key", "type": "password"},
-            {"key": "SENESCHAL_GATEWAY_PUBLIC_BASE_URL", "label": "公网访问地址", "type": "text"},
-            {"key": "SENESCHAL_GATEWAY_FILE_ROOT", "label": "可下载文件根目录", "type": "text"},
-            {"key": "SENESCHAL_GATEWAY_CALLBACK_TIMEOUT", "label": "回调超时(s)", "type": "number"},
-            {"key": "SENESCHAL_GATEWAY_CALLBACK_RETRY", "label": "回调重试次数", "type": "number"},
-            {"key": "SENESCHAL_GATEWAY_CALLBACK_BACKOFF", "label": "回调退避(s)", "type": "number"},
-        ],
-    },
-    {
-        "id": "llm",
-        "title": "LLM Provider",
-        "items": [
-            {"key": "OPENROUTER_API_KEY", "label": "OpenRouter API Key", "type": "password"},
-            {"key": "OPENROUTER_BASE_URL", "label": "OpenRouter Base URL", "type": "text"},
-            {"key": "OPENROUTER_MODEL", "label": "OpenRouter Model", "type": "text"},
-            {
-                "key": "OPENROUTER_MODEL_FOR_ORCHESTRATOR",
-                "label": "OpenRouter Model (Router/Planner/Selector)",
-                "type": "text",
-            },
-        ],
-    },
-    {
-        "id": "brave",
-        "title": "Brave Search",
-        "items": [
-            {"key": "BRAVE_API_KEY", "label": "Brave API Key", "type": "password"},
-            {"key": "BRAVE_SEARCH_BASE_URL", "label": "Brave Search Base URL", "type": "text"},
-            {"key": "BRAVE_SEARCH_MAX_RESULTS", "label": "最大结果数", "type": "number"},
-        ],
-    },
-    {
-        "id": "mobile_executor",
-        "title": "Mobile Executor",
-        "items": [
-            {"key": "MOBILE_PROVIDER", "label": "Provider", "type": "select", "options": ["mobiagent", "uitars", "qwen", "autoglm"]},
-            {"key": "MOBILE_OUTPUT_DIR", "label": "输出目录", "type": "text"},
-            {"key": "MOBILE_DEVICE_TYPE", "label": "设备平台", "type": "select", "options": ["mock", "Android", "Harmony"]},
-            {"key": "MOBILE_DEVICE_ID", "label": "设备 ID/地址", "type": "text"},
-            {"key": "MOBILE_API_BASE", "label": "通用 API Base", "type": "text"},
-            {"key": "MOBILE_API_KEY", "label": "通用 API Key", "type": "password"},
-            {"key": "MOBILE_MODEL", "label": "通用 Model", "type": "text"},
-            {"key": "MOBILE_TEMPERATURE", "label": "温度", "type": "number"},
-            {"key": "MOBILE_MAX_STEPS", "label": "最大步数", "type": "number"},
-            {"key": "MOBILE_DRAW", "label": "绘图调试(0/1)", "type": "text"},
-            {"key": "MOBILE_MOBIAGENT_ENABLE_PLANNING", "label": "MobiAgent: Enable Planning", "type": "text"},
-            {"key": "MOBILE_MOBIAGENT_USE_E2E", "label": "MobiAgent: Use E2E", "type": "text"},
-            {"key": "MOBILE_MOBIAGENT_DECIDER_MODEL", "label": "MobiAgent: Decider Model", "type": "text"},
-            {"key": "MOBILE_MOBIAGENT_GROUNDER_MODEL", "label": "MobiAgent: Grounder Model", "type": "text"},
-            {"key": "MOBILE_MOBIAGENT_PLANNER_MODEL", "label": "MobiAgent: Planner Model", "type": "text"},
-            {"key": "MOBILE_UITARS_STEP_DELAY", "label": "UITARS: Step Delay", "type": "number"},
-            {"key": "MOBILE_AUTOGLM_MAX_TOKENS", "label": "AutoGLM: Max Tokens", "type": "number"},
-            {"key": "MOBILE_AUTOGLM_TOP_P", "label": "AutoGLM: Top P", "type": "number"},
-            {"key": "MOBILE_AUTOGLM_FREQUENCY_PENALTY", "label": "AutoGLM: Frequency Penalty", "type": "number"},
-            {"key": "MOBI_AGENT_BASE_URL", "label": "Legacy MobiAgent Base URL", "type": "text"},
-            {"key": "MOBI_AGENT_API_KEY", "label": "Legacy MobiAgent API Key", "type": "password"},
-        ],
-    },
-    {
-        "id": "routing",
-        "title": "Routing",
-        "items": [
-            {"key": "SENESCHAL_ROUTING_DEFAULT_MODE", "label": "默认模式", "type": "select", "options": ["chat", "router", "intelligent", "worker", "steward", "auto"]},
-            {"key": "SENESCHAL_ROUTING_STRATEGY", "label": "路由策略", "type": "text"},
-            {"key": "SENESCHAL_ALLOW_LEGACY_MODE", "label": "允许 legacy 模式(0/1)", "type": "text"},
-            {"key": "SENESCHAL_ROUTING_MAX_SUBTASKS", "label": "最大子任务数", "type": "number"},
-            {"key": "SENESCHAL_ROUTING_MAX_DEPTH", "label": "最大深度", "type": "number"},
-            {"key": "SENESCHAL_ROUTER_TIMEOUT_S", "label": "Router 超时(s)", "type": "number"},
-            {"key": "SENESCHAL_PLANNER_TIMEOUT_S", "label": "Planner 超时(s)", "type": "number"},
-            {"key": "SENESCHAL_SUBTASK_TIMEOUT_S", "label": "子任务超时(s)", "type": "number"},
-            {"key": "SENESCHAL_SKILL_SELECTOR_TIMEOUT_S", "label": "Skill Selector 超时(s)", "type": "number"},
-        ],
-    },
-    {
-        "id": "feishu",
-        "title": "Feishu",
-        "items": [
-            {"key": "FEISHU_EVENT_TRANSPORT", "label": "事件接入模式", "type": "select", "options": ["both", "webhook", "long_conn", "off", "auto"]},
-            {"key": "FEISHU_APP_ID", "label": "App ID", "type": "text"},
-            {"key": "FEISHU_APP_SECRET", "label": "App Secret", "type": "password"},
-            {"key": "FEISHU_VERIFICATION_TOKEN", "label": "Verification Token", "type": "text"},
-            {"key": "FEISHU_ENCRYPT_KEY", "label": "Encrypt Key", "type": "text"},
-        ],
-    },
-]
-
-
-def _utc_now_iso() -> str:
-    """返回 UTC 时间 ISO 字符串。"""
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _chat_session_root_dir() -> Path:
-    """返回 chat session 根目录。"""
-    configured = (os.environ.get("SENESCHAL_CHAT_SESSION_ROOT") or "").strip()
-    if configured:
-        return Path(configured).expanduser()
-    return Path(__file__).resolve().parents[1] / ".mobiclaw" / "session"
-
-
-def _chat_upload_root_dir() -> Path:
-    """返回 chat 上传文件目录。"""
-    return Path(__file__).resolve().parents[1] / ".mobiclaw" / "uploads"
-
-
-def _sanitize_upload_name(name: str) -> str:
-    """清洗上传文件名，避免路径穿透。"""
-    candidate = Path(str(name or "").strip()).name
-    return candidate or f"file_{uuid.uuid4().hex}"
-
-
-def _normalize_input_files(input_files: list[str] | None) -> list[str]:
-    """清洗并去重 input_files。"""
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for item in input_files or []:
-        text = str(item or "").strip()
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        normalized.append(text)
-    return normalized
-
-
-def _inject_input_files_into_task(task: str, input_files: list[str] | None) -> tuple[str, list[str]]:
-    """将上传文件路径附加到任务文本，提示 Agent 读取分析。"""
-    normalized = _normalize_input_files(input_files)
-    if not normalized:
-        return str(task or ""), []
-    file_lines = "\n".join(f"- {path}" for path in normalized)
-    injected = (
-        f"{str(task or '').rstrip()}\n\n"
-        "附加输入文件（本地路径）如下，请优先读取并分析这些文件内容：\n"
-        f"{file_lines}"
-    ).strip()
-    return injected, normalized
-
-
-def _normalize_context_id(raw: str | None) -> str:
-    """规范化 context_id，避免非法路径字符。"""
-    text = str(raw or "").strip()
-    if not text:
-        return ""
-    text = re.sub(r"[^0-9A-Za-z._-]+", "-", text)
-    return text.strip("-")
-
-
-def _build_storage_context_id(context_id: str) -> str:
-    normalized = _normalize_context_id(context_id)
-    if not normalized:
-        return ""
-    if _STORAGE_CONTEXT_ID_RE.match(normalized):
-        return normalized
-    stamp = datetime.now().strftime("%Y%m%d%H%M%S%f")[:17]
-    return f"chat_{stamp}_{normalized}"
-
-
-def _extract_context_alias(storage_context_id: str) -> str:
-    normalized = _normalize_context_id(storage_context_id)
-    if not normalized:
-        return ""
-    matched = _STORAGE_CONTEXT_ID_RE.match(normalized)
-    if not matched:
-        return normalized
-    return _normalize_context_id(matched.group("context_id"))
-
-
-def _parse_chat_session_dir_name(name: str) -> tuple[str, str] | None:
-    """从目录名解析时间前缀与 context_id。"""
-    candidate = str(name or "").strip()
-    if not candidate:
-        return None
-
-    matched = _CHAT_SESSION_NAME_RE.match(candidate)
-    if not matched:
-        return None
-    prefix = str(matched.group("prefix") or "").strip()
-    storage_context_id = _normalize_context_id(matched.group("storage_context_id"))
-    if not prefix or not storage_context_id:
-        return None
-    if not _STORAGE_CONTEXT_ID_RE.match(storage_context_id):
-        return None
-    return prefix, storage_context_id
-
-
-def _scan_chat_session_dirs() -> list[dict[str, Any]]:
-    """扫描 session 根目录，按目录名解析会话并按更新时间倒序返回。"""
-    root = _chat_session_root_dir()
-    if not root.exists() or not root.is_dir():
-        return []
-
-    records: list[dict[str, Any]] = []
-    for child in root.iterdir():
-        if not child.is_dir():
-            continue
-        parsed = _parse_chat_session_dir_name(child.name)
-        if parsed is None:
-            continue
-        _, context_id = parsed
-        try:
-            stat = child.stat()
-        except OSError:
-            continue
-        updated_ts = float(stat.st_mtime)
-        updated_at = datetime.fromtimestamp(updated_ts, tz=timezone.utc).isoformat()
-        records.append(
-            {
-                "context_id": context_id,
-                "session_id": context_id,
-                "context_alias": _extract_context_alias(context_id),
-                "dir_name": child.name,
-                "path": str(child.resolve()),
-                "updated_ts": updated_ts,
-                "updated_at": updated_at,
-            }
-        )
-
-    records.sort(key=lambda item: float(item.get("updated_ts", 0.0)), reverse=True)
-    return records
-
-
-def _latest_session_dir_for_context(context_id: str) -> Path | None:
-    """返回指定 context_id 最新会话目录。"""
-    normalized = _normalize_context_id(context_id)
-    if not normalized:
-        return None
-    candidates = [
-        item
-        for item in _scan_chat_session_dirs()
-        if item.get("context_id") == normalized or item.get("context_alias") == normalized
-    ]
-    if not candidates:
-        return None
-    path = str(candidates[0].get("path") or "").strip()
-    if not path:
-        return None
-    target = Path(path)
-    if not target.exists() or not target.is_dir():
-        return None
-    return target
-
-
-def _ensure_session_dir_for_context(context_id: str) -> Path:
-    """确保 context_id 对应目录存在；不存在则按约定命名创建。"""
-    normalized = _normalize_context_id(context_id)
-    if not normalized:
-        raise ValueError("context_id is empty")
-
-    existing = _latest_session_dir_for_context(normalized)
-    if existing is not None:
-        return existing
-
-    root = _chat_session_root_dir()
-    root.mkdir(parents=True, exist_ok=True)
-    storage_context_id = _build_storage_context_id(normalized)
-    if not storage_context_id:
-        raise ValueError("context_id is empty")
-    dir_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}-{storage_context_id}"
-    session_dir = root / dir_name
-    session_dir.mkdir(parents=True, exist_ok=True)
-    return session_dir
-
-
-def _resolve_context_id(explicit_context_id: str | None, result: dict[str, Any] | None = None) -> str | None:
-    """从显式参数或结果对象中解析 context_id。"""
-    explicit = _normalize_context_id(explicit_context_id)
-    if explicit:
-        return explicit
-    if not isinstance(result, dict):
-        return None
-    for key in ("context_id", "session_id"):
-        value = _normalize_context_id(result.get(key))
-        if value:
-            return value
-    session_obj = result.get("session")
-    if isinstance(session_obj, dict):
-        for key in ("context_id", "session_id"):
-            value = _normalize_context_id(session_obj.get(key))
-            if value:
-                return value
-    return None
-
-
-def _append_history_line(history_path: Path, record: dict[str, Any]) -> None:
-    """追加写入单条 JSONL 记录。"""
-    history_path.parent.mkdir(parents=True, exist_ok=True)
-    with history_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-
-def _append_chat_history(
-    *,
-    context_id: str | None,
-    mode: str,
-    job_id: str,
-    user_text: str,
-    assistant_text: str,
-    status: str,
-) -> None:
-    """按约定写入 session 目录下 history.jsonl。"""
-    resolved = _normalize_context_id(context_id)
-    if not resolved:
-        return
-    try:
-        session_dir = _ensure_session_dir_for_context(resolved)
-    except Exception:
-        logger.exception("Failed to ensure session directory for context_id=%s", resolved)
-        return
-
-    history_file = session_dir / "history.jsonl"
-    ts = _utc_now_iso()
-    shared_meta = {
-        "job_id": job_id,
-        "mode": str(mode or ""),
-        "status": str(status or ""),
-        "context_id": resolved,
-    }
-
-    user_message = str(user_text or "").strip()
-    if user_message:
-        _append_history_line(
-            history_file,
-            {
-                "ts": ts,
-                "role": "user",
-                "name": "user",
-                "text": user_message,
-                "meta": shared_meta,
-            },
-        )
-
-    assistant_message = str(assistant_text or "").strip()
-    if assistant_message:
-        _append_history_line(
-            history_file,
-            {
-                "ts": ts,
-                "role": "assistant",
-                "name": "assistant",
-                "text": assistant_message,
-                "meta": shared_meta,
-            },
-        )
-
-
-def _read_recent_session_messages(session_dir: Path, limit: int) -> list[dict[str, Any]]:
-    """读取会话目录中 history.jsonl 最近 N 条消息。"""
-    history_file = session_dir / "history.jsonl"
-    if not history_file.exists() or not history_file.is_file():
-        return []
-
-    max_items = max(1, int(limit or 20))
-    items: deque[dict[str, Any]] = deque(maxlen=max_items)
-    try:
-        with history_file.open("r", encoding="utf-8") as handle:
-            for raw_line in handle:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    parsed = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(parsed, dict):
-                    continue
-                text = str(parsed.get("text") or "").strip()
-                if not text:
-                    continue
-                role = str(parsed.get("role") or "assistant").strip().lower() or "assistant"
-                if role not in {"user", "assistant", "system", "error"}:
-                    role = "assistant"
-                meta = parsed.get("meta")
-                items.append(
-                    {
-                        "ts": str(parsed.get("ts") or ""),
-                        "role": role,
-                        "name": str(parsed.get("name") or role),
-                        "text": text,
-                        "meta": meta if isinstance(meta, dict) else {},
-                    }
-                )
-    except OSError:
-        logger.exception("Failed to read history.jsonl from session dir: %s", session_dir)
-        return []
-    return list(items)
+_WEBUI_CHAT = Path(__file__).resolve().parents[1] / "webui" / "gateway_chat.html"
+_WEBUI_INDEX = Path(__file__).resolve().parents[1] / "webui" / "gateway_console.html"
+_WEBUI_SETTINGS = Path(__file__).resolve().parents[1] / "webui" / "gateway_settings.html"
+from .env import (
+    _ENV_SETTINGS_SCHEMA,
+    _env_file_path,
+    _format_env_value,
+    _managed_env_keys,
+    _parse_env_variables,
+    _read_env_content,
+    _render_structured_env_content,
+    _sanitize_structured_values,
+    _split_env_variables,
+    _write_env_content,
+)
+from .files import (
+    _build_download_url,
+    _can_expose_file,
+    _decorate_result_with_files,
+    _default_exposed_roots,
+    _feishu_media_download_dir,
+    _resolve_file_root,
+)
+from .session import (
+    _append_chat_history,
+    _append_history_line,
+    _build_storage_context_id,
+    _chat_session_root_dir,
+    _chat_upload_root_dir,
+    _ensure_session_dir_for_context,
+    _extract_context_alias,
+    _inject_input_files_into_task,
+    _latest_session_dir_for_context,
+    _normalize_context_id,
+    _normalize_input_files,
+    _parse_chat_session_dir_name,
+    _read_recent_session_messages,
+    _resolve_context_id,
+    _sanitize_upload_name,
+    _scan_chat_session_dirs,
+    _utc_now_iso,
+)
 
 
 async def _execute_scheduled_job(
@@ -688,202 +207,6 @@ def _ensure_auth(authorization: str | None, cfg: GatewayConfig) -> None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
 
-def _env_file_path() -> Path:
-    """返回项目根目录 `.env` 文件路径。"""
-    return _ENV_FILE
-
-
-def _read_env_content() -> str:
-    """读取 `.env` 文件原始内容。"""
-    env_path = _env_file_path()
-    if not env_path.exists():
-        return ""
-    return env_path.read_text(encoding="utf-8")
-
-
-def _parse_env_variables(content: str) -> dict[str, str]:
-    """从 `.env` 文本解析键值对。"""
-    variables: dict[str, str] = {}
-    for raw_line in content.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export "):].strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if not key:
-            continue
-        if len(value) >= 2 and (
-            (value.startswith('"') and value.endswith('"'))
-            or (value.startswith("'") and value.endswith("'"))
-        ):
-            value = value[1:-1]
-        variables[key] = value
-    return variables
-
-
-def _write_env_content(content: str) -> None:
-    """覆盖写入 `.env` 文件。"""
-    env_path = _env_file_path()
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    env_path.write_text(content, encoding="utf-8")
-
-
-def _managed_env_keys() -> list[str]:
-    """返回结构化设置管理的环境变量键列表（按 schema 顺序）。"""
-    keys: list[str] = []
-    for category in _ENV_SETTINGS_SCHEMA:
-        for item in category.get("items", []):
-            key = str(item.get("key") or "").strip()
-            if key:
-                keys.append(key)
-    return keys
-
-
-def _split_env_variables(variables: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
-    """按 schema 拆分受管变量与未纳入 schema 的变量。"""
-    managed_key_set = set(_managed_env_keys())
-    managed: dict[str, str] = {}
-    unmanaged: dict[str, str] = {}
-    for key, value in variables.items():
-        if key in managed_key_set:
-            managed[key] = value
-        else:
-            unmanaged[key] = value
-    return managed, unmanaged
-
-
-def _sanitize_structured_values(values: dict[str, Any] | None) -> dict[str, str]:
-    """清洗结构化表单提交值。"""
-    if not isinstance(values, dict):
-        return {}
-    sanitized: dict[str, str] = {}
-    for key, value in values.items():
-        key_text = str(key or "").strip()
-        if not key_text:
-            continue
-        value_text = str(value) if value is not None else ""
-        sanitized[key_text] = value_text.strip()
-    return sanitized
-
-
-def _format_env_value(value: str) -> str:
-    """格式化 `.env` 赋值为 `\"...\"` 双引号形式。"""
-    text = str(value or "")
-    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
-    return f"\"{escaped}\""
-
-
-def _render_structured_env_content(values: dict[str, str], unmanaged: dict[str, str]) -> str:
-    """按分类 schema 渲染 `.env` 文本。"""
-    lines: list[str] = [
-        "# Auto-generated by Seneschal Gateway Console",
-        "# Edit via /console settings page or update manually if needed.",
-        "",
-    ]
-
-    for category in _ENV_SETTINGS_SCHEMA:
-        title = str(category.get("title") or "Settings")
-        lines.append(f"# ===== {title} =====")
-        for item in category.get("items", []):
-            key = str(item.get("key") or "").strip()
-            if not key:
-                continue
-            value = values.get(key, "")
-            formatted = _format_env_value(value)
-            lines.append(f"export {key}={formatted}")
-        lines.append("")
-
-    if unmanaged:
-        lines.append("# ===== Unmanaged Variables =====")
-        for key in sorted(unmanaged.keys()):
-            formatted = _format_env_value(unmanaged[key])
-            lines.append(f"export {key}={formatted}")
-        lines.append("")
-
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def _resolve_file_root(cfg: GatewayConfig) -> Path | None:
-    """解析允许暴露下载文件的根目录。"""
-    if not cfg.file_root:
-        return None
-    return Path(cfg.file_root).expanduser().resolve()
-
-
-def _default_exposed_roots() -> list[Path]:
-    """返回网关内置允许暴露下载的安全目录。"""
-    project_root = Path(__file__).resolve().parents[1]
-    roots = [
-        (project_root / "outputs").resolve(),
-        _chat_upload_root_dir().resolve(),
-        _feishu_media_download_dir().resolve(),
-    ]
-    unique: list[Path] = []
-    seen: set[str] = set()
-    for root in roots:
-        key = str(root)
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(root)
-    return unique
-
-
-def _can_expose_file(path: str, cfg: GatewayConfig) -> bool:
-    """判断文件是否允许通过下载接口暴露。"""
-    root = _resolve_file_root(cfg)
-    target = Path(path).expanduser()
-    try:
-        resolved = target.resolve()
-    except FileNotFoundError:
-        return False
-    if not resolved.exists() or not resolved.is_file():
-        return False
-    if any(resolved == item or item in resolved.parents for item in _default_exposed_roots()):
-        return True
-    if root is None:
-        return True
-    return resolved == root or root in resolved.parents
-
-
-def _build_download_url(job_id: str, file_name: str, request: Request | None, cfg: GatewayConfig) -> str:
-    """构建文件下载 URL。"""
-    base = cfg.public_base_url
-    if not base and request is not None:
-        base = str(request.base_url).rstrip("/")
-    if not base:
-        return f"/api/v1/files/{job_id}/{file_name}"
-    return f"{base}/api/v1/files/{job_id}/{file_name}"
-
-
-def _decorate_result_with_files(job_id: str, result: dict[str, Any], request: Request | None, cfg: GatewayConfig) -> dict[str, Any]:
-    """为结果中的文件条目补充安全过滤后的下载链接。"""
-    files = result.get("files") if isinstance(result, dict) else None
-    if not isinstance(files, list):
-        return result
-    enriched: list[dict[str, Any]] = []
-    for item in files:
-        if not isinstance(item, dict):
-            continue
-        path = str(item.get("path") or "").strip()
-        name = str(item.get("name") or "").strip()
-        if not path or not name:
-            continue
-        if not _can_expose_file(path, cfg):
-            continue
-        enriched_item = dict(item)
-        enriched_item["download_url"] = _build_download_url(job_id, name, request, cfg)
-        enriched.append(enriched_item)
-    result = dict(result)
-    result["files"] = enriched
-    return result
-
-
 def _parse_feishu_text_from_content(content: str) -> str:
     """解析飞书消息内容并提取文本字段。"""
     parsed = (content or "").strip()
@@ -916,14 +239,6 @@ def _parse_feishu_content(content: str) -> dict[str, Any]:
     if file_key:
         return {"type": "file", "file_key": file_key, "raw": parsed}
     return {"type": "unknown", "raw": parsed}
-
-
-def _feishu_media_download_dir() -> Path:
-    """返回飞书媒体缓存目录。"""
-    configured = (os.environ.get("FEISHU_MEDIA_DOWNLOAD_DIR") or "").strip()
-    path = Path(configured).expanduser() if configured else Path(tempfile.gettempdir()) / "seneschal_feishu_media"
-    path.mkdir(parents=True, exist_ok=True)
-    return path.resolve()
 
 
 def _download_feishu_message_resource(
@@ -1588,7 +903,7 @@ async def _run_job(
             _JOB_STORE[job_id] = completed
         try:
             if RAG_CONFIG["task_history_enabled"]:
-                from .tools import store_task_result
+                from ..tools import store_task_result
                 await store_task_result(
                     job_id=job_id,
                     task=task,

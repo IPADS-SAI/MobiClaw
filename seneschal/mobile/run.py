@@ -19,11 +19,13 @@ from typing import Dict, List, Optional
 try:
     from .task_manager import TaskManager
     from .device import create_device, AndroidDevice, HarmonyDevice
+    from .interrupts import clear_interrupt, install_signal_handlers, interruptible_sleep
 except ImportError:
     # 兼容直接以脚本方式运行
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from task_manager import TaskManager
     from device import create_device, AndroidDevice, HarmonyDevice
+    from interrupts import clear_interrupt, install_signal_handlers, interruptible_sleep
 
 
 def setup_logging(log_level: str = "INFO"):
@@ -497,7 +499,7 @@ def execute_batch_tasks(
         # 任务间休息
         if idx < total_tasks:
             logging.info("等待3秒后执行下一个任务...")
-            time.sleep(3)
+            interruptible_sleep(3)
     
     # 生成汇总报告
     summary = {
@@ -529,6 +531,8 @@ def execute_batch_tasks(
 
 def main():
     """主函数"""
+    install_signal_handlers()
+    clear_interrupt()
     args = parse_args()
     
     # 设置日志
@@ -551,15 +555,19 @@ def main():
     # 确定任务
     if args.task:
         # 单个任务
-        result = execute_single_task(
-            provider=args.provider,
-            task_description=args.task,
-            device=device,
-            output_dir=args.output_dir,
-            device_type=args.device_type,
-            args=args
-        )
-        return 0 if result.get("status") != "error" else 1
+        try:
+            result = execute_single_task(
+                provider=args.provider,
+                task_description=args.task,
+                device=device,
+                output_dir=args.output_dir,
+                device_type=args.device_type,
+                args=args
+            )
+            return 0 if result.get("status") != "error" else 1
+        except KeyboardInterrupt:
+            logging.warning("收到 Ctrl+C，已中断当前手机任务")
+            return 130
         
     elif args.task_file:
         # 批量任务
@@ -568,15 +576,19 @@ def main():
             return 1
         
         tasks = load_tasks(args.task_file)
-        summary = execute_batch_tasks(
-            provider=args.provider,
-            tasks=tasks,
-            device=device,
-            output_dir=args.output_dir,
-            device_type=args.device_type,
-            args=args
-        )
-        return 0 if summary["error_count"] == 0 else 1
+        try:
+            summary = execute_batch_tasks(
+                provider=args.provider,
+                tasks=tasks,
+                device=device,
+                output_dir=args.output_dir,
+                device_type=args.device_type,
+                args=args
+            )
+            return 0 if summary["error_count"] == 0 else 1
+        except KeyboardInterrupt:
+            logging.warning("收到 Ctrl+C，已中断批量手机任务")
+            return 130
         
     else:
         logging.error("请指定 --task 或 --task-file 参数")

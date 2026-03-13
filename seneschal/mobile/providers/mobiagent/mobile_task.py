@@ -15,6 +15,7 @@ from openai import OpenAI
 logger = logging.getLogger(__name__)
 
 from ...base_task import BaseTask
+from ...interrupts import ensure_not_interrupted, interruptible_sleep
 
 from .load_md_prompt import load_prompt
 from .prompts.decider_qwen3_e2e import (
@@ -268,7 +269,7 @@ class MobiAgentStepTask(BaseTask):
             "飞猪": "com.taobao.trip",
             "去哪儿": "com.Qunar",
             "华住会": "com.htinns",
-            "饿了么": "me.ele",
+            "饿了么/淘宝闪购": "me.ele",
             "支付宝": "com.eg.android.AlipayGphone",
             "淘宝": "com.taobao.taobao",
             "京东": "com.jingdong.app.mall",
@@ -308,7 +309,7 @@ class MobiAgentStepTask(BaseTask):
             "飞猪旅行": "com.fliggy.hmos",
             "IntelliOS": "ohos.hongmeng.intellios",
             "同程": "com.tongcheng.hmos",
-            "饿了么": "me.ele.eleme",
+            "饿了么/淘宝闪购": "me.ele.eleme",
             "知乎": "com.zhihu.hmos",
             "哔哩哔哩": "yylx.danmaku.bili",
             "微信": "com.tencent.wechat",
@@ -416,13 +417,15 @@ class MobiAgentStepTask(BaseTask):
             # 提取信息
             app_name = response_json.get("app_name")
             final_task_desc = response_json.get("final_task_description", self.original_task_description)
+            package_name = response_json.get("package_name")
             
             if not app_name:
                 logger.warning("Planner response missing app_name")
                 return None
             
             # 本地匹配包名
-            package_name = self._get_package_name(app_name)
+            if not package_name:
+                package_name = self._get_package_name(app_name)
             
             if not package_name:
                 logger.warning(f"Package name not found for app: {app_name}")
@@ -603,6 +606,7 @@ Important: Return ONLY the JSON object, no additional text or markdown formattin
         """统一模型调用：JSON解析 + 校验失败重试。"""
         temperature = DECIDER_INITIAL_TEMP
         for attempt in range(max_attempts):
+            ensure_not_interrupted()
             try:
                 start_time = time.time()
                 response_str = client.chat.completions.create(
@@ -624,7 +628,7 @@ Important: Return ONLY the JSON object, no additional text or markdown formattin
                 temperature = DECIDER_INITIAL_TEMP + (attempt + 1) * DECIDER_TEMP_INCREMENT
                 logger.error(f"{context}调用或校验失败 (attempt {attempt + 1}/{max_attempts}): {e}")
                 if attempt < max_attempts - 1:
-                    time.sleep(2)
+                    interruptible_sleep(2)
         return None
 
     def _call_decider(self, messages: List[Dict], max_attempts: Optional[int] = None) -> Optional[Dict]:
@@ -649,6 +653,7 @@ Important: Return ONLY the JSON object, no additional text or markdown formattin
         temperature = 0.0
         
         for attempt in range(max_attempts):
+            ensure_not_interrupted()
             try:
                 start_time = time.time()
                 response_str = self.grounder_client.chat.completions.create(
@@ -678,7 +683,7 @@ Important: Return ONLY the JSON object, no additional text or markdown formattin
                 temperature = 0.1 + attempt * 0.1
                 logger.error(f"Grounder调用失败 (attempt {attempt+1}/{max_attempts}): {e}")
                 if attempt < max_attempts - 1:
-                    time.sleep(2)
+                    interruptible_sleep(2)
         
         return None
     

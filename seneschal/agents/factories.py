@@ -1,619 +1,68 @@
 # -*- coding: utf-8 -*-
-"""Seneschal Agent 构建与能力注册模块。
-
-核心功能：
-- 统一创建 Router/Planner/SkillSelector/Worker/Steward/User 等 Agent；
-- 注册各类工具能力并注入系统提示词；
-- 提供路由层可消费的 Agent 能力描述。
-"""
+"""seneschal.agents 的各类 factory。"""
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-import asyncio
-import base64
 import functools
-from functools import lru_cache
+import json
 import logging
 import os
-import json
-import re
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from agentscope.agent import ReActAgent, UserAgent
 from agentscope.formatter import OpenAIChatFormatter
-from agentscope.message import Msg, TextBlock
 from agentscope.memory import InMemoryMemory
-from agentscope.model import OpenAIChatModel
+from agentscope.message import Msg, TextBlock
+from agentscope.plan import PlanNotebook
 from agentscope.tool import Toolkit, ToolResponse
-from agentscope.plan import PlanNotebook, Plan, SubTask
 
-
-from .config import CUSTOM_AGENT_CONFIG, MODEL_CONFIG, MEMORY_CONFIG, RAG_CONFIG, ROUTING_CONFIG, SCHEDULE_CONFIG
-from .tools import (
+from ..config import MEMORY_CONFIG, MODEL_CONFIG, RAG_CONFIG, ROUTING_CONFIG, SCHEDULE_CONFIG
+from .common import (
+    _build_memory_prompt,
+    _build_skill_prompt_suffix,
+    _env_bool,
+    _extract_vlm_evidence,
+    _judge_completion_with_vlm,
+    _trim_for_log,
+    create_openai_model,
+)
+from ..tools import (
     arxiv_search,
     brave_search,
     call_mobi_action,
     call_mobi_collect_verified,
+    create_docx_from_text,
+    create_pdf_from_text,
+    create_pptx_from_outline,
     dblp_conference_search,
     download_file,
     edit_docx,
+    edit_pptx,
     extract_image_text_ocr,
     extract_pdf_text,
+    fetch_feishu_chat_history,
     fetch_url_links,
     fetch_url_readable_text,
     fetch_url_text,
-    create_docx_from_text,
-    create_pdf_from_text,
-    read_docx_text,
-    read_xlsx_summary,
-    read_memory,
-    run_skill_script,
-    run_shell_command,
-    search_task_history,
-    search_steward_knowledge,
-    store_steward_knowledge,
-    fetch_feishu_chat_history,
     get_feishu_message,
+    insert_pptx_image,
+    read_docx_text,
+    read_pptx_summary,
+    read_xlsx_summary,
+    run_shell_command,
+    run_skill_script,
+    search_steward_knowledge,
+    search_task_history,
+    set_pptx_text_style,
+    store_steward_knowledge,
     update_long_term_memory,
+    write_text_file,
     write_xlsx_from_records,
     write_xlsx_from_rows,
-    write_text_file,
-    create_pptx_from_outline,
-    edit_pptx,
-    insert_pptx_image,
-    read_pptx_summary,
-    set_pptx_text_style,
 )
 
-logger = logging.getLogger(__name__)
-
-
-def _trim_for_log(text: str, max_chars: int = 260) -> str:
-    """裁剪日志显示长度，避免刷屏；不影响真实注入内容。"""
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars].rstrip() + "..."
-
-
-def create_openai_model(
-    *,
-    stream: bool = True,
-    temperature: float | None = None,
-    model_name: str | None = None,
-) -> OpenAIChatModel:
-    """创建 OpenAI 兼容的聊天模型实例。"""
-    api_base = MODEL_CONFIG["api_base"]
-    if not api_base.startswith("http://") and not api_base.startswith("https://"):
-        api_base = "http://" + api_base
-
-    temp = MODEL_CONFIG["temperature"] if temperature is None else temperature
-    selected_model_name = (model_name or "").strip() or MODEL_CONFIG["model_name"]
-    return OpenAIChatModel(
-        model_name=selected_model_name,
-        api_key=MODEL_CONFIG["api_key"],
-        stream=stream,
-        client_kwargs={"base_url": api_base},
-        generate_kwargs={"temperature": temp},
-    )
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    value = (os.environ.get(name) or "").strip().lower()
-    if not value:
-        return default
-    return value in {"1", "true", "yes", "on", "y"}
-
-
-def _extract_text_from_model_response(resp: Any) -> str:
-    if resp is None:
-        return ""
-    getter = None
-    try:
-        getter = getattr(resp, "get_text_content", None)
-    except Exception:  # noqa: BLE001
-        getter = None
-    if callable(getter):
-        try:
-            text = getter()
-        except Exception:  # noqa: BLE001
-            text = ""
-        return text if isinstance(text, str) else ""
-    try:
-        content = getattr(resp, "content", None)
-    except Exception:  # noqa: BLE001
-        content = None
-    if not isinstance(content, list):
-        return ""
-    parts: list[str] = []
-    for block in content:
-        if isinstance(block, dict):
-            if block.get("type") == "text" and isinstance(block.get("text"), str):
-                parts.append(block["text"])
-            continue
-        if getattr(block, "type", None) == "text" and isinstance(getattr(block, "text", None), str):
-            parts.append(block.text)
-    return "\n".join(parts).strip()
-
-
-def _parse_vlm_json(text: str) -> dict[str, Any]:
-    raw = (text or "").strip()
-    if not raw:
-        return {}
-    if "```" in raw:
-        chunks = [chunk.strip() for chunk in raw.split("```") if chunk.strip()]
-        for chunk in chunks:
-            candidate = chunk
-            if candidate.startswith("json"):
-                candidate = candidate[4:].strip()
-            try:
-                parsed = json.loads(candidate)
-                if isinstance(parsed, dict):
-                    return parsed
-            except json.JSONDecodeError:
-                continue
-    try:
-        parsed = json.loads(raw)
-        return parsed if isinstance(parsed, dict) else {}
-    except json.JSONDecodeError:
-        pass
-
-    left = raw.find("{")
-    right = raw.rfind("}")
-    if left >= 0 and right > left:
-        snippet = raw[left : right + 1]
-        try:
-            parsed = json.loads(snippet)
-            return parsed if isinstance(parsed, dict) else {}
-        except json.JSONDecodeError:
-            return {}
-    return {}
-
-
-def _extract_vlm_evidence(
-    metadata: dict[str, Any],
-    *,
-    last_n_images: int,
-    max_reasonings_chars: int,
-) -> dict[str, Any]:
-    execution = metadata.get("execution", {})
-    if not isinstance(execution, dict):
-        execution = {}
-    artifacts = execution.get("artifacts", {})
-    if not isinstance(artifacts, dict):
-        artifacts = {}
-    history = execution.get("history", {})
-    if not isinstance(history, dict):
-        history = {}
-    summary = execution.get("summary", {})
-    if not isinstance(summary, dict):
-        summary = {}
-
-    images_raw = artifacts.get("images", [])
-    images = [str(p) for p in images_raw if isinstance(p, str) and p.strip()]
-    selected = images[-max(1, last_n_images):] if images else []
-    image_data_urls: list[str] = []
-    for image_path in selected:
-        path = Path(image_path)
-        if not path.exists() or not path.is_file():
-            continue
-        try:
-            data = path.read_bytes()
-        except Exception:
-            continue
-        suffix = path.suffix.lower()
-        mime = "image/png" if suffix == ".png" else "image/jpeg"
-        b64 = base64.b64encode(data).decode("ascii")
-        image_data_urls.append(f"data:{mime};base64,{b64}")
-
-    reasonings_raw = history.get("reasonings", [])
-    reasonings = [str(item).strip() for item in reasonings_raw if isinstance(item, str) and item.strip()]
-    reasonings_text = "\n".join(f"{idx + 1}. {line}" for idx, line in enumerate(reasonings))
-    if len(reasonings_text) > max_reasonings_chars:
-        reasonings_text = "[truncated earlier reasonings]\n" + reasonings_text[-max_reasonings_chars:]
-
-    return {
-        "task_description": str(execution.get("task_description", "") or metadata.get("final_task", "") or ""),
-        "status_hint": str(summary.get("status_hint", "") or metadata.get("status_hint", "") or ""),
-        "step_count": int(summary.get("step_count", metadata.get("step_count", 0)) or 0),
-        "action_count": int(summary.get("action_count", metadata.get("action_count", 0)) or 0),
-        "images_selected": selected,
-        "image_data_urls": image_data_urls,
-        "reasonings_text": reasonings_text,
-        "reasonings_count": len(reasonings),
-    }
-
-
-async def _judge_completion_with_vlm(
-    *,
-    model: OpenAIChatModel,
-    task_desc: str,
-    success_criteria: str,
-    status_hint: str,
-    step_count: int,
-    action_count: int,
-    reasonings_text: str,
-    image_data_urls: list[str],
-    timeout_s: float,
-) -> dict[str, Any]:
-    prompt = (
-        f"你是手机自动化任务验证器。请根据任务描述、执行摘要、完整 reasonings 历史以及最终{len(image_data_urls)}张截图，"
-        f"task_desc: {task_desc}\n"
-        f"success_criteria: {success_criteria}\n"
-        f"status_hint: {status_hint}\n"
-        f"step_count: {step_count}, action_count: {action_count}\n"
-        "history_reasonings:\n"
-        f"{reasonings_text or '[empty]'}\n"
-        "请根据截图和操作历史，判断任务是否已经完成。\n"
-        "请只输出 JSON，不要输出其他文本。\n"
-        "JSON schema:\n"
-        '{"completed": bool, "confidence": float, "reason": str, "evidence": list[str], "missing_requirements": list[str]}\n'
-    )
-
-    user_content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-    for image_url in image_data_urls:
-        user_content.append({"type": "image_url", "image_url": {"url": image_url}})
-
-    messages = [{"role": "user", "content": user_content}]
-    try:
-        response = await asyncio.wait_for(model(messages), timeout=timeout_s)
-    except Exception as exc:  # noqa: BLE001
-        return {
-            "completed": False,
-            "confidence": 0.0,
-            "reason": "",
-            "evidence": [],
-            "missing_requirements": [],
-            "error": str(exc),
-            "fallback_used": True,
-        }
-
-    raw_text = _extract_text_from_model_response(response)
-    parsed = _parse_vlm_json(raw_text)
-    if not parsed:
-        return {
-            "completed": False,
-            "confidence": 0.0,
-            "reason": "",
-            "evidence": [],
-            "missing_requirements": [],
-            "error": "vlm_non_json_output",
-            "raw_text": raw_text[:800],
-            "fallback_used": True,
-        }
-    logger.debug("vlm.parse_json_output")
-    logger.debug(parsed)
-    evidence = parsed.get("evidence", [])
-    missing = parsed.get("missing_requirements", [])
-    return {
-        "completed": bool(parsed.get("completed", False)),
-        "confidence": float(parsed.get("confidence", 0.0) or 0.0),
-        "reason": str(parsed.get("reason", "") or ""),
-        "evidence": evidence if isinstance(evidence, list) else [],
-        "missing_requirements": missing if isinstance(missing, list) else [],
-    }
-
-def _build_skill_prompt_suffix(skill_context: str | None) -> str:
-    """构建技能上下文补充提示。
-
-    参数说明：
-        skill_context: 技能选择阶段输出的技能说明文本。
-    返回值说明：
-        str: 可直接拼接到系统提示词末尾的约束文本；无输入时返回空字符串。
-    """
-    text = (skill_context or "").strip()
-    logger.debug("Skill context length(chars): %d", len(text))
-    logger.debug("Skill context: %s", _trim_for_log(text, max_chars=260))
-    if not text:
-        return ""
-    return (
-        "\n\n[Activated Skills]\n"
-        f"{text}\n"
-        "使用方式：仅在与当前任务直接相关时参考这些技能约束；"
-        "若不相关则忽略，不要为了使用技能而使用技能。"
-    )
-
-
-def _build_memory_prompt() -> str:
-    """构建长期记忆 prompt 片段（复用于所有 agent）。"""
-    if not MEMORY_CONFIG["enabled"]:
-        return ""
-    mem = read_memory()
-    return f"\n\n[长期记忆]\n{mem}\n" if mem else ""
-
-
-@dataclass
-class AgentCapability:
-    """描述单个 Agent 能力边界的结构化模型。"""
-
-    name: str
-    role: str
-    strengths: list[str]
-    typical_tasks: list[str]
-    boundaries: list[str]
-
-
-@dataclass
-class CustomAgentDefinition:
-    """配置文件驱动的自定义 Agent 定义。"""
-
-    name: str
-    display_name: str
-    role: str
-    system_prompt: str
-    tools: list[str]
-    strengths: list[str]
-    typical_tasks: list[str]
-    boundaries: list[str]
-    model_name: str | None
-    temperature: float | None
-    max_iters: int
-
-
-def _tool_catalog() -> dict[str, tuple[Any, str]]:
-    """返回可供自定义 Agent 复用的工具目录。"""
-    return {
-        "run_shell_command": (run_shell_command, "运行受限的本地命令行工具（白名单约束）。"),
-        "run_skill_script": (run_skill_script, "在指定 execution_dir 中执行 skill 脚本。"),
-        "brave_search": (brave_search, "通过 Brave Search API 联网检索新闻与网页来源链接。"),
-        "arxiv_search": (arxiv_search, "查询 arXiv API 获取论文元数据、摘要与 PDF 链接。"),
-        "dblp_conference_search": (dblp_conference_search, "检索会议论文清单与链接（DBLP）。"),
-        "fetch_url_text": (fetch_url_text, "抓取指定 URL 的文本内容用于快速检索。"),
-        "fetch_url_readable_text": (fetch_url_readable_text, "抓取并提取网页可读文本。"),
-        "fetch_url_links": (fetch_url_links, "抓取网页并提取链接。"),
-        "download_file": (download_file, "下载 URL 文件到本地路径（支持二进制，例如 PDF）。"),
-        "extract_pdf_text": (extract_pdf_text, "从本地 PDF 文件中提取文本内容。"),
-        "extract_image_text_ocr": (extract_image_text_ocr, "从本地图片文件中执行 OCR 识别。"),
-        "read_docx_text": (read_docx_text, "读取 DOCX 文档文本内容。"),
-        "create_docx_from_text": (create_docx_from_text, "从纯文本生成 DOCX 文档。"),
-        "edit_docx": (edit_docx, "对 DOCX 文档进行查找替换、追加段落或插入表格。"),
-        "create_pdf_from_text": (create_pdf_from_text, "从纯文本生成 PDF 文档。"),
-        "read_xlsx_summary": (read_xlsx_summary, "读取 XLSX 工作簿摘要与预览。"),
-        "write_xlsx_from_records": (write_xlsx_from_records, "从记录列表生成 XLSX 文件。"),
-        "write_xlsx_from_rows": (write_xlsx_from_rows, "从行数据生成 XLSX 文件。"),
-        "write_text_file": (write_text_file, "写入本地文本文件。"),
-        "search_task_history": (search_task_history, "检索历史任务执行记录和相关文档。"),
-        "search_steward_knowledge": (search_steward_knowledge, "检索本地知识库中已存储的信息。"),
-        "store_steward_knowledge": (store_steward_knowledge, "将收集到的信息存入本地知识库。"),
-        "fetch_feishu_chat_history": (fetch_feishu_chat_history, "读取飞书会话历史消息列表。"),
-        "get_feishu_message": (get_feishu_message, "按消息 ID 获取飞书消息详情。"),
-        "update_long_term_memory": (update_long_term_memory, "更新长期记忆文件（MEMORY.md）。"),
-        "read_pptx_summary": (read_pptx_summary, "读取 PPTX/PPT 文件并返回结构化摘要。"),
-        "create_pptx_from_outline": (create_pptx_from_outline, "从幻灯片大纲列表创建新 PPTX 文件。"),
-        "edit_pptx": (edit_pptx, "综合编辑已有 PPTX。"),
-        "insert_pptx_image": (insert_pptx_image, "向指定幻灯片插入本地图片。"),
-        "set_pptx_text_style": (set_pptx_text_style, "对匹配文本应用 PPTX 字体样式。"),
-    }
-
-
-def _normalize_agent_name(raw: str) -> str:
-    value = re.sub(r"[^0-9a-zA-Z_\-]+", "_", str(raw or "").strip().lower())
-    return value.strip("_")
-
-
-def _as_str_list(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    items: list[str] = []
-    for item in value:
-        text = str(item or "").strip()
-        if text:
-            items.append(text)
-    return items
-
-
-def _builtin_agent_capabilities() -> list[AgentCapability]:
-    """返回路由可用的 Agent 能力描述字典。
-
-    返回值说明：
-        dict[str, dict[str, object]]: 以 agent 名称为键、能力画像为值的映射。
-    """
-
-    worker_role = "负责通用检索、网页阅读、学术资料收集、生成和阅读各类文档、智能管家知识库检索、本地工具执行"
-    if RAG_CONFIG["task_history_enabled"]:
-        worker_role += "、历史任务检索"
-    if MEMORY_CONFIG["enabled"]:
-        worker_role += "、长期记忆管理"
-    if SCHEDULE_CONFIG["enabled"]:
-        worker_role += "、定时任务管理"
-    worker_role += "，飞书相关的聊天历史检索（使用飞书连接时）"
-    
-    worker_strengths = [
-        "Brave/网页/arXiv/DBLP 检索",
-        "下载文件与 PDF 文本提取",
-        "Word/Excel/PDF 文档读写与编辑",
-        "Shell 与本地文件写入",
-        "智能管家知识库检索",
-    ]
-    if RAG_CONFIG["task_history_enabled"]:
-        worker_strengths.append("历史任务记录检索")
-    if MEMORY_CONFIG["enabled"]:
-        worker_strengths.append("长期记忆读写（记录用户偏好、事实信息等跨会话信息）")
-    if SCHEDULE_CONFIG["enabled"]:
-        worker_strengths.append("定时任务管理（创建、查看、取消）")
-
-    worker_typical_tasks = [
-        "检索最新论文并总结",
-        "整理或生成 Word/Excel/PDF 文档",
-        "抓取网页并提炼可执行结论",
-        "检索智能管家存储的知识（如手机采集的 OCR 文字、对话记录等）",
-    ]
-    if RAG_CONFIG["task_history_enabled"]:
-        worker_typical_tasks.append("查询之前做过的任务或历史记录")
-    if MEMORY_CONFIG["enabled"]:
-        worker_typical_tasks.append("记住用户偏好或更新长期记忆")
-    if SCHEDULE_CONFIG["enabled"]:
-        worker_typical_tasks.append("查看、创建或取消定时任务")
-
-    return [
-        AgentCapability(
-            name="steward",
-            role="负责手机端数据收集-存储-分析这一类特殊任务（Collect/Store/Analyze/Execute）",
-            strengths=[
-                "手机端数据采集与执行动作",
-            ],
-            typical_tasks=[
-                "整理今日待办并决定是否执行手机操作",
-                "采集微信信息后入库并生成建议",
-            ],
-            boundaries=[
-                "不擅长大规模网页/论文检索,不擅长直接生成总结内容",
-                "通用检索类子任务建议委派给 worker",
-            ],
-        ),
-        AgentCapability(
-            name="worker",
-            role=worker_role,
-            strengths=worker_strengths,
-            typical_tasks=worker_typical_tasks,
-            boundaries=[
-                "不直接执行手机 GUI 操作",
-            ],
-        ),
-    ]
-
-
-@lru_cache(maxsize=1)
-def _load_custom_agent_definitions() -> tuple[CustomAgentDefinition, ...]:
-    raw_items = CUSTOM_AGENT_CONFIG.get("agents", []) if isinstance(CUSTOM_AGENT_CONFIG, dict) else []
-    if not isinstance(raw_items, list) or not raw_items:
-        return ()
-
-    catalog = _tool_catalog()
-    reserved = {"worker", "steward", "router", "planner", "skillselector", "user", "mobichatbot"}
-    seen: set[str] = set()
-    defs: list[CustomAgentDefinition] = []
-
-    for idx, raw in enumerate(raw_items, start=1):
-        if not isinstance(raw, dict):
-            logger.warning("custom agent ignored: index=%d reason=not_object", idx)
-            continue
-
-        display_name = str(raw.get("agent_name") or "").strip()
-        role = str(raw.get("role") or "").strip()
-        system_prompt = str(raw.get("system_prompt") or "").strip()
-        if not display_name or not role or not system_prompt:
-            logger.warning("custom agent ignored: index=%d reason=missing_required_fields", idx)
-            continue
-
-        name = _normalize_agent_name(display_name)
-        if not name:
-            logger.warning("custom agent ignored: index=%d reason=invalid_name", idx)
-            continue
-        if name in reserved:
-            logger.warning("custom agent ignored: name=%s reason=reserved_name", name)
-            continue
-        if name in seen:
-            logger.warning("custom agent ignored: name=%s reason=duplicate", name)
-            continue
-
-        raw_tools = _as_str_list(raw.get("tools"))
-        tools = list(dict.fromkeys([_normalize_agent_name(tool) for tool in raw_tools if _normalize_agent_name(tool)]))
-        unknown_tools = [tool for tool in tools if tool not in catalog]
-        if unknown_tools:
-            logger.warning(
-                "custom agent ignored: name=%s reason=unknown_tools unknown=%s",
-                name,
-                unknown_tools,
-            )
-            continue
-
-        temperature: float | None = None
-        if raw.get("temperature") is not None:
-            try:
-                temperature = float(raw.get("temperature"))
-            except (TypeError, ValueError):
-                logger.warning("custom agent ignored: name=%s reason=invalid_temperature", name)
-                continue
-
-        max_iters = 12
-        if raw.get("max_iters") is not None:
-            try:
-                max_iters = max(1, min(50, int(raw.get("max_iters"))))
-            except (TypeError, ValueError):
-                logger.warning("custom agent ignored: name=%s reason=invalid_max_iters", name)
-                continue
-
-        model_name = str(raw.get("model_name") or "").strip() or None
-        defs.append(
-            CustomAgentDefinition(
-                name=name,
-                display_name=display_name,
-                role=role,
-                system_prompt=system_prompt,
-                tools=tools,
-                strengths=_as_str_list(raw.get("strengths")),
-                typical_tasks=_as_str_list(raw.get("typical_tasks")),
-                boundaries=_as_str_list(raw.get("boundaries")),
-                model_name=model_name,
-                temperature=temperature,
-                max_iters=max_iters,
-            )
-        )
-        seen.add(name)
-
-    return tuple(defs)
-
-
-def get_agent_capability_descriptions() -> dict[str, dict[str, object]]:
-    """返回路由可用的 Agent 能力描述字典。
-
-    返回值说明：
-        dict[str, dict[str, object]]: 以 agent 名称为键、能力画像为值的映射。
-    """
-    registry = _builtin_agent_capabilities()
-    for item in _load_custom_agent_definitions():
-        registry.append(
-            AgentCapability(
-                name=item.name,
-                role=item.role,
-                strengths=item.strengths,
-                typical_tasks=item.typical_tasks,
-                boundaries=item.boundaries,
-            )
-        )
-    return {item.name: asdict(item) for item in registry}
-
-
-def create_configured_agent_by_name(agent_name: str, *, skill_context: str | None = None) -> ReActAgent | None:
-    """根据 custom_agent.json 定义按名称构建自定义 Agent。"""
-    normalized = _normalize_agent_name(agent_name)
-    target = None
-    for item in _load_custom_agent_definitions():
-        if item.name == normalized:
-            target = item
-            break
-    if target is None:
-        return None
-
-    toolkit = Toolkit()
-    catalog = _tool_catalog()
-    for tool_name in target.tools:
-        func, desc = catalog[tool_name]
-        if tool_name == "search_task_history" and not RAG_CONFIG["task_history_enabled"]:
-            continue
-        if tool_name == "update_long_term_memory" and not MEMORY_CONFIG["enabled"]:
-            continue
-        toolkit.register_tool_function(func, func_description=desc)
-
-    sys_prompt = target.system_prompt
-    sys_prompt += _build_memory_prompt()
-    sys_prompt += _build_skill_prompt_suffix(skill_context)
-
-    return ReActAgent(
-        name=target.display_name,
-        sys_prompt=sys_prompt,
-        model=create_openai_model(
-            temperature=target.temperature,
-            model_name=target.model_name,
-        ),
-        formatter=OpenAIChatFormatter(),
-        toolkit=toolkit,
-        memory=InMemoryMemory(),
-        max_iters=target.max_iters,
-    )
+logger = logging.getLogger("seneschal.agents")
 
 
 def create_router_agent() -> ReActAgent:
@@ -635,8 +84,6 @@ def create_router_agent() -> ReActAgent:
             model_name=MODEL_CONFIG.get("orchestrator_model_name"),
         ),
         formatter=OpenAIChatFormatter(),
-        # toolkit=Toolkit(),
-        # memory=InMemoryMemory(),
         max_iters=1,
     )
 
@@ -660,8 +107,6 @@ def create_planner_agent() -> ReActAgent:
             model_name=MODEL_CONFIG.get("orchestrator_model_name"),
         ),
         formatter=OpenAIChatFormatter(),
-        # toolkit=Toolkit(),
-        # memory=InMemoryMemory(),
         max_iters=1,
     )
 
@@ -793,7 +238,7 @@ def create_worker_agent(
         write_text_file,
         func_description="写入本地文本文件，用于保存结果或日志。",
     )
-        
+
     toolkit.register_tool_function(
         search_steward_knowledge,
         func_description="检索本地知识库中已存储的信息（由智能管家从手机中提取并存储）。",
@@ -904,7 +349,7 @@ def create_worker_agent(
         )
 
     if SCHEDULE_CONFIG["enabled"]:
-        from .tools.schedule import list_scheduled_tasks, cancel_scheduled_task, create_scheduled_task
+        from ..tools.schedule import list_scheduled_tasks, cancel_scheduled_task, create_scheduled_task
 
         bound_create = functools.partial(create_scheduled_task, bound_job_context=job_context or {})
         bound_create.__name__ = "create_scheduled_task"
@@ -1026,7 +471,7 @@ def create_steward_agent(
         extract_image_text_ocr,
         func_description="从指定图片中提取文字。",
     )
-    
+
     async def call_mobi_collect_with_retry_report(task_desc: str, success_criteria: str = "") -> ToolResponse:
         """执行带重试上限的 mobi 采集，并返回结构化证据包。
 
@@ -1040,6 +485,7 @@ def create_steward_agent(
         no_criteria_mode = not bool((success_criteria or "").strip())
         vlm_enabled = _env_bool("STEWARD_MOBI_VLM_ENABLED", True)
         vlm_last_n = max(1, int(os.environ.get("STEWARD_MOBI_VLM_LAST_N", "5")))
+        vlm_last_n_steps = max(1, int(os.environ.get("STEWARD_MOBI_VLM_LAST_N_STEPS", str(vlm_last_n))))
         vlm_timeout_s = max(5.0, float(os.environ.get("STEWARD_MOBI_VLM_TIMEOUT_S", "25")))
         vlm_max_reasonings_chars = max(1000, int(os.environ.get("STEWARD_MOBI_VLM_MAX_REASONINGS_CHARS", "12000")))
         vlm_model = create_openai_model(stream=False, temperature=0.0) if vlm_enabled else None
@@ -1051,12 +497,7 @@ def create_steward_agent(
             last_reasoning = str(md.get("last_reasoning", "") or "")
             extracted_info = md.get("extracted_info", {}) if isinstance(md.get("extracted_info"), dict) else {}
             tool_success = bool(md.get("success", False))
-            has_evidence = bool(
-                ocr_text.strip()
-                or last_reasoning.strip()
-                or extracted_info
-                or md.get("raw_data")
-            )
+            has_evidence = bool(ocr_text.strip() or last_reasoning.strip() or extracted_info or md.get("raw_data"))
             criteria_matched_text = False
             criteria_matched_vlm = False
             vlm_verdict: dict[str, Any] = {
@@ -1065,37 +506,35 @@ def create_steward_agent(
                 "reason": "",
                 "evidence": [],
                 "missing_requirements": [],
+                "summary": {
+                    "screen_state": "",
+                    "trajectory_last_steps": [],
+                    "relevant_information": [],
+                    "extracted_text": [],
+                },
             }
             vlm_images_used: list[str] = []
             reasonings_count = 0
 
             if success_criteria:
-                haystack = (
-                    ocr_text
-                    + "\n"
-                    + last_reasoning
-                    + "\n"
-                    + json.dumps(extracted_info, ensure_ascii=False)
-                )
+                haystack = ocr_text + "\n" + last_reasoning + "\n" + json.dumps(extracted_info, ensure_ascii=False)
                 criteria_matched_text = tool_success and (success_criteria in haystack)
                 if (not criteria_matched_text) and tool_success and has_evidence:
                     generic_tokens = ("成功获取", "获取到", "收集到", "活动信息", "最近活动")
                     if any(token in success_criteria for token in generic_tokens):
                         criteria_matched_text = True
             else:
-                # 无显式标准时，只要拿到可用证据即可继续由 Agent 判定。
                 criteria_matched_text = tool_success and has_evidence
 
             if vlm_enabled and vlm_model is not None and tool_success and has_evidence:
                 vlm_evidence = _extract_vlm_evidence(
                     md,
                     last_n_images=vlm_last_n,
+                    last_n_steps=vlm_last_n_steps,
                     max_reasonings_chars=vlm_max_reasonings_chars,
                 )
                 reasonings_count = int(vlm_evidence.get("reasonings_count", 0) or 0)
-                vlm_images_used = [
-                    str(p) for p in vlm_evidence.get("images_selected", []) if isinstance(p, str)
-                ]
+                vlm_images_used = [str(p) for p in vlm_evidence.get("images_selected", []) if isinstance(p, str)]
                 vlm_verdict = await _judge_completion_with_vlm(
                     model=vlm_model,
                     task_desc=str(vlm_evidence.get("task_description", "") or current_task),
@@ -1104,14 +543,18 @@ def create_steward_agent(
                     step_count=int(vlm_evidence.get("step_count", 0) or 0),
                     action_count=int(vlm_evidence.get("action_count", 0) or 0),
                     reasonings_text=str(vlm_evidence.get("reasonings_text", "")),
-                    image_data_urls=[
-                        str(u) for u in vlm_evidence.get("image_data_urls", []) if isinstance(u, str)
-                    ],
+                    recent_actions_text=str(vlm_evidence.get("recent_actions_text", "")),
+                    recent_reacts_text=str(vlm_evidence.get("recent_reacts_text", "")),
+                    recent_ocr_text=str(vlm_evidence.get("recent_ocr_text", "")),
+                    ocr_full_text=str(vlm_evidence.get("ocr_full_text", "")),
+                    last_n_steps=int(vlm_evidence.get("last_n_steps", vlm_last_n_steps) or vlm_last_n_steps),
+                    image_data_urls=[str(u) for u in vlm_evidence.get("image_data_urls", []) if isinstance(u, str)],
                     timeout_s=vlm_timeout_s,
                 )
                 criteria_matched_vlm = bool(vlm_verdict.get("completed", False))
 
             criteria_matched = criteria_matched_text or criteria_matched_vlm
+            vlm_summary = vlm_verdict.get("summary", {}) if isinstance(vlm_verdict.get("summary"), dict) else {}
 
             attempt_item = {
                 "attempt": idx,
@@ -1135,6 +578,10 @@ def create_steward_agent(
                 "vlm_images_used": vlm_images_used,
                 "reasonings_count": reasonings_count,
                 "vlm_missing_requirements": vlm_verdict.get("missing_requirements", []),
+                "vlm_summary_screen_state": str(vlm_summary.get("screen_state", "") or ""),
+                "vlm_summary_last_steps": vlm_summary.get("trajectory_last_steps", []),
+                "vlm_summary_relevant_information": vlm_summary.get("relevant_information", []),
+                "vlm_summary_extracted_text": vlm_summary.get("extracted_text", []),
             }
             attempts.append(attempt_item)
 
@@ -1143,11 +590,8 @@ def create_steward_agent(
 
             if idx <= retry_cap:
                 failure_reason = "criteria_not_matched" if success_criteria else "no_evidence_collected"
-                current_task = (
-                    f"{task_desc}\n"
-                )
-                logger.info(f"重试要求(第{idx}次失败，原因:{failure_reason})："
-                    "请严格按目标完成后立即停止；避免重复无效操作；保留可验证证据。")
+                current_task = f"{task_desc}\n"
+                logger.info(f"重试要求(第{idx}次失败，原因:{failure_reason})：" "请严格按目标完成后立即停止；避免重复无效操作；保留可验证证据。")
 
         final_attempt = attempts[-1] if attempts else {}
         pack: dict[str, object] = {
@@ -1162,6 +606,7 @@ def create_steward_agent(
             "validation_mode": "text_or_vlm",
             "vlm_enabled": vlm_enabled,
             "vlm_last_n": vlm_last_n,
+            "vlm_last_n_steps": vlm_last_n_steps,
             "attempts": attempts,
         }
 
@@ -1175,8 +620,27 @@ def create_steward_agent(
                 "latest_ocr_preview": final_attempt.get("ocr_preview", ""),
                 "latest_vlm_reason": final_attempt.get("vlm_reason", ""),
                 "vlm_missing_requirements": final_attempt.get("vlm_missing_requirements", []),
+                "latest_vlm_summary_screen_state": final_attempt.get("vlm_summary_screen_state", ""),
+                "latest_vlm_summary_last_steps": final_attempt.get("vlm_summary_last_steps", []),
+                "latest_vlm_summary_relevant_information": final_attempt.get("vlm_summary_relevant_information", []),
+                "latest_vlm_summary_extracted_text": final_attempt.get("vlm_summary_extracted_text", []),
                 "next_action_recommendation": "agent_decide_retry_or_handoff",
             }
+
+        logger.info(f"[MobiAgent] 收集证据包：{_trim_for_log(json.dumps(pack, ensure_ascii=False))}")
+
+        relevant_info_lines = [
+            f"- {str(item).strip()}"
+            for item in final_attempt.get("vlm_summary_relevant_information", [])
+            if str(item).strip()
+        ]
+        extracted_text_lines = [
+            f"- {str(item).strip()}"
+            for item in final_attempt.get("vlm_summary_extracted_text", [])
+            if str(item).strip()
+        ]
+        relevant_info_block = "\n".join(relevant_info_lines) if relevant_info_lines else "[empty]"
+        extracted_text_block = "\n".join(extracted_text_lines) if extracted_text_lines else "[empty]"
 
         return ToolResponse(
             content=[
@@ -1190,6 +654,9 @@ def create_steward_agent(
                         f"criteria_matched: {criteria_matched}\n"
                         f"最后状态提示: {final_attempt.get('status_hint', '')}\n"
                         f"OCR摘要: {str(final_attempt.get('ocr_preview', '') or '')[:500]}\n"
+                        f"VLM页面摘要: {str(final_attempt.get('vlm_summary_screen_state', '') or '')[:300]}\n"
+                        f"VLM目标相关信息:\n{relevant_info_block}\n"
+                        f"VLM截图提取文本:\n{extracted_text_block}\n"
                         "注意：该结果仅为证据汇总，最终完成判定必须由 Agent 自主做出。"
                     ),
                 ),
@@ -1239,18 +706,20 @@ def create_steward_agent(
 1. 理解用户的需求和指令
 2. 规划并执行数据收集、存储、分析和操作的完整流程
 3. 通过调用工具与手机操作Agent如MobiAgent（手机端）协作
-4. 必要时委派子任务给 Worker Agent（例如快速检索或命令行检查）
 
 ## 工作流程规范
 当用户要求进行数据整理或分析时，请严格按照以下步骤执行：
 
 ### 收集与验证 (Collect + Verify)
 - 优先使用 `call_mobi_collect_with_retry_report` 执行手机任务并获取证据包
-- 显式重试上限：最多 {retry_cap} 次重试（总尝试次数 {retry_cap + 1}）
-- 必须基于返回证据（截图路径、OCR文本、动作/推理历史）自行判断任务是否完成
-- 不要把工具返回中的状态提示当作最终真值；它只能作为参考
+- 显式重试上限：最多 {retry_cap} 次重试
+- 单一App原则：严禁将跨 App 的任务混在一个指令中。每个子任务必须仅对应 1 个 App 的 1 种场景
+- 禁止过度拆分：不要使用 plan 工具去拆分单个 App 内的微操，交给 MobiAgent 自行推理
+- 必须基于返回证据（截图路径、OCR文本、动作/推理历史）自行判断任务是否完成，不要把工具返回中的状态提示当作最终真值；它只能作为参考
+- 对于购买、下单、发送类任务请勿重试，执行结束返回后，判断任务结果即可
+- 避免使用plan工具拆分单个APP内部的任务，每个任务只能对应一个APP中的1种任务场景
 - 若任务未完成，你必须在上限内改写任务并重试；超限后停止继续操作
-- 每次重试要在回复中说明失败依据与改写思路
+- 每次重试在回复中说明失败依据与改写思路
 - 例如：获取微信聊天截图、日历事件、通知消息等
 
 ### 失败报告模板 (Failure Pack)
@@ -1269,11 +738,6 @@ def create_steward_agent(
 
 ### 分析 (Analyze)
 - 根据管家知识库检索到的原始片段，自行分析总结待办事项、账单、重要提醒等
-
-### 委派 (Delegate)
-- 可将通用检索、浏览器查询或本地命令任务交给 `delegate_to_worker`
-- 可将小任务交给 `delegate_to_worker`，减少主流程干扰
-- 涉及联网新闻/网页检索时，优先委派 Worker 使用 `brave_search` 再抓取正文
 
 ### 执行 (Execute)
 - 如果分析发现需要执行的操作（如添加日程、设置提醒）
@@ -1322,36 +786,11 @@ def create_chat_agent(*, web_search_enabled: bool = True) -> ReActAgent:
     """创建网关 chat 模式使用的基础对话 Agent。"""
     toolkit = Toolkit()
 
-    # if web_search_enabled:
-    #     toolkit.register_tool_function(
-    #         brave_search,
-    #         func_description="通过 Brave Search API 联网检索新闻与网页来源链接。",
-    #     )
-
-    #     toolkit.register_tool_function(
-    #         fetch_url_text,
-    #         func_description="抓取指定 URL 的文本内容用于快速检索。",
-    #     )
-
-    #     toolkit.register_tool_function(
-    #         fetch_url_readable_text,
-    #         func_description="抓取并提取网页可读文本，用于快速理解页面内容。",
-    #     )
-
-    #     toolkit.register_tool_function(
-    #         fetch_url_links,
-    #         func_description="抓取网页并提取链接，用于发现相关来源并继续检索。",
-    #     )
-    
-    # 根据联网配置，开启或关闭工具组
     toolkit.create_tool_group(
-         group_name="web_search",
+        group_name="web_search",
         description="用于网页搜索的工具函数。",
         active=web_search_enabled,
-        # 使用这些工具时的注意事项
-        notes="""
-优先使用 brave_search 直接获取结果，若获取结果失败，再使用 fetch_* 工具尝试获取。
-""",
+        notes="""优先使用 brave_search 直接获取结果，若获取结果失败，再使用 fetch_* 工具尝试获取。""",
     )
     toolkit.register_tool_function(
         brave_search,

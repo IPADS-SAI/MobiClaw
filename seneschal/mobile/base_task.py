@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Tuple
 import re
 import textwrap
 from PIL import Image, ImageDraw, ImageFont
+from .interrupts import ensure_not_interrupted, interruptible_sleep
 
 # 使用模块级别的logger（级别由 setup_logging() 统一配置）
 logger = logging.getLogger(__name__)
@@ -183,6 +184,7 @@ class BaseTask(ABC):
         start_time = time.time()
         
         try:
+            ensure_not_interrupted()
             # 如果启用 planning，先进行任务规划
             if self.enable_planning:
                 logger.info("执行 planning...")
@@ -216,6 +218,7 @@ class BaseTask(ABC):
             logger.info(60*"=")
             logger.info(f"step_count: {self.step_count}")
             logger.info(60*"=")
+            ensure_not_interrupted()
             if self.use_step_loop:
                 # 步骤循环模式：框架控制循环
                 result = self._execute_with_step_loop()
@@ -240,7 +243,20 @@ class BaseTask(ABC):
             
             logger.info(f"任务已完成，耗时{self.total_time:.2f}秒")
             return result
-            
+        except KeyboardInterrupt:
+            logger.warning("任务被用户中断")
+            self.total_time = time.time() - start_time
+            result = {
+                "status": "interrupted",
+                "error": "interrupted by user",
+                "step_count": self.step_count,
+                "total_time": self.total_time,
+            }
+            try:
+                self._save_results(result)
+            except Exception:
+                logger.warning("保存中断结果失败", exc_info=True)
+            raise
         except Exception as e:
             logger.error(f"任务执行失败: {e}", exc_info=True)
             self.total_time = time.time() - start_time
@@ -263,6 +279,7 @@ class BaseTask(ABC):
         logger.info("使用步骤循环模式")
         
         while True:
+            ensure_not_interrupted()
             if self.step_count >= self.max_steps:
                 logger.warning(f"达到最大步数: {self.max_steps}")
                 return {
@@ -277,12 +294,14 @@ class BaseTask(ABC):
             logger.info(f"{'='*50}")
             
             try:
+                ensure_not_interrupted()
                 screenshot_path = self._save_screenshot(self.step_count)
                 hierarchy_path = self._save_hierarchy(self.step_count)
             except Exception as e:
                 logger.error(f"保存状态失败: {e}")
             
             try:
+                ensure_not_interrupted()
                 step_start_time = time.time()
                 action_seq = self.execute_step(self.step_count)
                 step_elapsed_time = time.time() - step_start_time
@@ -317,10 +336,11 @@ class BaseTask(ABC):
                         "message": f"Step {self.step_count} 任务完成"
                     }
                 
-                time.sleep(2)
+                interruptible_sleep(2)
                 
                 if hasattr(self, 'reflect_action') and callable(getattr(self, 'reflect_action', None)):            
                     try:
+                        ensure_not_interrupted()
                         reflect_start_time = time.time()
                         self.reflect_action(self.step_count)
                         step_elapsed_time += time.time() - reflect_start_time
@@ -486,6 +506,7 @@ class BaseTask(ABC):
             params: 动作参数
         """
         logger.info(f"执行 {action_type}：{params}")
+        ensure_not_interrupted()
         
         action_type = action_type.lower()
         
@@ -526,7 +547,7 @@ class BaseTask(ABC):
             text = params.get('text', '')
             self.device.input(text)
             # 尝试在输入后直接回车确定、搜索
-            time.sleep(0.2)
+            interruptible_sleep(0.2)
             self.device.keyevent('ENTER')
             
         elif action_type in ['swipe', 'scroll']:
@@ -560,7 +581,7 @@ class BaseTask(ABC):
                 
         elif action_type == 'wait':
             seconds = params.get('seconds', 1)
-            time.sleep(seconds)
+            interruptible_sleep(seconds)
             
         else:
             logger.warning(f"未知的动作类型: {action_type}")
@@ -947,4 +968,3 @@ class BaseTask(ABC):
             y += h_line + line_spacing
 
         return new_image
-
