@@ -455,8 +455,13 @@ def _available_skill_profiles() -> tuple[SkillProfile, ...]:
         if not skill_file.exists() or not skill_file.is_file():
             continue
         try:
-            raw = skill_file.read_text(encoding="utf-8")
-        except OSError:
+            raw = skill_file.read_text(encoding="utf-8", errors="replace")
+        except Exception as exc:
+            logger.warning(
+                "orchestrator.skill.read_failed path=%s error=%s",
+                str(skill_file),
+                str(exc),
+            )
             continue
         meta = _parse_skill_frontmatter(raw)
         name = str(meta.get("name") or child.name).strip().lower()
@@ -474,6 +479,29 @@ def _available_skill_profiles() -> tuple[SkillProfile, ...]:
             )
         )
     return tuple(profiles)
+
+
+def _load_skill_content_direct(name: str) -> tuple[str, str]:
+    """从技能目录直接读取技能文档，绕过画像缓存做兜底。"""
+    skill_name = (name or "").strip().lower()
+    if not skill_name:
+        return "", ""
+    skill_file = _skills_root() / skill_name / "SKILL.md"
+    if not skill_file.exists() or not skill_file.is_file():
+        return "", ""
+    try:
+        raw = skill_file.read_text(encoding="utf-8", errors="replace").strip()
+    except Exception as exc:
+        logger.warning(
+            "orchestrator.skill.direct_read_failed name=%s path=%s error=%s",
+            skill_name,
+            str(skill_file),
+            str(exc),
+        )
+        return "", ""
+    meta = _parse_skill_frontmatter(raw)
+    description = str(meta.get("description") or "").strip() or _skill_content_hint(raw)
+    return raw, description
 
 
 def _rule_select_skills(task: str, agent_name: str, max_candidates: int) -> list[dict[str, Any]]:
@@ -603,18 +631,35 @@ def _skill_prompt_context(selected_skills: list[str]) -> str:
     blocks: list[str] = []
     for name in selected_skills:
         profile = profile_map.get(name)
-        if not profile:
-            continue
-        content = (profile.full_content or "").strip()
+        content = ""
+        skill_dir = ""
+        skill_name = str(name or "").strip().lower()
+
+        if profile:
+            content = (profile.full_content or "").strip()
+            if not content:
+                content = (profile.description or profile.content_hint or "").strip()
+            skill_dir = profile.skill_dir
+
+        # 兜底：缓存缺失或内容为空时，直接按名字读取技能文件。
         if not content:
-            content = (profile.description or profile.content_hint or "").strip()
+            raw, fallback_desc = _load_skill_content_direct(skill_name)
+            content = raw or fallback_desc
+            if not skill_dir:
+                skill_dir = str((_skills_root() / skill_name).resolve())
+
         if not content:
+            logger.warning(
+                "orchestrator.skill.context_missing name=%s selected=%s",
+                skill_name,
+                selected_skills,
+            )
             continue
         blocks.append(
             "\n".join(
                 [
-                    f"[Skill: {profile.name}]",
-                    f"execution_dir (just for skill scripts): {profile.skill_dir}",
+                    f"[Skill: {skill_name}]",
+                    f"execution_dir (just for skill scripts): {skill_dir}",
                     content,
                 ]
             )
@@ -1176,12 +1221,19 @@ async def _run_one_agent(
     skill_context = _skill_prompt_context(skill_list)
 
     # 重新组装，和JobContext字段对齐，透传给worker agent，用于创建定时任务
+    ctx = external_context if isinstance(external_context, dict) else {}
+    feishu_ctx = ctx.get("feishu")
+    feishu_ctx = feishu_ctx if isinstance(feishu_ctx, dict) else {}
     job_ctx_dict = {
-        "feishu_chat_id": external_context.get("feishu", {}).get("chat_id", None),
-        "feishu_user_open_id": external_context.get("feishu", {}).get("open_id", None),
-        "feishu_message_id": external_context.get("feishu", {}).get("message_id", None),
+        "feishu_chat_id": feishu_ctx.get("chat_id", None),
+        "feishu_user_open_id": feishu_ctx.get("open_id", None),
+        "feishu_message_id": feishu_ctx.get("message_id", None),
     }
     job_ctx_dict["feishu_receive_id_type"] = "chat_id" if job_ctx_dict["feishu_chat_id"] else "open_id"
+    job_ctx_dict["job_output_dir"] = str(output_dir or "")
+    job_ctx_dict["job_tmp_dir"] = str(temp_dir or "")
+    if output_dir:
+        job_ctx_dict["mobi_output_dir"] = str((Path(output_dir) / "mobile_exec").resolve())
     
     agent = _build_agent(agent_name, skill_context=skill_context, job_context=job_ctx_dict)
     if session_manager is not None and session_handle is not None:

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""MobiAgent 工具封装。"""
+"""Local mobile executor tool wrappers (legacy mobi API-compatible)."""
 
 from __future__ import annotations
 
@@ -8,82 +8,73 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import requests
-
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
-from ..config import MOBI_AGENT_CONFIG
-from .mock_data import get_mock_action_result, get_mock_collect_result
+from ..config import MOBILE_EXECUTOR_CONFIG
+from ..mobile import MobileExecutor
+from .mock_data import get_mock_action_result
 
 logger = logging.getLogger(__name__)
 
-
-def _load_execution_from_data_dir(data_dir: str) -> dict:
-    if not data_dir:
-        return {}
-    path = Path(data_dir) / "execution_result.json"
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+_EXECUTOR = MobileExecutor()
+_DEFAULT_OUTPUT_DIR = Path(str(MOBILE_EXECUTOR_CONFIG.get("output_dir", "outputs/mobile_exec")))
 
 
-def _normalize_collect_result(result: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
-    success = bool(result.get("success", False))
-    message = str(result.get("message", ""))
-    data = result.get("data")
-    collected_data = data if isinstance(data, dict) else {}
-    return success, message, collected_data
+def _resolve_output_dir(output_dir: str | None = None) -> str:
+    target = (output_dir or "").strip()
+    if not target:
+        target = str(_DEFAULT_OUTPUT_DIR)
+    path = Path(target)
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
 
 
-def _extract_summary_from_execution(collected_data: dict[str, Any]) -> dict[str, Any]:
-    execution = collected_data.get("execution", {})
-    if not execution:
-        execution = _load_execution_from_data_dir(collected_data.get("data_dir", ""))
+def _flatten_execution(execution: dict[str, Any]) -> dict[str, Any]:
+    summary = execution.get("summary") if isinstance(execution.get("summary"), dict) else {}
+    history = execution.get("history") if isinstance(execution.get("history"), dict) else {}
+    ocr = execution.get("ocr") if isinstance(execution.get("ocr"), dict) else {}
+    artifacts = execution.get("artifacts") if isinstance(execution.get("artifacts"), dict) else {}
 
-    summary = execution.get("summary", {}) if isinstance(execution, dict) else {}
-    ocr = execution.get("ocr", {}) if isinstance(execution, dict) else {}
-    history = execution.get("history", {}) if isinstance(execution, dict) else {}
-    ocr_text = (ocr.get("full_text") if isinstance(ocr, dict) else "") or collected_data.get("ocr_text", "")
-    screenshot_path = (summary.get("final_screenshot_path") if isinstance(summary, dict) else "") or collected_data.get("screenshot_path", "")
-    reasonings = history.get("reasonings", []) if isinstance(history, dict) else []
-    last_reasoning = reasonings[-1] if isinstance(reasonings, list) and reasonings else ""
-    action_count = int(summary.get("action_count", 0)) if isinstance(summary, dict) else 0
-    step_count = int(summary.get("step_count", 0)) if isinstance(summary, dict) else 0
-    status_hint = str(summary.get("status_hint", "")) if isinstance(summary, dict) else ""
-    run_dir = str(execution.get("run_dir", "")) if isinstance(execution, dict) else ""
-    index_file = str(execution.get("index_file", "")) if isinstance(execution, dict) else ""
+    reasonings = history.get("reasonings") if isinstance(history.get("reasonings"), list) else []
+    last_reasoning = str(reasonings[-1]) if reasonings else ""
+    images = artifacts.get("images") if isinstance(artifacts.get("images"), list) else []
+
+    run_dir = str(execution.get("run_dir", ""))
+    index_file = str(execution.get("index_file", "")) or (str(Path(run_dir) / "execution_result.json") if run_dir else "")
 
     return {
         "execution": execution,
-        "ocr_text": ocr_text,
-        "screenshot_path": screenshot_path,
+        "ocr_text": str(ocr.get("full_text", "")),
+        "screenshot_path": str(summary.get("final_screenshot_path", images[-1] if images else "")),
         "last_reasoning": last_reasoning,
-        "action_count": action_count,
-        "step_count": step_count,
-        "status_hint": status_hint,
+        "action_count": int(summary.get("action_count", 0) or 0),
+        "step_count": int(summary.get("step_count", 0) or 0),
+        "status_hint": str(summary.get("status_hint", "")),
         "run_dir": run_dir,
         "index_file": index_file,
     }
 
 
-def _collect_request(task_desc: str, timeout: int = 120) -> dict[str, Any]:
-    api_url = f"{MOBI_AGENT_CONFIG['base_url']}/api/v1/collect"
-    logger.info("mobi.collect.request url=%s task_desc=%s", api_url, (task_desc or "")[:120])
-    headers = {
-        "Authorization": f"Bearer {MOBI_AGENT_CONFIG['api_key']}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "task": task_desc,
-        "options": {"ocr_enabled": True, "timeout": timeout},
-    }
-    response = requests.post(api_url, headers=headers, json=payload, timeout=max(timeout + 30, 60))
-    response.raise_for_status()
-    return response.json()
+def _build_task_from_action(action_type: str, params: dict[str, Any]) -> str:
+    if action_type == "add_calendar_event":
+        title = params.get("title", "日程")
+        date = params.get("date", "")
+        time_str = params.get("time", "")
+        return f"打开系统日历并创建日程：{title}。日期{date} 时间{time_str}。"
+    if action_type == "send_message":
+        target = params.get("target", params.get("contact", "对方"))
+        content = params.get("content", params.get("text", ""))
+        return f"通过微信给{target}发送消息：{content}"
+    if action_type == "set_reminder":
+        content = params.get("content", params.get("title", "提醒事项"))
+        remind_time = params.get("time", "")
+        date = params.get("date", "")
+        return f"在系统提醒事项中创建提醒：{content}。日期{date} 时间{remind_time}。"
+    if action_type == "open_app":
+        app_name = params.get("app", params.get("app_name", ""))
+        return f"打开应用 {app_name}"
+    return f"完成以下任务：{json.dumps({'action_type': action_type, 'params': params}, ensure_ascii=False)}"
 
 
 async def call_mobi_collect(task_desc: str) -> ToolResponse:
@@ -91,13 +82,18 @@ async def call_mobi_collect(task_desc: str) -> ToolResponse:
     return await call_mobi_collect_verified(task_desc, max_retries=0)
 
 
-async def call_mobi_collect_verified(task_desc: str, max_retries: int = 2) -> ToolResponse:
-    """兼容接口：执行一次收集并返回证据，不做工具内验证或自动重试。"""
-    _ = max_retries  # kept for backward compatibility
+async def call_mobi_collect_verified(
+    task_desc: str,
+    max_retries: int = 2,
+    output_dir: str | None = None,
+) -> ToolResponse:
+    """执行本地移动任务，并返回兼容结构化证据。"""
+    _ = max_retries
     try:
-        raw = _collect_request(task_desc, timeout=180)
-        success, message, collected_data = _normalize_collect_result(raw)
-        logger.info("mobi.collect.result success=%s message=%s", success, (message or "")[:120])
+        result = _EXECUTOR.run(task=task_desc, output_dir=_resolve_output_dir(output_dir), provider=None)
+        normalized = _flatten_execution(result.execution)
+        success = bool(result.success)
+
         if not success:
             return ToolResponse(
                 content=[
@@ -106,15 +102,15 @@ async def call_mobi_collect_verified(task_desc: str, max_retries: int = 2) -> To
                         text=(
                             "[MobiAgent 收集失败]\n"
                             f"任务: {task_desc}\n"
-                            f"message: {message}\n"
-                            f"status: {collected_data.get('status', '')}\n"
-                            f"stderr: {(collected_data.get('stderr', '') if isinstance(collected_data, dict) else '')[:500]}"
+                            f"message: {result.message}\n"
+                            f"status_hint: {normalized.get('status_hint', '')}\n"
+                            f"run_dir: {normalized.get('run_dir', '')}"
                         ),
                     )
                 ],
-                metadata={"success": False, "requires_agent_validation": True, "raw_data": collected_data},
+                metadata={"success": False, "requires_agent_validation": True, **normalized},
             )
-        normalized = _extract_summary_from_execution(collected_data)
+
         return ToolResponse(
             content=[
                 TextBlock(
@@ -136,23 +132,18 @@ async def call_mobi_collect_verified(task_desc: str, max_retries: int = 2) -> To
                 "original_task": task_desc,
                 "final_task": task_desc,
                 **normalized,
-                "raw_data": collected_data,
             },
         )
-    except requests.exceptions.RequestException as exc:
-        return ToolResponse(
-            content=[TextBlock(type="text", text=f"[MobiAgent 调用失败] 请求异常: {exc}")],
-            metadata={"success": False, "requires_agent_validation": True, "error": str(exc)},
-        )
     except Exception as exc:  # noqa: BLE001
+        logger.exception("local mobile collect failed")
         return ToolResponse(
             content=[TextBlock(type="text", text=f"[MobiAgent 调用失败] 错误: {exc}")],
             metadata={"success": False, "requires_agent_validation": True, "error": str(exc)},
         )
 
 
-async def call_mobi_action(action_type: str, payload: str) -> ToolResponse:
-    """指挥 MobiAgent 执行手机端的 GUI 操作。"""
+async def call_mobi_action(action_type: str, payload: str, output_dir: str | None = None) -> ToolResponse:
+    """指挥本地移动执行器执行手机 GUI 操作。"""
     logger.info("mobi.action.request action_type=%s", action_type)
     try:
         try:
@@ -160,71 +151,44 @@ async def call_mobi_action(action_type: str, payload: str) -> ToolResponse:
         except json.JSONDecodeError:
             payload_dict = {"raw_input": payload}
 
-        api_url = f"{MOBI_AGENT_CONFIG['base_url']}/api/v1/action"
-        headers = {
-            "Authorization": f"Bearer {MOBI_AGENT_CONFIG['api_key']}",
-            "Content-Type": "application/json",
-        }
-        request_payload = {
-            "action_type": action_type,
-            "params": payload_dict,
-            "options": {
-                "wait_for_completion": True,
-                "timeout": 30,
-            },
-        }
-
-        response = requests.post(
-            api_url,
-            headers=headers,
-            json=request_payload,
-            timeout=60,
-        )
-        response.raise_for_status()
-        result = response.json()
-
-        success = result.get("success", False)
-        message = result.get("message", "操作已执行")
+        task_desc = _build_task_from_action(action_type, payload_dict if isinstance(payload_dict, dict) else {})
+        result = _EXECUTOR.run(task=task_desc, output_dir=_resolve_output_dir(output_dir), provider=None)
+        normalized = _flatten_execution(result.execution)
 
         return ToolResponse(
             content=[
                 TextBlock(
                     type="text",
                     text=(
-                        f"[MobiAgent 操作执行]\n"
+                        "[MobiAgent 操作执行]\n"
                         f"操作类型: {action_type}\n"
                         f"参数: {json.dumps(payload_dict, ensure_ascii=False)}\n"
-                        f"结果: {'成功' if success else '失败'}\n"
-                        f"消息: {message}"
+                        f"结果: {'成功' if result.success else '失败'}\n"
+                        f"消息: {result.message}"
                     ),
-                ),
+                )
             ],
-            metadata={"success": success, "action_type": action_type},
+            metadata={
+                "success": bool(result.success),
+                "action_type": action_type,
+                **normalized,
+            },
         )
 
-    except requests.exceptions.RequestException as e:
+    except Exception as exc:  # noqa: BLE001
         mock_result = get_mock_action_result(action_type, payload)
         return ToolResponse(
             content=[
                 TextBlock(
                     type="text",
                     text=(
-                        f"[MobiAgent Mock 模式 - 操作执行]\n"
+                        "[MobiAgent Mock 模式 - 操作执行]\n"
                         f"操作类型: {action_type}\n"
                         f"参数: {payload}\n"
                         f"模拟执行结果: {mock_result}\n"
-                        f"(实际错误: {str(e)[:100]})"
+                        f"(实际错误: {str(exc)[:120]})"
                     ),
-                ),
+                )
             ],
             metadata={"mock": True, "result": mock_result},
-        )
-    except Exception as e:
-        return ToolResponse(
-            content=[
-                TextBlock(
-                    type="text",
-                    text=f"[MobiAgent 操作执行失败] 错误: {str(e)}",
-                ),
-            ],
         )

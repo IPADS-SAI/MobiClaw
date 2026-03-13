@@ -7,6 +7,36 @@ import os
 from pathlib import Path
 
 
+def _strip_inline_comment(value: str) -> str:
+    """Strip inline comments while preserving # inside quotes."""
+    in_single = False
+    in_double = False
+    escaped = False
+    out: list[str] = []
+
+    for ch in value:
+        if escaped:
+            out.append(ch)
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            out.append(ch)
+            continue
+        if ch == "'" and not in_double:
+            in_single = not in_single
+            out.append(ch)
+            continue
+        if ch == '"' and not in_single:
+            in_double = not in_double
+            out.append(ch)
+            continue
+        if ch == "#" and not in_single and not in_double:
+            break
+        out.append(ch)
+    return "".join(out).strip()
+
+
 def _parse_env_line(raw_line: str) -> tuple[str, str] | None:
     line = raw_line.strip()
     if not line or line.startswith("#"):
@@ -17,7 +47,9 @@ def _parse_env_line(raw_line: str) -> tuple[str, str] | None:
         return None
     key, value = line.split("=", 1)
     key = key.strip()
-    value = value.strip().strip('"').strip("'")
+    value = _strip_inline_comment(value)
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        value = value[1:-1]
     if not key:
         return None
     return key, value
@@ -41,4 +73,3 @@ def load_project_env(*, override: bool = False) -> Path:
     env_path = Path(__file__).resolve().parents[1] / ".env"
     load_env_file(env_path, override=override)
     return env_path
-
