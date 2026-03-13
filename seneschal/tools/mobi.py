@@ -87,7 +87,13 @@ async def call_mobi_collect_verified(
     max_retries: int = 2,
     output_dir: str | None = None,
 ) -> ToolResponse:
-    """执行本地移动任务，并返回兼容结构化证据。"""
+    """执行本地移动任务，并返回兼容结构化证据。
+
+    Args:
+        task_desc: 待执行的手机任务描述。
+        max_retries: 兼容参数，当前本地执行器路径中不额外使用。
+        output_dir: 可选输出目录，用于保存执行产物。
+    """
     _ = max_retries
     try:
         result = _EXECUTOR.run(task=task_desc, output_dir=_resolve_output_dir(output_dir), provider=None)
@@ -143,7 +149,13 @@ async def call_mobi_collect_verified(
 
 
 async def call_mobi_action(action_type: str, payload: str, output_dir: str | None = None) -> ToolResponse:
-    """指挥本地移动执行器执行手机 GUI 操作。"""
+    """指挥本地移动执行器执行手机 GUI 操作。
+
+    Args:
+        action_type: 操作类型标识。
+        payload: JSON 字符串或原始文本参数。
+        output_dir: 可选输出目录，用于保存执行产物。
+    """
     logger.info("mobi.action.request action_type=%s", action_type)
     try:
         try:

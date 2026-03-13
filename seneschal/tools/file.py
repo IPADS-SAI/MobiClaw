@@ -22,6 +22,12 @@ def write_text_file(
     """Write text content to a local file.
 
     If SENESCHAL_FILE_WRITE_ROOT is set, all writes are constrained to that root.
+
+    Args:
+        path: Target file path.
+        content: Text content to write.
+        mode: File mode, supports ``w`` (overwrite) and ``a`` (append).
+        encoding: Text encoding used when writing.
     """
     resolved_path = (path or "").strip()
     if not resolved_path:

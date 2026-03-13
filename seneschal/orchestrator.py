@@ -1067,19 +1067,30 @@ async def _llm_plan(task: str, decision: RouteDecision, max_subtasks: int) -> li
     planner_allowed = _planner_allowed_agents(decision)
     default_plan_agent = planner_allowed[0] if planner_allowed else _default_agent_name()
     prompt = (
-        "你是任务规划器。请把用户任务拆成可执行阶段（粗粒度拆分，只有任务足够复杂或者前后任务使用的Agent不同，才需要拆分），并且**快速**做出相应。\n"
-        "如果是涉及手机类应用（例如微博，微信，饿了么等），请按照不同的应用拆分任务。如果任务只涉及一个应用，则无需拆分。\n"
-        "输出严格 JSON，格式为:\n"
-        '{"stages":[[{"agent":"agent_name","task":"..."}]]}\n\n'
-        "规则:\n"
-        "1) stages 是二维数组，外层表示阶段（串行），内层表示同阶段并行子任务。\n"
-        f"2) agent 只能从以下集合中选择: {planner_allowed}。\n"
-        "3) 子任务总数不超过 max_subtasks。\n"
-        "4) 若任务简单，可只给一个子任务。\n\n"
-        f"max_subtasks={max_subtasks}\n"
-        f"router_decision={json.dumps(decision.__dict__, ensure_ascii=False)}\n"
-        f"task={task}"
-    )
+    "## Role\n"
+    "你是一个高效的任务规划专家。你的职责是将复杂的用户请求拆解为最小可行化的执行计划。\n\n"
+    
+    "## Core Principles\n"
+    "1. **粗粒度拆分**：仅在任务逻辑复杂或需要切换 Agent 时才进行拆分。简单任务应保持原子性。\n"
+    "2. **Agent 隔离**：严格遵循 Agent 职责边界，严禁跨领域指派。若相邻步骤使用同一 Agent，必须合并。\n"
+    "3. **拓扑结构**：识别任务的依赖关系。无依赖的任务应放在同一 `stage` 中并行执行。\n"
+    "4. **极致响应**：直接输出 JSON，不进行任何解释或闲聊。\n\n"
+
+    "## Constraints\n"
+    f"- **可选 Agent 列表**: {planner_allowed}\n"
+    f"- **最大子任务数**: {max_subtasks}\n"
+    "- **输出格式**: 严格 JSON 格式，严禁包含 Markdown 代码块标记（如 ```json）。\n\n"
+
+    "## Output Format\n"
+    '{"stages": [[{"agent": "string", "task": "string"}]]}\n'
+    "- `stages` (Array<Array>): 外层数组代表串行阶段（按顺序执行），内层数组代表该阶段内可并行的任务。\n\n"
+
+    "## Context\n"
+    f"- **Router Decision**: {json.dumps(decision.__dict__, ensure_ascii=False)}\n"
+    f"- **User Task**: {task}\n\n"
+
+    "## Planning Start"
+)
     planner = create_planner_agent()
     logger.info(
         _highlight_log(
@@ -1444,16 +1455,16 @@ async def run_orchestrated_task(
     max_subtasks = int(ROUTING_CONFIG["max_subtasks"])
     planner_allowed_agents = _planner_allowed_agents(decision)
     plan_control_path = "direct"
-    single_non_steward_direct = (
-        len(decision.target_agents) == 1 and decision.target_agents[0] != "steward"
+    single_direct = (
+        len(decision.target_agents) == 1 #and decision.target_agents[0] != "steward"
     )
     if decision.plan_required or len(decision.target_agents) > 1:
-        if single_non_steward_direct:
+        if single_direct:
             stages = [[{"agent": decision.target_agents[0], "task": task.strip()}]]
-            plan_source = "direct_single_non_steward"
-            plan_control_path = "direct_single_non_steward"
+            plan_source = "direct_single"
+            plan_control_path = "direct_single"
             logger.info(
-                "orchestrator.plan.skip_single_non_steward target=%s",
+                "orchestrator.plan.skip_single target=%s",
                 decision.target_agents[0],
             )
         else:

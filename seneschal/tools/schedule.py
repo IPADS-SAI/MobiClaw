@@ -13,7 +13,11 @@ from ..scheduler import (
 
 
 async def list_scheduled_tasks() -> ToolResponse:
-    """列出所有定时任务及其状态信息。"""
+    """列出所有定时任务及其状态信息。
+
+    Args:
+        None.
+    """
     manager = get_active_manager()
     if manager is None:
         return ToolResponse(
@@ -47,7 +51,13 @@ async def create_scheduled_task(
     *,
     bound_job_context: dict | None = None,
 ) -> ToolResponse:
-    """创建定时任务。task 为核心任务描述，time_description 为自然语言时间描述。"""
+    """创建定时任务。task 为核心任务描述，time_description 为自然语言时间描述。
+
+    Args:
+        task: 核心任务描述。
+        time_description: 自然语言时间描述。
+        bound_job_context: 可选任务上下文，透传给调度器作业上下文。
+    """
     manager = get_active_manager()
     if manager is None:
         return ToolResponse(
@@ -77,7 +87,11 @@ async def create_scheduled_task(
 
 
 async def cancel_scheduled_task(schedule_id: str) -> ToolResponse:
-    """取消指定的定时任务。需要提供 schedule_id。"""
+    """取消指定的定时任务。需要提供 schedule_id。
+
+    Args:
+        schedule_id: 待取消的定时任务 ID。
+    """
     manager = get_active_manager()
     if manager is None:
         return ToolResponse(

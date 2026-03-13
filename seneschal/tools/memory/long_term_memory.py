@@ -26,7 +26,11 @@ def read_memory() -> str:
 
 
 def update_long_term_memory(content: str) -> ToolResponse:
-    """将 content 完整覆盖写入 MEMORY.md（自动创建父目录）。"""
+    """将 content 完整覆盖写入 MEMORY.md（自动创建父目录）。
+
+    Args:
+        content: 要写入长期记忆文件的完整文本内容。
+    """
     p = _resolve_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")

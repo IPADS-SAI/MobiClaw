@@ -46,7 +46,12 @@ async def read_docx_text(
     file_path: str,
     max_chars: int | None = None,
 ) -> ToolResponse:
-    """Read text content from a DOCX file."""
+    """Read text content from a DOCX file.
+
+    Args:
+        file_path: Local DOCX file path.
+        max_chars: Optional maximum number of returned characters.
+    """
     resolved_path = (file_path or "").strip()
     if not resolved_path:
         return ToolResponse(
@@ -124,7 +129,13 @@ async def create_docx_from_text(
     content: str,
     title: str | None = None,
 ) -> ToolResponse:
-    """Create a DOCX file from plain text."""
+    """Create a DOCX file from plain text.
+
+    Args:
+        output_path: Output DOCX file path.
+        content: Plain text content to write.
+        title: Optional document title inserted as heading.
+    """
     target, error = _resolve_write_path(output_path)
     if error == "empty_path":
         return ToolResponse(
@@ -195,6 +206,13 @@ async def edit_docx(
     """Edit a DOCX file with find/replace, appends, and simple tables.
 
     Note: paragraph-level replacements rewrite paragraph text and may drop formatting.
+
+    Args:
+        file_path: Source DOCX file path.
+        output_path: Output DOCX file path.
+        replacements: Optional replacement pairs, each item uses keys ``old`` and ``new``.
+        append_paragraphs: Optional paragraphs appended to the end of document.
+        tables: Optional table data to append, each table is a 2D list of cell values.
     """
     resolved_path = (file_path or "").strip()
     if not resolved_path:
@@ -314,7 +332,14 @@ async def create_pdf_from_text(
     title: str | None = None,
     page_size: str = "letter",
 ) -> ToolResponse:
-    """Create a PDF from plain text using reportlab."""
+    """Create a PDF from plain text using reportlab.
+
+    Args:
+        output_path: Output PDF file path.
+        content: Plain text content to render.
+        title: Optional PDF title drawn at the top.
+        page_size: Page size name, supports ``letter`` and ``a4``.
+    """
     target, error = _resolve_write_path(output_path)
     if error == "empty_path":
         return ToolResponse(
@@ -395,7 +420,12 @@ async def read_xlsx_summary(
     file_path: str,
     max_rows: int | None = 20,
 ) -> ToolResponse:
-    """Read an XLSX file and return a summary plus a small preview."""
+    """Read an XLSX file and return a summary plus a small preview.
+
+    Args:
+        file_path: Local XLSX or XLSM file path.
+        max_rows: Maximum preview rows per sheet.
+    """
     resolved_path = (file_path or "").strip()
     if not resolved_path:
         return ToolResponse(
@@ -471,7 +501,13 @@ async def write_xlsx_from_records(
     records: list[dict[str, Any]] | None = None,
     sheet_name: str = "Sheet1",
 ) -> ToolResponse:
-    """Write an XLSX file from a list of dictionaries."""
+    """Write an XLSX file from a list of dictionaries.
+
+    Args:
+        output_path: Output XLSX or XLSM file path.
+        records: List of dict records, each dict maps column names to values.
+        sheet_name: Target worksheet name.
+    """
     target, error = _resolve_write_path(output_path)
     if error == "empty_path":
         return ToolResponse(
@@ -520,7 +556,14 @@ async def write_xlsx_from_rows(
     headers: list[str] | None = None,
     sheet_name: str = "Sheet1",
 ) -> ToolResponse:
-    """Write an XLSX file from row data."""
+    """Write an XLSX file from row data.
+
+    Args:
+        output_path: Output XLSX or XLSM file path.
+        rows: Row-major table data.
+        headers: Optional column headers.
+        sheet_name: Target worksheet name.
+    """
     target, error = _resolve_write_path(output_path)
     if error == "empty_path":
         return ToolResponse(

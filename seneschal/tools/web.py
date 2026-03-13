@@ -177,7 +177,11 @@ def _extract_links(base_url: str, raw_html: str, max_links: int) -> list[str]:
 
 
 async def fetch_url_text(url: str) -> ToolResponse:
-    """Fetch a URL and return trimmed raw text content."""
+    """Fetch a URL and return trimmed raw text content.
+
+    Args:
+        url: Target HTTP or HTTPS URL.
+    """
     url = (url or "").strip()
     logger.info("web.fetch url=%s", url)
     if not url.startswith("http://") and not url.startswith("https://"):
@@ -199,7 +203,11 @@ async def fetch_url_text(url: str) -> ToolResponse:
 
 
 async def fetch_url_readable_text(url: str) -> ToolResponse:
-    """Fetch a URL and return HTML-stripped readable text content."""
+    """Fetch a URL and return HTML-stripped readable text content.
+
+    Args:
+        url: Target HTTP or HTTPS URL.
+    """
     url = (url or "").strip()
     logger.info("web.fetch_readable url=%s", url)
     if not url.startswith("http://") and not url.startswith("https://"):
@@ -222,7 +230,13 @@ async def fetch_url_readable_text(url: str) -> ToolResponse:
 
 
 async def fetch_url_links(url: str, max_links: int = 20, same_domain_only: bool = False) -> ToolResponse:
-    """Fetch a URL and return extracted links."""
+    """Fetch a URL and return extracted links.
+
+    Args:
+        url: Target HTTP or HTTPS URL.
+        max_links: Maximum number of links to return.
+        same_domain_only: Whether to keep only links from the same domain as ``url``.
+    """
     url = (url or "").strip()
     if not url.startswith("http://") and not url.startswith("https://"):
         return ToolResponse(
@@ -250,7 +264,12 @@ async def fetch_url_links(url: str, max_links: int = 20, same_domain_only: bool 
 
 
 async def brave_search(query: str, max_results: int | None = None) -> ToolResponse:
-    """Search the web via Brave Search API and return concise result snippets."""
+    """Search the web via Brave Search API and return concise result snippets.
+
+    Args:
+        query: Search query text.
+        max_results: Optional maximum number of results to return.
+    """
     normalized_query = (query or "").strip()
     logger.info("web.brave_search query=%s max_results=%s", normalized_query, max_results)
     if not normalized_query:
