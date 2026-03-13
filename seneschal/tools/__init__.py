@@ -3,9 +3,6 @@
 
 from __future__ import annotations
 
-import logging
-from typing import Any
-
 from .mobi import call_mobi_action, call_mobi_collect, call_mobi_collect_verified
 from .file import write_text_file
 from .papers import arxiv_search, dblp_conference_search, download_file, extract_pdf_text
@@ -38,9 +35,6 @@ from .memory import (
     store_steward_knowledge,
     search_steward_knowledge,
 )
-
-logger = logging.getLogger(__name__)
-
 
 __all__ = [
     "call_mobi_action",

@@ -7,7 +7,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PID_DIR="$ROOT_DIR/tmp"
-
 KNOWN_PID_FILES=(
   "$PID_DIR/mobiagent-server.pid"
 )

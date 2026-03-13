@@ -12,7 +12,7 @@ Seneschal 当前实际是一个以 **多 Agent 编排** 为核心的执行层，
 
 串成一条可运行的任务闭环。
 
-当前真实主链路：
+当前真实主链路的准确描述是：
 
 1. 输入从 `CLI / Gateway / Chat / Daily` 进入
 2. `workflows.py` 进行模式分发
@@ -24,10 +24,6 @@ Seneschal 当前实际是一个以 **多 Agent 编排** 为核心的执行层，
 
 > Seneschal 当前是一套以 `Gateway / Chat + Orchestrator + Agents + MobiAgent + 本地状态` 为核心的多 Agent 编排系统。
 
----
-
-
-## 3. 仓库结构
 
 ```text
 Seneschal/
@@ -53,7 +49,7 @@ Seneschal/
 │       ├── shell.py                # 命令执行
 │       ├── file.py                 # 文本写入
 │       ├── memory.py               # 本地 memory / task history / steward knowledge
-│       └── skill_runner.py         # 执行 skill 脚本
+│       ├── skill_runner.py         # 执行 skill 脚本
 ├── mobiagent_server/server.py      # 手机执行网关
 ├── docs/                           # 项目文档
 └── outputs/                        # 任务输出目录
@@ -61,9 +57,9 @@ Seneschal/
 
 ---
 
-## 4. 顶层分层
+## 2. 顶层分层
 
-### 4.1 入口层
+### 2.1 入口层
 
 - `app.py`
 - `seneschal.gateway_server`
@@ -75,7 +71,7 @@ Seneschal/
 - 加载环境变量
 - 决定进入哪种运行模式
 
-### 4.2 工作流层
+### 2.2 工作流层
 
 核心文件：`seneschal/workflows.py`
 
@@ -86,7 +82,7 @@ Seneschal/
 - 恢复/保存 chat session
 - 对外输出 planner monitor 事件
 
-### 4.3 编排层
+### 2.3 编排层
 
 核心文件：`seneschal/orchestrator.py` + `seneschal/agents.py`
 
@@ -98,7 +94,7 @@ Seneschal/
 - 执行：顺序执行子任务并保留上下文
 - 聚合：回收 reply / files / trace
 
-### 4.4 工具与集成层
+### 2.4 工具与集成层
 
 主要模块：
 
@@ -118,7 +114,7 @@ Seneschal/
 - 执行本地命令与文件处理
 - 保存和检索本地知识/记忆
 
-### 4.5 状态与持久化层
+### 2.5 状态与持久化层
 
 主要内容：
 
@@ -130,9 +126,9 @@ Seneschal/
 
 ---
 
-## 5. 运行模式
+## 2. 运行模式
 
-### 5.1 Demo 模式
+### 2.1 Demo 模式
 
 `python app.py`
 
@@ -140,14 +136,14 @@ Seneschal/
 - 进入 `workflows.main()`
 - 默认执行一条预设演示消息
 
-### 5.2 Interactive 模式
+### 2.2 Interactive 模式
 
 `python app.py --interactive`
 
 - 在终端中持续收发消息
 - 默认由 Steward 处理
 
-### 5.3 Agent Task 模式
+### 2.3 Agent Task 模式
 
 `python app.py --agent-task "..."`
 
@@ -155,7 +151,7 @@ Seneschal/
 - 而是走 `run_orchestrated_task()`
 - 由 Router / Planner / Executor 决定具体执行路径
 
-### 5.4 Chat / Gateway 模式
+### 2.4 Chat / Gateway 模式
 
 `python -m seneschal.gateway_server`
 
@@ -165,7 +161,7 @@ Seneschal/
 - 支持文件下载
 - 支持 webhook / 飞书
 
-### 5.5 Daily 模式
+### 2.5 Daily 模式
 
 `python app.py --daily --daily-trigger daily`
 
@@ -175,9 +171,9 @@ Seneschal/
 
 ---
 
-## 6. Agent 架构
+## 2. Agent 架构
 
-### 6.1 Chat Agent
+### 2.1 Chat Agent
 
 职责：
 
@@ -185,7 +181,7 @@ Seneschal/
 - 承载多轮对话
 - 配合 `ChatSessionManager` 实现会话恢复与保存
 
-### 6.2 Worker Agent
+### 2.2 Worker Agent
 
 职责：
 
@@ -201,7 +197,7 @@ Seneschal/
 - Word / Excel / PDF / PPT
 - 本地 memory / task history / steward knowledge
 
-### 6.3 Steward Agent
+### 2.3 Steward Agent
 
 职责：
 
@@ -210,21 +206,21 @@ Seneschal/
 - 基于执行证据自行判断任务是否完成
 - 必要时委派 Worker 做通用子任务
 
-### 6.4 Router Agent
+### 2.4 Router Agent
 
 职责：
 
 - 判断任务更适合由 `worker` 还是 `steward` 执行
 - 输出 `target_agents / confidence / plan_required`
 
-### 6.5 Planner Agent
+### 2.5 Planner Agent
 
 职责：
 
 - 对复杂任务拆分阶段
 - 返回串行/并行子任务结构
 
-### 6.6 Skill Selector
+### 2.6 Skill Selector
 
 职责：
 
@@ -235,7 +231,7 @@ Seneschal/
 
 ---
 
-## 7. MobiAgent 边界
+## 2. MobiAgent 边界
 
 `mobiagent_server/server.py` 提供稳定边界：
 
@@ -264,7 +260,7 @@ Seneschal/
 
 ---
 
-## 8. Gateway 边界
+## 2. Gateway 边界
 
 `seneschal/gateway_server.py` 当前承担完整任务网关能力。
 
@@ -290,7 +286,7 @@ Seneschal/
 
 ---
 
-## 9. 当前真正的状态层
+## 2. 当前真正的状态层
 
 当前主链路依赖的持久化主要是本地状态，而不是外部知识库：
 
@@ -309,9 +305,9 @@ Seneschal/
 
 ---
 
-## 10. 配置说明
+## 2. 配置说明
 
-### 10.1 当前核心配置
+### 2.1 当前核心配置
 
 - LLM：`OPENROUTER_*` 或 `OPENAI_*`
 - Mobi：`MOBI_AGENT_BASE_URL` / `MOBI_AGENT_API_KEY`
@@ -320,16 +316,14 @@ Seneschal/
 - Memory：`SENESCHAL_MEMORY_*`
 
 
----
+## 2. 扩展建议
 
-## 11. 扩展建议
-
-1. 继续统一旧文档口径
+1. 继续统一文档口径，避免出现两套架构叙述
 2. 增强跨模块集成测试，优先覆盖 Gateway -> Orchestrator -> Mobi 的主链路
 
 ---
 
-## 12. 最终结论
+## 2. 最终结论
 
 Seneschal 当前不是“多 Agent + 多网关 + 知识库”的三层架构，而是：
 

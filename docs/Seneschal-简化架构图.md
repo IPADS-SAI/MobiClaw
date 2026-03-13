@@ -38,6 +38,12 @@ Input -> Dispatch -> Route -> Plan -> Execute -> Persist -> Return
 - Persist：session / outputs / RunContext / local memory
 - Return：reply / files / routing_trace / execution evidence
 
-## 3. 当前推荐口径
+## 3. 当前不再推荐的旧口径
+
+以下表述不再适合描述当前项目：
+
+- “--agent-task 默认直接 Worker”
+
+## 4. 当前推荐口径
 
 > Seneschal 当前是一套以 Gateway/Chat 为入口、以 Orchestrator + Agents 为核心、以 MobiAgent 和本地状态为基础设施的多 Agent 编排系统。

@@ -68,6 +68,7 @@ async def run_daily_tasks(
     ctx.log_event("task_selection", {"trigger": trigger, "task_count": len(tasks)})
 
     collected: list[dict[str, Any]] = []
+    collect_count = 0
     for task in tasks:
         task_id = task.get("task_id", "unknown")
         prompt = build_task_prompt(task)
@@ -116,6 +117,8 @@ async def run_daily_tasks(
         }
         if response and response.metadata:
             metadata["collect_metadata"] = response.metadata
+
+        collect_count += 1
 
         collected.append(
             {

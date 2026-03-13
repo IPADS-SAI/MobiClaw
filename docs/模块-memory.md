@@ -582,10 +582,7 @@ Worker 是当前 Memory 能力最完整的 Agent。
 
 ## 7.5 Daily
 
-Daily 需要单独理解：
-
-- `collect` 路径走的是 `call_mobi_collect()`，收集结果写入 RunContext
-- 不是本地 RAG `store_steward_knowledge()`
+Daily 模式当前仍处于混合状态，其内部 collect 路径尚未完全对齐本地 memory 主链路。
 
 ---
 

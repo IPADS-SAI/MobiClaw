@@ -30,7 +30,7 @@
 
 - 手机端 GUI 执行细节：由 `mobiagent_server` 负责
 - 具体联网抓取与文件处理：由 `seneschal/tools/*` 负责
-
+- 外部知识库主链路：当前主链路依赖本地工具和状态，而非外部知识库
 
 ---
 
@@ -214,8 +214,6 @@
 - Skill：`SENESCHAL_SKILL_*`
 - Memory：`SENESCHAL_MEMORY_*`
 
-
----
 
 ## 9. 当前最重要的开发认知
 

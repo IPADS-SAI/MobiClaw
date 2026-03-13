@@ -1,13 +1,13 @@
 # Seneschal
 
-Seneschal 是一个“**编排层**”项目：用 Agent 协调手机端执行（MobiAgent）与本地工具，形成 `Route -> Plan -> Execute -> Persist` 的自动化闭环。
+Seneschal 是一个“**编排层**”项目：用 Agent 协调手机端执行（MobiAgent），形成 `Collect -> Analyze -> Execute` 的自动化闭环。
 
 当前主链路已经扩展为“**Router + Planner + Executor + Skill Selector**”的多智能体编排模型：
 
 - **编排入口**：`app.py` + `seneschal/workflows.py`
 - **编排核心**：`seneschal/orchestrator.py`
 - **智能体**：`seneschal/agents.py`（Steward / Worker / Router / Planner / Skill Selector / User）
-- **工具层**：`seneschal/tools/`（mobi / web / shell / file / papers / office / memory）
+- **工具层**：`seneschal/tools/`（mobi / web / shell / file / papers / office）
 - **手机网关**：`mobiagent_server/server.py`（collect / action / jobs）
 - **任务网关**：`seneschal/gateway_server.py`（统一任务入口、异步任务、文件下载、飞书接入）
 - **定时任务**：`seneschal/dailytasks/runner.py`
@@ -93,7 +93,6 @@ export MOBI_AGENT_BASE_URL='http://localhost:8081'
 `app.py` 与 `seneschal/gateway_server.py` 启动时都会自动读取根目录 `.env`，仅在环境变量尚未存在时补齐。
 
 ### 4) 启动依赖服务
-
 
 ### 5) 启动 MobiAgent 网关
 

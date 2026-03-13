@@ -198,4 +198,4 @@ sequenceDiagram
 
 - 当前主架构核心是 `Gateway / Chat / Workflows / Orchestrator / Agents / MobiAgent / Local State`。
 - `--agent-task` 当前默认已经走 Orchestrator，而不是旧口径里的“直接 Worker”。
-- Daily 模块仍存在。
+- Daily 模块仍存在，但内部仍混有 legacy 路径。
