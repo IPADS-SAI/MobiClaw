@@ -58,7 +58,6 @@ flowchart TB
       OFFICE[office.py / ppt.py]
       MEM[memory.py]
       SKRUN[skill_runner.py]
-      LEGACY[weknora/*\nlegacy compatibility]
       WORKER --> WEBT
       WORKER --> LOCAL
       WORKER --> OFFICE
@@ -200,4 +199,3 @@ sequenceDiagram
 - 当前主架构核心是 `Gateway / Chat / Workflows / Orchestrator / Agents / MobiAgent / Local State`。
 - `--agent-task` 当前默认已经走 Orchestrator，而不是旧口径里的“直接 Worker”。
 - Daily 模块仍存在，但内部仍混有 legacy 路径。
-- WeKnora 相关内容仍在仓库中，但不应再被画成当前主链路核心组件。

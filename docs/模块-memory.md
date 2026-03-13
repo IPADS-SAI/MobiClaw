@@ -582,13 +582,7 @@ Worker 是当前 Memory 能力最完整的 Agent。
 
 ## 7.5 Daily
 
-Daily 需要单独理解：
-
-- `collect` 路径走的是 `call_mobi_collect()` + `weknora_add_knowledge()`
-- 不是本地 RAG `store_steward_knowledge()`
-- 当本轮存在 collect 结果时，会调用 `weknora_rag_chat()`
-
-因此当前 Daily 的“长期数据沉淀”主路径更偏向 WeKnora，不是本地 memory 模块。
+Daily 模式当前仍处于混合状态，其内部 collect 路径尚未完全对齐本地 memory 主链路。
 
 ---
 
@@ -744,7 +738,6 @@ Daily 需要单独理解：
 - 自动任务历史写入覆盖面不完整
 - latest session 存在跨模式续接风险
 - chat / worker / steward 对 Memory 的能力不对称
-- Daily 主链路仍偏 WeKnora，不完全走本地 memory
 
 如果后续要把它演进成稳定的个人助理 Memory 体系，建议优先补齐：
 
