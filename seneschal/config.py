@@ -8,6 +8,7 @@ import logging
 import os
 from pathlib import Path
 from .env import load_project_env
+from .mobile.config import resolve_device_config, resolve_provider_config
 
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,23 @@ MODEL_CONFIG = {
 MOBI_AGENT_CONFIG = {
     "base_url": os.environ.get("MOBI_AGENT_BASE_URL", "http://localhost:8080"),
     "api_key": os.environ.get("MOBI_AGENT_API_KEY", "mobi-xxx"),
+}
+
+# Mobile Executor 配置 (本地统一手机任务执行器)
+_mobile_provider_cfg = resolve_provider_config(provider=None)
+_mobile_device_type, _mobile_device_id = resolve_device_config()
+MOBILE_EXECUTOR_CONFIG = {
+    "provider": _mobile_provider_cfg.name,
+    "output_dir": os.environ.get("MOBILE_OUTPUT_DIR", "outputs/mobile_exec"),
+    "device_type": _mobile_device_type,
+    "device_id": _mobile_device_id,
+    "api_base": _mobile_provider_cfg.api_base,
+    "api_key": _mobile_provider_cfg.api_key,
+    "model": _mobile_provider_cfg.model,
+    "temperature": _mobile_provider_cfg.temperature,
+    "max_steps": _mobile_provider_cfg.max_steps,
+    "draw": _mobile_provider_cfg.draw,
+    "extras": dict(_mobile_provider_cfg.extras),
 }
 
 # WeKnora 配置 (知识库 API 地址) — legacy, used by dailytasks runner

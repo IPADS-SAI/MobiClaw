@@ -19,6 +19,7 @@ import os
 import json
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from agentscope.agent import ReActAgent, UserAgent
@@ -939,13 +940,41 @@ def create_worker_agent(
     )
 
 
-def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
+def create_steward_agent(
+    skill_context: str | None = None,
+    job_context: dict[str, Any] | None = None,
+) -> ReActAgent:
     """创建智能管家 Agent (StewardAgent)。"""
     toolkit = Toolkit()
     retry_cap = max(0, min(int(os.environ.get("STEWARD_MOBI_MAX_RETRIES", "2")), 5))
+    ctx = job_context if isinstance(job_context, dict) else {}
+    mobi_output_dir = str(ctx.get("mobi_output_dir") or "").strip()
+    if not mobi_output_dir:
+        job_output_dir = str(ctx.get("job_output_dir") or "").strip()
+        if job_output_dir:
+            mobi_output_dir = str((Path(job_output_dir) / "mobile_exec").resolve())
+
+    if mobi_output_dir:
+        try:
+            Path(mobi_output_dir).mkdir(parents=True, exist_ok=True)
+        except Exception:
+            logger.warning("steward.mobi_output_dir.create_failed path=%s", mobi_output_dir, exc_info=True)
+            mobi_output_dir = ""
+
+    if mobi_output_dir:
+        collect_func = functools.partial(call_mobi_collect_verified, output_dir=mobi_output_dir)
+        collect_func.__name__ = "call_mobi_collect_verified"
+        collect_func.__doc__ = call_mobi_collect_verified.__doc__
+
+        action_func = functools.partial(call_mobi_action, output_dir=mobi_output_dir)
+        action_func.__name__ = "call_mobi_action"
+        action_func.__doc__ = call_mobi_action.__doc__
+    else:
+        collect_func = call_mobi_collect_verified
+        action_func = call_mobi_action
 
     toolkit.register_tool_function(
-        call_mobi_collect_verified,
+        collect_func,
         func_description=(
             "优先使用：调用 MobiAgent 收集手机任务结果（单次执行）。"
             "该工具不保证任务正确完成，也不会自动重试。"
@@ -954,7 +983,7 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
     )
 
     toolkit.register_tool_function(
-        call_mobi_action,
+        action_func,
         func_description=(
             "指挥 MobiAgent 在手机端执行 GUI 操作。"
             "支持的操作例如: 'add_calendar_event'(添加日历事件), "
@@ -995,7 +1024,7 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
     )
     toolkit.register_tool_function(
         extract_image_text_ocr,
-        func_description="从图片中提取文字。",
+        func_description="从指定图片中提取文字。",
     )
     
     async def call_mobi_collect_with_retry_report(task_desc: str, success_criteria: str = "") -> ToolResponse:
@@ -1011,7 +1040,7 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
         vlm_model = create_openai_model(stream=False, temperature=0.0) if vlm_enabled else None
 
         for idx in range(1, retry_cap + 2):
-            resp = await call_mobi_collect_verified(current_task, max_retries=0)
+            resp = await collect_func(current_task, max_retries=0)
             md = (resp.metadata or {}) if resp else {}
             ocr_text = str(md.get("ocr_text", "") or "")
             last_reasoning = str(md.get("last_reasoning", "") or "")
@@ -1111,9 +1140,9 @@ def create_steward_agent(skill_context: str | None = None) -> ReActAgent:
                 failure_reason = "criteria_not_matched" if success_criteria else "no_evidence_collected"
                 current_task = (
                     f"{task_desc}\n"
-                    f"重试要求(第{idx}次失败，原因:{failure_reason})："
-                    "请严格按目标完成后立即停止；避免重复无效操作；保留可验证证据。"
                 )
+                logger.info(f"重试要求(第{idx}次失败，原因:{failure_reason})："
+                    "请严格按目标完成后立即停止；避免重复无效操作；保留可验证证据。")
 
         final_attempt = attempts[-1] if attempts else {}
         pack: dict[str, object] = {
