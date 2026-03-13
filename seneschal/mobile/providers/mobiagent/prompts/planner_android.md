@@ -16,48 +16,51 @@
 2. **final_task_description**: 一个清晰且可执行的优化任务描述
 
 ## 可用的 Android 应用
-- 淘宝
-- 京东
-- 拼多多
-- 美团
-- 美团外卖
-- 大众点评
-- 饿了么
-- 支付宝
-- 微信
-- QQ
-- 微博
-- 小红书
-- 抖音
-- 快手
-- 哔哩哔哩
-- 爱奇艺
-- 腾讯视频
-- 优酷
-- 携程
-- 同程旅行
-- 飞猪
-- 去哪儿
-- 滴滴出行
-- 高德地图
-- 百度地图
-- 知乎
-- QQ音乐
-- 网易云音乐
-- 酷狗音乐
-- 闲鱼
-- 华为商城
-- 华为音乐
-- 华为视频
-- 华为应用市场
-- 华住会
-- 浏览器
+"携程": "ctrip.android.view",
+"同程": "com.tongcheng.android",
+"同程旅行": "com.tongcheng.android",
+"飞猪": "com.taobao.trip",
+"去哪儿": "com.Qunar",
+"华住会": "com.htinns",
+"饿了么": "me.ele",
+"淘宝闪购": "me.ele",
+"支付宝": "com.eg.android.AlipayGphone",
+"淘宝": "com.taobao.taobao",
+"京东": "com.jingdong.app.mall",
+"美团": "com.sankuai.meituan",
+"美团外卖": "com.sankuai.meituan.takeoutnew",
+"滴滴出行": "com.sdu.didi.psnger",
+"微信": "com.tencent.mm",
+"微博": "com.sina.weibo",
+"华为商城": "com.vmall.client",
+"华为视频": "com.huawei.himovie",
+"华为音乐": "com.huawei.music",
+"华为应用市场": "com.huawei.appmarket",
+"拼多多": "com.xunmeng.pinduoduo",
+"大众点评": "com.dianping.v1",
+"小红书": "com.xingin.xhs",
+"浏览器": "com.microsoft.emmx",
+"QQ": "com.tencent.mobileqq",
+"知乎": "com.zhihu.android",
+"QQ音乐": "com.tencent.qqmusic",
+"网易云音乐": "com.netease.cloudmusic",
+"酷狗音乐": "com.kugou.android",
+"抖音": "com.ss.android.ugc.aweme",
+"快手": "com.smile.gifmaker",
+"哔哩哔哩": "tv.danmaku.bili",
+"爱奇艺": "com.qiyi.video",
+"腾讯视频": "com.tencent.qqlive",
+"优酷": "com.youku.phone",
+"高德地图": "com.autonavi.minimap",
+"百度地图": "com.baidu.BaiduMap",
+"闲鱼": "com.taobao.idlefish"
 
 ## 输出格式
 只返回 JSON 对象（不要包含任何额外文本、解释或 markdown 代码块）：
 
 {{
     "app_name": "<应用名称（中文）>",
+    "package_name": "<应用包名>",
     "final_task_description": "<优化后的任务描述>"
 }}
 

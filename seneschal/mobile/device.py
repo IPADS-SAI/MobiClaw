@@ -5,6 +5,7 @@
 import time
 import base64
 from abc import ABC, abstractmethod
+from .interrupts import interruptible_sleep, ensure_not_interrupted
 
 
 class Device(ABC):
@@ -141,18 +142,20 @@ class AndroidDevice(Device):
 
     def start_app(self, app):
         """通过应用名启动应用"""
+        ensure_not_interrupted()
         package_name = self.app_package_names.get(app)
         if not package_name:
             raise ValueError(f"App '{app}' is not registered with a package name.")
         self.d.app_start(package_name, stop=True)
-        time.sleep(3)
+        interruptible_sleep(3)
         if not self.d.app_wait(package_name, timeout=10):
             raise RuntimeError(f"Failed to start app '{app}' with package '{package_name}'")
     
     def app_start(self, package_name):
         """通过包名启动应用"""
+        ensure_not_interrupted()
         self.d.app_start(package_name, stop=True)
-        time.sleep(1)
+        interruptible_sleep(1)
         if not self.d.app_wait(package_name, timeout=10):
             raise RuntimeError(f"Failed to start package '{package_name}'")
 
@@ -166,18 +169,21 @@ class AndroidDevice(Device):
 
     def click(self, x, y):
         """点击坐标"""
+        ensure_not_interrupted()
         self.d.click(x, y)
-        time.sleep(0.5)
+        interruptible_sleep(0.5)
 
     def long_click(self, x, y):
         """长按坐标"""
+        ensure_not_interrupted()
         self.d.long_click(x, y)
-        time.sleep(0.5)
+        interruptible_sleep(0.5)
 
     def double_click(self, x, y):
         """双击坐标"""
+        ensure_not_interrupted()
         self.d.double_click(x, y)
-        time.sleep(0.5)
+        interruptible_sleep(0.5)
 
     def clear_input(self):
         """清除输入框内容"""
@@ -190,17 +196,17 @@ class AndroidDevice(Device):
         current_ime = self.d.current_ime()
         # 切换到 ADB Keyboard
         self.d.shell(['settings', 'put', 'secure', 'default_input_method', 'com.android.adbkeyboard/.AdbIME'])
-        time.sleep(0.5)
+        interruptible_sleep(0.5)
         # 清除现有文本
         self.d.shell(['am', 'broadcast', '-a', 'ADB_CLEAR_TEXT'])
-        time.sleep(0.2)
+        interruptible_sleep(0.2)
         # 输入文本（使用 base64 编码支持中文）
         charsb64 = base64.b64encode(text.encode('utf-8')).decode('utf-8')
         self.d.shell(['am', 'broadcast', '-a', 'ADB_INPUT_B64', '--es', 'msg', charsb64])
-        time.sleep(0.5)
+        interruptible_sleep(0.5)
         # 恢复原输入法
         self.d.shell(['settings', 'put', 'secure', 'default_input_method', current_ime])
-        time.sleep(0.5)
+        interruptible_sleep(0.5)
 
     def swipe(self, direction, scale=0.5):
         """滑动（方向：up/down/left/right）"""
@@ -295,16 +301,18 @@ class HarmonyDevice(Device):
 
     def start_app(self, app):
         """通过应用名启动应用"""
+        ensure_not_interrupted()
         package_name = self.app_package_names.get(app)
         if not package_name:
             raise ValueError(f"App '{app}' is not registered with a package name.")
         self.d.start_app(package_name)
-        time.sleep(2)
+        interruptible_sleep(2)
 
     def app_start(self, package_name):
         """通过包名启动应用（强制启动）"""
+        ensure_not_interrupted()
         self.d.force_start_app(package_name)
-        time.sleep(1.5)
+        interruptible_sleep(1.5)
 
     def app_stop(self, package_name):
         """停止应用"""
@@ -316,18 +324,21 @@ class HarmonyDevice(Device):
 
     def click(self, x, y):
         """点击坐标"""
+        ensure_not_interrupted()
         self.d.click(x, y)
-        time.sleep(0.5)
+        interruptible_sleep(0.5)
 
     def long_click(self, x, y):
         """长按坐标"""
+        ensure_not_interrupted()
         self.d.long_click(x, y)
-        time.sleep(0.5)
+        interruptible_sleep(0.5)
 
     def double_click(self, x, y):
         """双击坐标"""
+        ensure_not_interrupted()
         self.d.double_click(x, y)
-        time.sleep(0.5)
+        interruptible_sleep(0.5)
 
     def input(self, text):
         """输入文本"""

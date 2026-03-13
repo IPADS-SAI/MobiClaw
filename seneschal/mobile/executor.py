@@ -8,6 +8,7 @@ from typing import Any
 import xml.etree.ElementTree as ET
 
 from .config import resolve_device_config, resolve_provider_config
+from .interrupts import clear_interrupt
 from .providers import get_provider_class
 from .types import MobileExecutionResult
 
@@ -192,6 +193,7 @@ def _extract_ocr_from_hierarchies(hierarchy_paths: list[str]) -> tuple[list[dict
 
 class MobileExecutor:
     def run(self, task: str, output_dir: str, provider: str | None = None) -> MobileExecutionResult:
+        clear_interrupt()
         cfg = resolve_provider_config(provider=provider)
         provider_cls = get_provider_class(cfg.name)
         if provider_cls is None:
@@ -231,6 +233,8 @@ class MobileExecutor:
             status = str((raw_result or {}).get("status", "unknown"))
             success = status in {"success", "completed"}
             message = str((raw_result or {}).get("message", status))
+        except KeyboardInterrupt:
+            raise
         except Exception as exc:  # noqa: BLE001
             raw_result = {"status": "error", "error": str(exc), "message": str(exc)}
             success = False
