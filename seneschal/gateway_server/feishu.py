@@ -343,6 +343,7 @@ def _download_feishu_message_resource(
     message_id: str,
     resource_key: str,
     resource_type: str,
+    download_dir: str | None = None,
 ) -> str | None:
     """按消息资源接口下载飞书图片/文件。"""
     token = _get_feishu_tenant_token(cfg)
@@ -363,12 +364,23 @@ def _download_feishu_message_resource(
     ext = mimetypes.guess_extension(content_type) or (".png" if kind == "image" else ".bin")
     if not ext.startswith("."):
         ext = ".bin"
-    save_path = _feishu_media_download_dir() / f"{kind}_{message_id}_{resource_key}{ext}"
+    if download_dir:
+        media_root = Path(download_dir).expanduser()
+        media_root.mkdir(parents=True, exist_ok=True)
+    else:
+        media_root = _feishu_media_download_dir()
+    save_path = media_root / f"{kind}_{message_id}_{resource_key}{ext}"
     save_path.write_bytes(resp.content)
     return str(save_path)
 
 
-def _build_task_from_feishu_event(content: str, message_id: str | None, cfg: GatewayConfig) -> str:
+def _build_task_from_feishu_event(
+    content: str,
+    message_id: str | None,
+    cfg: GatewayConfig,
+    *,
+    download_dir: str | None = None,
+) -> str:
     """将飞书消息转成可执行任务文本。"""
     parsed = _parse_feishu_content(content)
     msg_type = str(parsed.get("type") or "text")
@@ -386,6 +398,7 @@ def _build_task_from_feishu_event(content: str, message_id: str | None, cfg: Gat
                 message_id=message_id,
                 resource_key=resource_key,
                 resource_type=msg_type,
+                download_dir=download_dir,
             )
         except Exception as exc:
             logger.warning("Failed to download Feishu %s resource: %s", msg_type, exc)

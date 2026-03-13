@@ -269,12 +269,28 @@ def _project_root() -> Path:
 def _create_job_output_paths(output_path: str | None) -> tuple[str, str, str]:
     """为本次任务创建 outputs/job_时间戳 目录并返回绝对路径。"""
     outputs_root = (_project_root() / "outputs").resolve()
+    raw_output = (output_path or "").strip()
+    reserved_output: Path | None = None
+    if raw_output:
+        candidate = Path(raw_output).expanduser()
+        if candidate.is_absolute():
+            try:
+                reserved_output = candidate.resolve()
+            except FileNotFoundError:
+                reserved_output = candidate.absolute()
+            parent = reserved_output.parent
+            if parent.name.startswith("job_") and parent.parent == outputs_root:
+                job_dir = parent
+                tmp_dir = job_dir / "tmp"
+                tmp_dir.mkdir(parents=True, exist_ok=True)
+                reserved_output.parent.mkdir(parents=True, exist_ok=True)
+                return str(reserved_output), str(job_dir), str(tmp_dir)
+
     job_name = "job_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     job_dir = outputs_root / job_name
     tmp_dir = job_dir / "tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    raw_output = (output_path or "").strip()
     if raw_output:
         candidate = Path(raw_output).expanduser()
         if candidate.is_absolute():

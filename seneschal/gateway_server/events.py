@@ -10,6 +10,8 @@ import os
 import threading
 import time
 import uuid
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("seneschal.gateway_server")
@@ -69,6 +71,7 @@ def _gateway_override(name: str, default: Any) -> Any:
 async def _enqueue_feishu_job(
     task: str,
     *,
+    output_path: str | None,
     chat_id: str | None,
     open_id: str | None,
     message_id: str | None,
@@ -93,7 +96,7 @@ async def _enqueue_feishu_job(
         run_job(
             job_id,
             task,
-            output_path=None,
+            output_path=output_path,
             mode="router",
             agent_hint=None,
             skill_hint=None,
@@ -144,12 +147,30 @@ async def _accept_feishu_message(
         )
         return {"ok": True, "accepted": False, "reason": "duplicate_message_id"}
 
-    task = build_task(content, message_id, cfg)
+    output_root_raw = (os.environ.get("SENESCHAL_FILE_WRITE_ROOT") or "").strip()
+    if output_root_raw:
+        output_root = Path(output_root_raw).expanduser()
+    else:
+        output_root = Path(__file__).resolve().parents[2] / "outputs"
+    job_name = "job_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    reserved_job_dir = output_root / job_name
+    reserved_tmp_dir = reserved_job_dir / "tmp"
+    reserved_tmp_dir.mkdir(parents=True, exist_ok=True)
+    reserved_output_path = reserved_job_dir / "final_output.md"
+    feishu_download_dir = reserved_job_dir / "feishu_media"
+
+    task = build_task(
+        content,
+        message_id,
+        cfg,
+        download_dir=str(feishu_download_dir),
+    )
     if not task:
         return {"ok": True, "accepted": False, "reason": "empty_task"}
 
     job_id = await _enqueue_feishu_job(
         task,
+        output_path=str(reserved_output_path),
         chat_id=chat_id,
         open_id=open_id,
         message_id=message_id,
