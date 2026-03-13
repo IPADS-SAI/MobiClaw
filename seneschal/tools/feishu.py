@@ -317,7 +317,15 @@ def fetch_feishu_chat_history(
     history_range: str = "today",
     page_token: str = "",
 ) -> ToolResponse:
-    """读取飞书会话历史消息，支持 today/yesterday/7d/all 范围查询。"""
+    """读取飞书会话历史消息，支持 today/yesterday/7d/all 范围查询。
+
+    Args:
+        chat_id: 会话 ID（chat_id/open_chat_id/oc_xxx）。
+        page_size: 单次请求条数，内部会约束到允许范围。
+        container_id_type: 容器类型，支持 auto/chat/open_chat/user/open_id/union_id。
+        history_range: 历史时间范围，仅支持 today/yesterday/7d/all。
+        page_token: 分页游标，用于续页拉取。
+    """
     validated, validation_error = _validate_fetch_feishu_history_args(
         chat_id=chat_id,
         container_id_type=container_id_type,
@@ -588,7 +596,11 @@ def fetch_feishu_chat_history(
 
 
 def get_feishu_message(message_id: str) -> ToolResponse:
-    """按消息 ID 读取飞书消息详情。"""
+    """按消息 ID 读取飞书消息详情。
+
+    Args:
+        message_id: 飞书消息 ID。
+    """
     mid = (message_id or "").strip()
     if not mid:
         return ToolResponse(

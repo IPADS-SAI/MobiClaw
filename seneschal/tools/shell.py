@@ -61,7 +61,11 @@ def _expand_glob_args(args: list[str]) -> list[str]:
 
 
 async def run_shell_command(command: str) -> ToolResponse:
-    """Run a safe local shell command with allowlist enforcement."""
+    """Run a safe local shell command with allowlist enforcement.
+
+    Args:
+        command: Command line string to execute.
+    """
     command = (command or "").strip()
     if not command:
         return ToolResponse(

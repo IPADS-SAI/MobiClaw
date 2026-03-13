@@ -28,7 +28,15 @@ async def extract_image_text_ocr(
     oem: int = 3,
     max_chars: int | None = None,
 ) -> ToolResponse:
-    """Extract text from an image file with tesseract OCR."""
+    """Extract text from an image file with tesseract OCR.
+
+    Args:
+        image_path: Local image file path.
+        lang: Tesseract language pack string.
+        psm: Tesseract page segmentation mode.
+        oem: Tesseract OCR engine mode.
+        max_chars: Optional maximum number of returned characters.
+    """
     resolved_path = (image_path or "").strip()
     logger.info("ocr.extract path=%s lang=%s", resolved_path, lang)
     if not resolved_path:
@@ -134,4 +142,3 @@ async def extract_image_text_ocr(
             "returncode": proc.returncode,
         },
     )
-

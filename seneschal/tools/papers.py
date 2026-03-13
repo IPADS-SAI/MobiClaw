@@ -262,7 +262,14 @@ async def dblp_conference_search(
     keyword_query: str | None = None,
     max_results: int = 50,
 ) -> ToolResponse:
-    """Search DBLP for conference papers by name and year hints."""
+    """Search DBLP for conference papers by name and year hints.
+
+    Args:
+        conference: Conference name or abbreviation.
+        years: Year filter as a list, single year string, or None.
+        keyword_query: Optional keyword query to refine conference results.
+        max_results: Maximum number of DBLP results to request.
+    """
     normalized_conf = (conference or "").strip()
     logger.info("papers.dblp_search conference=%s years=%s keyword=%s", normalized_conf, years, keyword_query)
     if not normalized_conf:
@@ -364,7 +371,13 @@ async def download_file(
     output_path: str,
     max_bytes: int | None = None,
 ) -> ToolResponse:
-    """Download a file to disk with size limits."""
+    """Download a file to disk with size limits.
+
+    Args:
+        url: Source HTTP or HTTPS URL.
+        output_path: Local output path for the downloaded file.
+        max_bytes: Optional maximum allowed file size in bytes.
+    """
     normalized_url = (url or "").strip()
     if not normalized_url.startswith("http://") and not normalized_url.startswith("https://"):
         return ToolResponse(
@@ -439,7 +452,13 @@ async def extract_pdf_text(
     max_pages: int | None = 10,
     max_chars: int | None = None,
 ) -> ToolResponse:
-    """Extract text from a local PDF file."""
+    """Extract text from a local PDF file.
+
+    Args:
+        file_path: Local PDF file path.
+        max_pages: Optional maximum number of pages to read.
+        max_chars: Optional maximum number of output characters.
+    """
     resolved_path = (file_path or "").strip()
     if not resolved_path:
         return ToolResponse(

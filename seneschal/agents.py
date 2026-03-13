@@ -1028,7 +1028,12 @@ def create_steward_agent(
     )
     
     async def call_mobi_collect_with_retry_report(task_desc: str, success_criteria: str = "") -> ToolResponse:
-        """执行带重试上限的 mobi 采集，并返回结构化证据包。"""
+        """执行带重试上限的 mobi 采集，并返回结构化证据包。
+
+        Args:
+            task_desc: 手机任务描述。
+            success_criteria: 可选成功判定条件文本。
+        """
         attempts: list[dict[str, object]] = []
         current_task = task_desc
         criteria_matched = False
@@ -1202,7 +1207,12 @@ def create_steward_agent(
     )
 
     async def delegate_to_worker(task: str, delegation_depth: int = 0) -> ToolResponse:
-        """将子任务委派给 Worker Agent 并返回结果。"""
+        """将子任务委派给 Worker Agent 并返回结果。
+
+        Args:
+            task: 要委派给 Worker 的子任务描述。
+            delegation_depth: 当前委派深度计数。
+        """
         max_depth = int(ROUTING_CONFIG.get("max_routing_depth", 2))
         if delegation_depth >= max_depth:
             return ToolResponse(
@@ -1312,26 +1322,59 @@ def create_chat_agent(*, web_search_enabled: bool = True) -> ReActAgent:
     """创建网关 chat 模式使用的基础对话 Agent。"""
     toolkit = Toolkit()
 
-    if web_search_enabled:
-        toolkit.register_tool_function(
-            brave_search,
-            func_description="通过 Brave Search API 联网检索新闻与网页来源链接。",
-        )
+    # if web_search_enabled:
+    #     toolkit.register_tool_function(
+    #         brave_search,
+    #         func_description="通过 Brave Search API 联网检索新闻与网页来源链接。",
+    #     )
 
-        toolkit.register_tool_function(
-            fetch_url_text,
-            func_description="抓取指定 URL 的文本内容用于快速检索。",
-        )
+    #     toolkit.register_tool_function(
+    #         fetch_url_text,
+    #         func_description="抓取指定 URL 的文本内容用于快速检索。",
+    #     )
 
-        toolkit.register_tool_function(
-            fetch_url_readable_text,
-            func_description="抓取并提取网页可读文本，用于快速理解页面内容。",
-        )
+    #     toolkit.register_tool_function(
+    #         fetch_url_readable_text,
+    #         func_description="抓取并提取网页可读文本，用于快速理解页面内容。",
+    #     )
 
-        toolkit.register_tool_function(
-            fetch_url_links,
-            func_description="抓取网页并提取链接，用于发现相关来源并继续检索。",
-        )
+    #     toolkit.register_tool_function(
+    #         fetch_url_links,
+    #         func_description="抓取网页并提取链接，用于发现相关来源并继续检索。",
+    #     )
+    
+    # 根据联网配置，开启或关闭工具组
+    toolkit.create_tool_group(
+         group_name="web_search",
+        description="用于网页搜索的工具函数。",
+        active=web_search_enabled,
+        # 使用这些工具时的注意事项
+        notes="""
+优先使用 brave_search 直接获取结果，若获取结果失败，再使用 fetch_* 工具尝试获取。
+""",
+    )
+    toolkit.register_tool_function(
+        brave_search,
+        group_name="web_search",
+        func_description="通过 Brave Search API 联网检索新闻与网页来源链接。",
+    )
+
+    toolkit.register_tool_function(
+        fetch_url_text,
+        group_name="web_search",
+        func_description="抓取指定 URL 的文本内容用于快速检索。",
+    )
+    toolkit.register_tool_function(
+        fetch_url_readable_text,
+        group_name="web_search",
+        func_description="抓取并提取网页可读文本，用于快速理解页面内容。",
+    )
+
+    toolkit.register_tool_function(
+        fetch_url_links,
+        group_name="web_search",
+        func_description="抓取网页并提取链接，用于发现相关来源并继续检索。",
+    )
 
     sys_prompt = """你是 Seneschal 的基础对话助手,名字是 MobiChatBot。
 

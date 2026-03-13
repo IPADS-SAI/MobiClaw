@@ -344,10 +344,9 @@ async def read_pptx_summary(
 ) -> ToolResponse:
     """读取 PPTX/PPT 文件，返回每张幻灯片的标题、正文文本、备注、形状数量和图片数量。
 
-    Parameters
-    ----------
-    file_path:  本地 PPTX/PPT 文件路径。
-    max_slides: 最多读取的幻灯片数量，默认读取全部。
+    Args:
+        file_path: 本地 PPTX/PPT 文件路径。
+        max_slides: 最多读取的幻灯片数量，默认读取全部。
     """
     resolved_path = (file_path or "").strip()
     if not resolved_path:
@@ -440,13 +439,12 @@ async def create_pptx_from_outline(
 ) -> ToolResponse:
     """从幻灯片大纲列表创建新 PPTX 文件，支持模板与全局字体默认值。
 
-    Parameters
-    ----------
-    output_path:        输出文件路径，须以 .pptx 或 .ppt 结尾。
-    slides:             幻灯片列表，每项为 slide dict（见模块文档）。
-    template_path:      可选，PPTX 模板文件路径；不提供时使用库内置空白演示文稿。
-    default_font_size:  全局默认正文字号（pt），各幻灯片可通过 "font_size" 字段覆盖。
-    default_font_color: 全局默认正文颜色（"#RRGGBB"），各幻灯片可通过 "font_color" 字段覆盖。
+    Args:
+        output_path: 输出文件路径，须以 .pptx 或 .ppt 结尾。
+        slides: 幻灯片列表，每项为 slide dict（见模块文档）。
+        template_path: 可选，PPTX 模板文件路径；不提供时使用库内置空白演示文稿。
+        default_font_size: 全局默认正文字号（pt），各幻灯片可通过 "font_size" 字段覆盖。
+        default_font_color: 全局默认正文颜色（"#RRGGBB"），各幻灯片可通过 "font_color" 字段覆盖。
     """
     target, error = _resolve_write_path(output_path)
     if error:
@@ -551,13 +549,12 @@ async def edit_pptx(
 ) -> ToolResponse:
     """综合编辑 PPTX：全局文本替换、追加幻灯片、按索引删除幻灯片。
 
-    Parameters
-    ----------
-    file_path:             源 PPTX 文件路径。
-    output_path:           输出文件路径（可与 file_path 相同以原地保存）。
-    replacements:          [{"old": "...", "new": "..."}] 全局文本替换，跨所有幻灯片。
-    add_slides:            要追加的幻灯片列表（同 create_pptx_from_outline 的 slide dict）。
-    delete_slide_indices:  要删除的幻灯片 1-based 索引列表（从后往前删以保持其他索引稳定）。
+    Args:
+        file_path: 源 PPTX 文件路径。
+        output_path: 输出文件路径（可与 file_path 相同以原地保存）。
+        replacements: [{"old": "...", "new": "..."}] 全局文本替换，跨所有幻灯片。
+        add_slides: 要追加的幻灯片列表（同 create_pptx_from_outline 的 slide dict）。
+        delete_slide_indices: 要删除的幻灯片 1-based 索引列表（从后往前删以保持其他索引稳定）。
     """
     resolved_src = (file_path or "").strip()
     if not resolved_src:
@@ -680,16 +677,15 @@ async def insert_pptx_image(
 ) -> ToolResponse:
     """向指定幻灯片插入图片，支持英寸单位定位与尺寸。
 
-    Parameters
-    ----------
-    file_path:     源 PPTX 文件路径。
-    output_path:   输出文件路径。
-    slide_index:   1-based 幻灯片索引。
-    image_path:    本地图片路径（支持 PNG/JPG/GIF/BMP 等常见格式）。
-    left_inches:   图片左边距（英寸），默认 1.0。
-    top_inches:    图片上边距（英寸），默认 1.0。
-    width_inches:  图片宽度（英寸），省略时保持原始比例。
-    height_inches: 图片高度（英寸），省略时保持原始比例。
+    Args:
+        file_path: 源 PPTX 文件路径。
+        output_path: 输出文件路径。
+        slide_index: 1-based 幻灯片索引。
+        image_path: 本地图片路径（支持 PNG/JPG/GIF/BMP 等常见格式）。
+        left_inches: 图片左边距（英寸），默认 1.0。
+        top_inches: 图片上边距（英寸），默认 1.0。
+        width_inches: 图片宽度（英寸），省略时保持原始比例。
+        height_inches: 图片高度（英寸），省略时保持原始比例。
     """
     resolved_src = (file_path or "").strip()
     if not resolved_src:
@@ -786,17 +782,16 @@ async def set_pptx_text_style(
 ) -> ToolResponse:
     """在指定幻灯片中搜索文本，对所有包含该文本的 run 应用字体样式。
 
-    Parameters
-    ----------
-    file_path:   源 PPTX 文件路径。
-    output_path: 输出文件路径。
-    slide_index: 1-based 幻灯片索引。
-    search_text: 要匹配的文字子串。
-    font_size:   字号（pt），省略时不修改。
-    font_color:  十六进制颜色字符串 "#RRGGBB"，省略时不修改。
-    bold:        True/False，省略时不修改。
-    italic:      True/False，省略时不修改。
-    underline:   True/False，省略时不修改。
+    Args:
+        file_path: 源 PPTX 文件路径。
+        output_path: 输出文件路径。
+        slide_index: 1-based 幻灯片索引。
+        search_text: 要匹配的文字子串。
+        font_size: 字号（pt），省略时不修改。
+        font_color: 十六进制颜色字符串 "#RRGGBB"，省略时不修改。
+        bold: True/False，省略时不修改。
+        italic: True/False，省略时不修改。
+        underline: True/False，省略时不修改。
     """
     resolved_src = (file_path or "").strip()
     if not resolved_src:
