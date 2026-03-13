@@ -418,6 +418,14 @@ def register_routes(app) -> None:
         if req_type == "url_verification":
             return {"challenge": payload.get("challenge", "")}
 
+        mode = (cfg.feishu_event_transport or "both").strip().lower()
+        if mode in {"long_conn", "long-connection", "ws"}:
+            logger.info(
+                "Feishu webhook event skipped by transport mode, mode=%s",
+                mode,
+            )
+            return {"ok": True, "accepted": False, "reason": "webhook_disabled_by_transport"}
+
         token = str(payload.get("token") or "")
         if cfg.feishu_verification_token and token != cfg.feishu_verification_token:
             raise HTTPException(status_code=401, detail="Invalid Feishu verification token")
@@ -432,6 +440,7 @@ def register_routes(app) -> None:
             chat_id=str(message.get("chat_id") or "").strip() or None,
             open_id=str(sender_id.get("open_id") or "").strip() or None,
             message_id=str(message.get("message_id") or "").strip() or None,
+            source="webhook",
             chat_type=str(message.get("chat_type") or "").strip() or None,
             mentions=message.get("mentions"),
         )

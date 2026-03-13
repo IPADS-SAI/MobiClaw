@@ -6,11 +6,58 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import os
 import threading
+import time
 import uuid
 from typing import Any
 
 logger = logging.getLogger("seneschal.gateway_server")
+
+_FEISHU_MESSAGE_DEDUP: dict[str, float] = {}
+_FEISHU_MESSAGE_DEDUP_LOCK = asyncio.Lock()
+
+
+def _feishu_message_dedup_ttl_s() -> int:
+    raw = (os.environ.get("FEISHU_MESSAGE_DEDUP_TTL_S") or "600").strip()
+    try:
+        return max(30, int(raw))
+    except ValueError:
+        return 600
+
+
+def _feishu_message_dedup_max_items() -> int:
+    raw = (os.environ.get("FEISHU_MESSAGE_DEDUP_MAX_ITEMS") or "10000").strip()
+    try:
+        return max(100, int(raw))
+    except ValueError:
+        return 10000
+
+
+async def _is_duplicate_feishu_message(message_id: str | None) -> bool:
+    normalized = str(message_id or "").strip()
+    if not normalized:
+        return False
+
+    now = time.time()
+    ttl_s = _feishu_message_dedup_ttl_s()
+    expire_before = now - ttl_s
+
+    async with _FEISHU_MESSAGE_DEDUP_LOCK:
+        stale_keys = [k for k, ts in _FEISHU_MESSAGE_DEDUP.items() if ts < expire_before]
+        for key in stale_keys:
+            _FEISHU_MESSAGE_DEDUP.pop(key, None)
+
+        seen_at = _FEISHU_MESSAGE_DEDUP.get(normalized)
+        if seen_at is not None and seen_at >= expire_before:
+            return True
+
+        _FEISHU_MESSAGE_DEDUP[normalized] = now
+        max_items = _feishu_message_dedup_max_items()
+        if len(_FEISHU_MESSAGE_DEDUP) > max_items:
+            oldest = min(_FEISHU_MESSAGE_DEDUP, key=_FEISHU_MESSAGE_DEDUP.get)
+            _FEISHU_MESSAGE_DEDUP.pop(oldest, None)
+        return False
 
 
 def _gateway_override(name: str, default: Any) -> Any:
@@ -64,6 +111,7 @@ async def _accept_feishu_message(
     chat_id: str | None,
     open_id: str | None,
     message_id: str | None,
+    source: str = "unknown",
     chat_type: str | None = None,
     mentions: Any = None,
 ) -> dict[str, Any]:
@@ -80,12 +128,21 @@ async def _accept_feishu_message(
     )
     if not accepted:
         logger.info(
-            "Feishu event ignored by mention filter, message_id=%s reason=%s chat_type=%s",
+            "Feishu event ignored by mention filter, source=%s message_id=%s reason=%s chat_type=%s",
+            source,
             message_id or "",
             reason or "",
             (chat_type or "").strip().lower() or "unknown",
         )
         return {"ok": True, "accepted": False, "reason": reason or "filtered"}
+
+    if await _is_duplicate_feishu_message(message_id):
+        logger.info(
+            "Feishu duplicate event ignored, source=%s message_id=%s",
+            source,
+            message_id or "",
+        )
+        return {"ok": True, "accepted": False, "reason": "duplicate_message_id"}
 
     task = build_task(content, message_id, cfg)
     if not task:
@@ -106,7 +163,12 @@ async def _accept_feishu_message(
                 await asyncio.to_thread(send_ack, cfg, receive_id, receive_type)
             except Exception as exc:
                 logger.warning("Failed to send Feishu ack: %s", exc)
-    logger.info("Feishu event accepted, job_id=%s message_id=%s", job_id, message_id or "")
+    logger.info(
+        "Feishu event accepted, source=%s job_id=%s message_id=%s",
+        source,
+        job_id,
+        message_id or "",
+    )
     return {"ok": True, "accepted": True, "job_id": job_id}
 
 
@@ -156,6 +218,7 @@ def _start_feishu_long_connection(cfg) -> None:
                         chat_id=chat_id,
                         open_id=open_id,
                         message_id=message_id,
+                        source="long_conn",
                         chat_type=chat_type,
                         mentions=mentions,
                     ),
