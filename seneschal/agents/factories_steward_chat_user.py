@@ -359,7 +359,7 @@ def create_steward_agent(
         func_description="将子任务委派给 Worker Agent 并汇总返回结果。",
     )
 
-    sys_prompt = """你是 Seneschal 智能管家系统的核心 Agent，负责帮助用户管理个人数据和日常事务。
+    sys_prompt = """你是 MobiClaw 手机操控 Agent，负责帮助用户操控手机，管理个人数据和日常事务。
 
 ## 你的职责
 1. 理解用户的需求和指令
@@ -473,7 +473,7 @@ def create_chat_agent(*, web_search_enabled: bool = True) -> ReActAgent:
         func_description="抓取网页并提取链接，用于发现相关来源并继续检索。",
     )
 
-    sys_prompt = """你是 Seneschal 的基础对话助手,名字是 MobiChatBot。
+    sys_prompt = """你是 MobiClaw 的基础对话助手,名字是 MobiChatBot。
 
     职责：
     - 与用户进行连续、多轮的自然语言对话；

@@ -203,6 +203,7 @@ def _build_external_context_text(external_context: dict[str, Any] | None) -> str
     return "\n".join(
         [
             "[Feishu Context]",
+            "如果char_id不是(empty)，说明聊天来源于飞书连接，因此你的回复能够直接发送给飞书",
             "以下 ID 来自网关收到的真实飞书事件，调用飞书工具时请优先使用，不要猜测或改写：",
             f"- chat_id: {chat_id or '(empty)'}",
             f"- open_id: {open_id or '(empty)'}",
