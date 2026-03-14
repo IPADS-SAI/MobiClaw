@@ -65,14 +65,24 @@ def _extract_commands_from_skill_md(skill_md_path: Path) -> list[str]:
         return []
 
     candidates: list[str] = []
+    has_python_fence = False
 
     # Extract command-like lines from fenced code blocks.
-    fence_pattern = re.compile(r"```(?:bash|sh|shell|zsh|python)?\n(.*?)```", flags=re.DOTALL | re.IGNORECASE)
-    for block in fence_pattern.findall(content):
+    fence_pattern = re.compile(r"```(?P<lang>[A-Za-z0-9_+-]*)\n(?P<body>.*?)```", flags=re.DOTALL | re.IGNORECASE)
+    for match in fence_pattern.finditer(content):
+        lang = (match.group("lang") or "").strip().lower()
+        block = match.group("body")
+        if lang.startswith("python"):
+            has_python_fence = True
         for line in block.splitlines():
             line = line.strip()
             if _looks_like_command_line(line):
                 candidates.append(line)
+
+    # If the skill includes python snippets, allow python/python3 runtime wrappers
+    # (e.g. here-doc style: `python3 << 'EOF' ... EOF`).
+    if has_python_fence:
+        candidates.extend(["python", "python3"])
 
     # Extract inline code snippets that look like command lines.
     inline_pattern = re.compile(r"`([^`\n]+)`")
