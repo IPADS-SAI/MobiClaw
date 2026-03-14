@@ -67,9 +67,9 @@
 
 核心能力：
 
-- `call_mobi_collect`
 - `call_mobi_collect_verified`
 - `call_mobi_action`
+- 旧名 `call_mobi_collect` 已废弃，统一使用 `call_mobi_collect_verified`
 
 当前现实作用：
 
@@ -82,8 +82,7 @@
 - `success`
 - `run_dir`
 - `index_file`
-- `screenshot_path`
-- `ocr_text`
+- `final_image_path`（配合 `ImageBlock` 使用）
 - `status_hint`
 - `step_count`
 - `action_count`

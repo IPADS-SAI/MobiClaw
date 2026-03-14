@@ -14,7 +14,7 @@ from agentscope.tool import ToolResponse
 
 from ..agents import create_worker_agent
 from ..run_context import RunContext, create_run_context
-from ..tools import call_mobi_collect
+from ..tools import call_mobi_collect_verified
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +105,7 @@ async def run_daily_tasks(
             continue
 
         ctx.log_event("collect_start", {"task_id": task_id, "prompt": prompt})
-        response = await call_mobi_collect(prompt)
+        response = await call_mobi_collect_verified(prompt, max_retries=0)
         text_content = tool_response_to_text(response)
         metadata = {
             "run_id": ctx.run_id,

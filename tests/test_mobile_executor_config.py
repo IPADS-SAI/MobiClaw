@@ -81,3 +81,18 @@ def test_mobiagent_explicit_api_base_overrides_split_ports(monkeypatch):
 
     cfg = resolve_provider_config(provider=None)
     assert cfg.api_base == "http://166.111.53.96:7003/v1"
+
+
+def test_global_max_retries_is_applied(monkeypatch):
+    monkeypatch.setenv("MOBILE_PROVIDER", "qwen")
+    monkeypatch.setenv("MOBILE_MAX_RETRIES", "4")
+    cfg = resolve_provider_config(provider=None)
+    assert cfg.extras.get("max_retries") == 4
+
+
+def test_provider_max_retries_overrides_global(monkeypatch):
+    monkeypatch.setenv("MOBILE_PROVIDER", "mobiagent")
+    monkeypatch.setenv("MOBILE_MAX_RETRIES", "2")
+    monkeypatch.setenv("MOBILE_MOBIAGENT_MAX_RETRIES", "5")
+    cfg = resolve_provider_config(provider=None)
+    assert cfg.extras.get("max_retries") == 5
