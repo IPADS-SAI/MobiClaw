@@ -16,7 +16,7 @@ from typing import Any
 
 logger = logging.getLogger("seneschal.gateway_server")
 
-_FEISHU_MESSAGE_DEDUP: dict[str, float] = {}
+_FEISHU_MESSAGE_DEDUP: dict[str, tuple[float, str]] = {}
 _FEISHU_MESSAGE_DEDUP_LOCK = asyncio.Lock()
 
 
@@ -36,30 +36,55 @@ def _feishu_message_dedup_max_items() -> int:
         return 10000
 
 
-async def _is_duplicate_feishu_message(message_id: str | None) -> bool:
+async def _try_claim_feishu_message(message_id: str | None) -> bool:
     normalized = str(message_id or "").strip()
     if not normalized:
-        return False
+        return True
 
     now = time.time()
     ttl_s = _feishu_message_dedup_ttl_s()
     expire_before = now - ttl_s
 
     async with _FEISHU_MESSAGE_DEDUP_LOCK:
-        stale_keys = [k for k, ts in _FEISHU_MESSAGE_DEDUP.items() if ts < expire_before]
+        stale_keys = [k for k, item in _FEISHU_MESSAGE_DEDUP.items() if item[0] < expire_before]
         for key in stale_keys:
             _FEISHU_MESSAGE_DEDUP.pop(key, None)
 
-        seen_at = _FEISHU_MESSAGE_DEDUP.get(normalized)
-        if seen_at is not None and seen_at >= expire_before:
-            return True
+        seen_item = _FEISHU_MESSAGE_DEDUP.get(normalized)
+        if seen_item is not None:
+            seen_at, status = seen_item
+            if seen_at >= expire_before and status in {"processing", "done"}:
+                return False
 
-        _FEISHU_MESSAGE_DEDUP[normalized] = now
+        _FEISHU_MESSAGE_DEDUP[normalized] = (now, "processing")
         max_items = _feishu_message_dedup_max_items()
         if len(_FEISHU_MESSAGE_DEDUP) > max_items:
-            oldest = min(_FEISHU_MESSAGE_DEDUP, key=_FEISHU_MESSAGE_DEDUP.get)
+            oldest = min(_FEISHU_MESSAGE_DEDUP, key=lambda key: _FEISHU_MESSAGE_DEDUP[key][0])
             _FEISHU_MESSAGE_DEDUP.pop(oldest, None)
-        return False
+        return True
+
+
+async def _complete_feishu_message_claim(message_id: str | None) -> None:
+    normalized = str(message_id or "").strip()
+    if not normalized:
+        return
+    now = time.time()
+    async with _FEISHU_MESSAGE_DEDUP_LOCK:
+        if normalized in _FEISHU_MESSAGE_DEDUP:
+            _FEISHU_MESSAGE_DEDUP[normalized] = (now, "done")
+
+
+async def _release_feishu_message_claim(message_id: str | None) -> None:
+    normalized = str(message_id or "").strip()
+    if not normalized:
+        return
+    async with _FEISHU_MESSAGE_DEDUP_LOCK:
+        seen_item = _FEISHU_MESSAGE_DEDUP.get(normalized)
+        if seen_item is None:
+            return
+        _, status = seen_item
+        if status == "processing":
+            _FEISHU_MESSAGE_DEDUP.pop(normalized, None)
 
 
 def _gateway_override(name: str, default: Any) -> Any:
@@ -139,7 +164,8 @@ async def _accept_feishu_message(
         )
         return {"ok": True, "accepted": False, "reason": reason or "filtered"}
 
-    if await _is_duplicate_feishu_message(message_id):
+    claimed = await _try_claim_feishu_message(message_id)
+    if not claimed:
         logger.info(
             "Feishu duplicate event ignored, source=%s message_id=%s",
             source,
@@ -159,23 +185,30 @@ async def _accept_feishu_message(
     reserved_output_path = reserved_job_dir / "final_output.md"
     feishu_download_dir = reserved_job_dir / "feishu_media"
 
-    task = build_task(
-        content,
-        message_id,
-        cfg,
-        download_dir=str(feishu_download_dir),
-    )
-    if not task:
-        return {"ok": True, "accepted": False, "reason": "empty_task"}
+    try:
+        task = await asyncio.to_thread(
+            build_task,
+            content,
+            message_id,
+            cfg,
+            download_dir=str(feishu_download_dir),
+        )
+        if not task:
+            await _complete_feishu_message_claim(message_id)
+            return {"ok": True, "accepted": False, "reason": "empty_task"}
 
-    job_id = await _enqueue_feishu_job(
-        task,
-        output_path=str(reserved_output_path),
-        chat_id=chat_id,
-        open_id=open_id,
-        message_id=message_id,
-        external_context={"feishu": {"chat_id": chat_id, "open_id": open_id, "message_id": message_id}},
-    )
+        job_id = await _enqueue_feishu_job(
+            task,
+            output_path=str(reserved_output_path),
+            chat_id=chat_id,
+            open_id=open_id,
+            message_id=message_id,
+            external_context={"feishu": {"chat_id": chat_id, "open_id": open_id, "message_id": message_id}},
+        )
+        await _complete_feishu_message_claim(message_id)
+    except Exception:
+        await _release_feishu_message_claim(message_id)
+        raise
     if cfg.feishu_ack_enabled:
         receive_id = chat_id or open_id
         receive_type = "chat_id" if chat_id else "open_id"
@@ -245,12 +278,19 @@ def _start_feishu_long_connection(cfg) -> None:
                     ),
                     main_loop,
                 )
-                result = future.result(timeout=10)
-                logger.info(
-                    "Feishu long-connection event processed, accepted=%s job_id=%s",
-                    result.get("accepted"),
-                    result.get("job_id", ""),
-                )
+
+                def _log_result(done_future: Any) -> None:
+                    try:
+                        result = done_future.result()
+                        logger.info(
+                            "Feishu long-connection event processed, accepted=%s job_id=%s",
+                            result.get("accepted"),
+                            result.get("job_id", ""),
+                        )
+                    except Exception as exc:
+                        logger.exception("Failed to process Feishu long-connection event: %s", exc)
+
+                future.add_done_callback(_log_result)
             except Exception as exc:
                 logger.exception("Failed to process Feishu long-connection event: %s", exc)
 
