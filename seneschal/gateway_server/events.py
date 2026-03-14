@@ -6,11 +6,85 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import os
 import threading
+import time
 import uuid
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("seneschal.gateway_server")
+
+_FEISHU_MESSAGE_DEDUP: dict[str, tuple[float, str]] = {}
+_FEISHU_MESSAGE_DEDUP_LOCK = asyncio.Lock()
+
+
+def _feishu_message_dedup_ttl_s() -> int:
+    raw = (os.environ.get("FEISHU_MESSAGE_DEDUP_TTL_S") or "600").strip()
+    try:
+        return max(30, int(raw))
+    except ValueError:
+        return 600
+
+
+def _feishu_message_dedup_max_items() -> int:
+    raw = (os.environ.get("FEISHU_MESSAGE_DEDUP_MAX_ITEMS") or "10000").strip()
+    try:
+        return max(100, int(raw))
+    except ValueError:
+        return 10000
+
+
+async def _try_claim_feishu_message(message_id: str | None) -> bool:
+    normalized = str(message_id or "").strip()
+    if not normalized:
+        return True
+
+    now = time.time()
+    ttl_s = _feishu_message_dedup_ttl_s()
+    expire_before = now - ttl_s
+
+    async with _FEISHU_MESSAGE_DEDUP_LOCK:
+        stale_keys = [k for k, item in _FEISHU_MESSAGE_DEDUP.items() if item[0] < expire_before]
+        for key in stale_keys:
+            _FEISHU_MESSAGE_DEDUP.pop(key, None)
+
+        seen_item = _FEISHU_MESSAGE_DEDUP.get(normalized)
+        if seen_item is not None:
+            seen_at, status = seen_item
+            if seen_at >= expire_before and status in {"processing", "done"}:
+                return False
+
+        _FEISHU_MESSAGE_DEDUP[normalized] = (now, "processing")
+        max_items = _feishu_message_dedup_max_items()
+        if len(_FEISHU_MESSAGE_DEDUP) > max_items:
+            oldest = min(_FEISHU_MESSAGE_DEDUP, key=lambda key: _FEISHU_MESSAGE_DEDUP[key][0])
+            _FEISHU_MESSAGE_DEDUP.pop(oldest, None)
+        return True
+
+
+async def _complete_feishu_message_claim(message_id: str | None) -> None:
+    normalized = str(message_id or "").strip()
+    if not normalized:
+        return
+    now = time.time()
+    async with _FEISHU_MESSAGE_DEDUP_LOCK:
+        if normalized in _FEISHU_MESSAGE_DEDUP:
+            _FEISHU_MESSAGE_DEDUP[normalized] = (now, "done")
+
+
+async def _release_feishu_message_claim(message_id: str | None) -> None:
+    normalized = str(message_id or "").strip()
+    if not normalized:
+        return
+    async with _FEISHU_MESSAGE_DEDUP_LOCK:
+        seen_item = _FEISHU_MESSAGE_DEDUP.get(normalized)
+        if seen_item is None:
+            return
+        _, status = seen_item
+        if status == "processing":
+            _FEISHU_MESSAGE_DEDUP.pop(normalized, None)
 
 
 def _gateway_override(name: str, default: Any) -> Any:
@@ -22,6 +96,7 @@ def _gateway_override(name: str, default: Any) -> Any:
 async def _enqueue_feishu_job(
     task: str,
     *,
+    output_path: str | None,
     chat_id: str | None,
     open_id: str | None,
     message_id: str | None,
@@ -46,7 +121,7 @@ async def _enqueue_feishu_job(
         run_job(
             job_id,
             task,
-            output_path=None,
+            output_path=output_path,
             mode="router",
             agent_hint=None,
             skill_hint=None,
@@ -64,6 +139,7 @@ async def _accept_feishu_message(
     chat_id: str | None,
     open_id: str | None,
     message_id: str | None,
+    source: str = "unknown",
     chat_type: str | None = None,
     mentions: Any = None,
 ) -> dict[str, Any]:
@@ -80,24 +156,59 @@ async def _accept_feishu_message(
     )
     if not accepted:
         logger.info(
-            "Feishu event ignored by mention filter, message_id=%s reason=%s chat_type=%s",
+            "Feishu event ignored by mention filter, source=%s message_id=%s reason=%s chat_type=%s",
+            source,
             message_id or "",
             reason or "",
             (chat_type or "").strip().lower() or "unknown",
         )
         return {"ok": True, "accepted": False, "reason": reason or "filtered"}
 
-    task = build_task(content, message_id, cfg)
-    if not task:
-        return {"ok": True, "accepted": False, "reason": "empty_task"}
+    claimed = await _try_claim_feishu_message(message_id)
+    if not claimed:
+        logger.info(
+            "Feishu duplicate event ignored, source=%s message_id=%s",
+            source,
+            message_id or "",
+        )
+        return {"ok": True, "accepted": False, "reason": "duplicate_message_id"}
 
-    job_id = await _enqueue_feishu_job(
-        task,
-        chat_id=chat_id,
-        open_id=open_id,
-        message_id=message_id,
-        external_context={"feishu": {"chat_id": chat_id, "open_id": open_id, "message_id": message_id}},
-    )
+    output_root_raw = (os.environ.get("SENESCHAL_FILE_WRITE_ROOT") or "").strip()
+    if output_root_raw:
+        output_root = Path(output_root_raw).expanduser()
+    else:
+        output_root = Path(__file__).resolve().parents[2] / "outputs"
+    job_name = "job_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    reserved_job_dir = output_root / job_name
+    reserved_tmp_dir = reserved_job_dir / "tmp"
+    reserved_tmp_dir.mkdir(parents=True, exist_ok=True)
+    reserved_output_path = reserved_job_dir / "final_output.md"
+    feishu_download_dir = reserved_job_dir / "feishu_media"
+
+    try:
+        task = await asyncio.to_thread(
+            build_task,
+            content,
+            message_id,
+            cfg,
+            download_dir=str(feishu_download_dir),
+        )
+        if not task:
+            await _complete_feishu_message_claim(message_id)
+            return {"ok": True, "accepted": False, "reason": "empty_task"}
+
+        job_id = await _enqueue_feishu_job(
+            task,
+            output_path=str(reserved_output_path),
+            chat_id=chat_id,
+            open_id=open_id,
+            message_id=message_id,
+            external_context={"feishu": {"chat_id": chat_id, "open_id": open_id, "message_id": message_id}},
+        )
+        await _complete_feishu_message_claim(message_id)
+    except Exception:
+        await _release_feishu_message_claim(message_id)
+        raise
     if cfg.feishu_ack_enabled:
         receive_id = chat_id or open_id
         receive_type = "chat_id" if chat_id else "open_id"
@@ -106,7 +217,12 @@ async def _accept_feishu_message(
                 await asyncio.to_thread(send_ack, cfg, receive_id, receive_type)
             except Exception as exc:
                 logger.warning("Failed to send Feishu ack: %s", exc)
-    logger.info("Feishu event accepted, job_id=%s message_id=%s", job_id, message_id or "")
+    logger.info(
+        "Feishu event accepted, source=%s job_id=%s message_id=%s",
+        source,
+        job_id,
+        message_id or "",
+    )
     return {"ok": True, "accepted": True, "job_id": job_id}
 
 
@@ -156,17 +272,25 @@ def _start_feishu_long_connection(cfg) -> None:
                         chat_id=chat_id,
                         open_id=open_id,
                         message_id=message_id,
+                        source="long_conn",
                         chat_type=chat_type,
                         mentions=mentions,
                     ),
                     main_loop,
                 )
-                result = future.result(timeout=10)
-                logger.info(
-                    "Feishu long-connection event processed, accepted=%s job_id=%s",
-                    result.get("accepted"),
-                    result.get("job_id", ""),
-                )
+
+                def _log_result(done_future: Any) -> None:
+                    try:
+                        result = done_future.result()
+                        logger.info(
+                            "Feishu long-connection event processed, accepted=%s job_id=%s",
+                            result.get("accepted"),
+                            result.get("job_id", ""),
+                        )
+                    except Exception as exc:
+                        logger.exception("Failed to process Feishu long-connection event: %s", exc)
+
+                future.add_done_callback(_log_result)
             except Exception as exc:
                 logger.exception("Failed to process Feishu long-connection event: %s", exc)
 

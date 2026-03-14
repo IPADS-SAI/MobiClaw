@@ -4813,6 +4813,19 @@ wheels = [
 ]
 
 [[package]]
+name = "reportlab"
+version = "4.4.10"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "charset-normalizer" },
+    { name = "pillow" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/48/57/28bfbf0a775b618b6e4d854ef8dd3f5c8988e5d614d8898703502a35f61c/reportlab-4.4.10.tar.gz", hash = "sha256:5cbbb34ac3546039d0086deb2938cdec06b12da3cdb836e813258eb33cd28487", size = 3714962, upload-time = "2026-02-12T10:45:21.325Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8a/2e/e1798b8b248e1517e74c6cdf10dd6edd485044e7edf46b5f11ffcc5a0add/reportlab-4.4.10-py3-none-any.whl", hash = "sha256:5abc815746ae2bc44e7ff25db96814f921349ca814c992c7eac3c26029bf7c24", size = 1955400, upload-time = "2026-02-12T10:45:18.828Z" },
+]
+
+[[package]]
 name = "requests"
 version = "2.32.5"
 source = { registry = "https://pypi.org/simple" }
@@ -5077,6 +5090,7 @@ dependencies = [
     { name = "python-multipart" },
     { name = "python-pptx" },
     { name = "qdrant-client" },
+    { name = "reportlab" },
     { name = "requests" },
     { name = "uiautomator2" },
     { name = "uvicorn", extra = ["standard"] },
@@ -5101,6 +5115,7 @@ requires-dist = [
     { name = "python-multipart" },
     { name = "python-pptx", specifier = ">=0.6.23" },
     { name = "qdrant-client", specifier = "==1.15.1" },
+    { name = "reportlab" },
     { name = "requests" },
     { name = "uiautomator2", specifier = ">=3.5.0" },
     { name = "uvicorn", extras = ["standard"] },

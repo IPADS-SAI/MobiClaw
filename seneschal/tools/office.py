@@ -15,6 +15,58 @@ from agentscope.tool import ToolResponse
 logger = logging.getLogger(__name__)
 
 
+def _pick_reportlab_font() -> tuple[str, str]:
+    """Pick a ReportLab font that can render Chinese text when possible.
+
+    Returns:
+        (font_name, font_source)
+    """
+    try:
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+        from reportlab.pdfbase.ttfonts import TTFont
+    except Exception:
+        return "Helvetica", "builtin"
+
+    configured_pdf = (os.environ.get("SENESCHAL_PDF_FONT_PATH") or "").strip()
+    configured_cjk = (os.environ.get("SENESCHAL_CJK_FONT_PATH") or "").strip()
+    candidates: list[str] = []
+    if configured_pdf:
+        candidates.append(configured_pdf)
+    if configured_cjk and configured_cjk not in candidates:
+        candidates.append(configured_cjk)
+    candidates.extend(
+        [
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.otf",
+            "/usr/share/fonts/truetype/arphic/uming.ttc",
+        ]
+    )
+
+    for path in candidates:
+        candidate = Path(path).expanduser()
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        font_name = "SeneschalCJK"
+        try:
+            if font_name not in pdfmetrics.getRegisteredFontNames():
+                pdfmetrics.registerFont(TTFont(font_name, str(candidate)))
+            return font_name, str(candidate)
+        except Exception as exc:
+            logger.warning("office.pdf.font_register_failed path=%s error=%s", candidate, exc)
+
+    try:
+        cid_font = "STSong-Light"
+        if cid_font not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(UnicodeCIDFont(cid_font))
+        return cid_font, "cid:STSong-Light"
+    except Exception as exc:
+        logger.warning("office.pdf.cid_font_register_failed error=%s", exc)
+
+    return "Helvetica", "builtin"
+
+
 def _resolve_write_path(path: str) -> tuple[Path | None, str | None]:
     resolved_path = (path or "").strip()
     if not resolved_path:
@@ -380,13 +432,19 @@ async def create_pdf_from_text(
         width, height = pagesize
         margin = 72
         y = height - margin
-        pdf.setFont("Helvetica", 12)
+        font_name, font_source = _pick_reportlab_font()
+        logger.info("office.pdf.font_selected name=%s source=%s", font_name, font_source)
+        if font_source == "builtin":
+            logger.warning(
+                "office.pdf.no_cjk_font_found; set SENESCHAL_PDF_FONT_PATH or SENESCHAL_CJK_FONT_PATH to a valid CJK font file to avoid garbled Chinese text"
+            )
+        pdf.setFont(font_name, 12)
 
         if title:
-            pdf.setFont("Helvetica-Bold", 14)
+            pdf.setFont(font_name, 14)
             pdf.drawString(margin, y, title)
             y -= 24
-            pdf.setFont("Helvetica", 12)
+            pdf.setFont(font_name, 12)
 
         wrapped_lines: list[str] = []
         for raw_line in (content or "").splitlines():
@@ -398,7 +456,7 @@ async def create_pdf_from_text(
         for line in wrapped_lines:
             if y <= margin:
                 pdf.showPage()
-                pdf.setFont("Helvetica", 12)
+                pdf.setFont(font_name, 12)
                 y = height - margin
             pdf.drawString(margin, y, line)
             y -= 14
@@ -412,7 +470,7 @@ async def create_pdf_from_text(
 
     return ToolResponse(
         content=[TextBlock(type="text", text=f"[PDF] Wrote: {target}")],
-        metadata={"path": str(target)},
+        metadata={"path": str(target), "font_name": font_name, "font_source": font_source},
     )
 
 

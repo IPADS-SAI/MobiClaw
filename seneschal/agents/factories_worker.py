@@ -212,7 +212,7 @@ def create_worker_agent(
         ),
     )
 
-    sys_prompt = """你是 Seneschal 的 Worker Agent，负责处理通用问题与单一子任务。
+    sys_prompt = """你是 MobiClaw 的 Worker Agent，负责处理通用问题与单一子任务。
 
 工作准则：
 - 只聚焦当前任务（如果当前是一个子任务，只聚焦于子任务），给出简明直接的结果。
