@@ -11,8 +11,36 @@ from typing import Dict, List, Optional
 from PIL import Image
 from openai import OpenAI
 
+ANSI_RESET = "\033[0m"
+ANSI_BOLD = "\033[1m"
+ANSI_BLUE = "\033[94m"
+
+
+def _highlight_log(message: str, color: str = ANSI_BLUE) -> str:
+    """参考 orchestrator 的高亮风格，对日志消息做 ANSI 着色。"""
+    return f"{ANSI_BOLD}{color}{message}{ANSI_RESET}"
+
+
+class _BlueInfoLoggerAdapter(logging.LoggerAdapter):
+    """仅将 info 级别日志渲染为蓝色，便于终端区分查看。"""
+
+    @staticmethod
+    def _enable_color() -> bool:
+        if os.environ.get("NO_COLOR"):
+            return False
+        if os.environ.get("MOBIAGENT_INFO_BLUE", "1").strip() in {"0", "false", "False"}:
+            return False
+        return True
+
+    def info(self, msg, *args, **kwargs):
+        # 与 orchestrator 的上色策略保持一致：使用 _highlight_log 包装消息。
+        if self._enable_color():
+            msg = _highlight_log(str(msg), ANSI_BLUE)
+        return self.logger.info(msg, *args, **kwargs)
+
+
 # 使用模块级别的logger（级别由 setup_logging() 统一配置）
-logger = logging.getLogger(__name__)
+logger = _BlueInfoLoggerAdapter(logging.getLogger(__name__), {})
 
 from ...base_task import BaseTask
 from ...interrupts import ensure_not_interrupted, interruptible_sleep
@@ -203,18 +231,18 @@ class MobiAgentStepTask(BaseTask):
             decider_base_url = self.api_base
             grounder_base_url = self.api_base
             planner_base_url = self.api_base
-            logger.info("Using API base URL override: %s", self.api_base)
+            logger.debug("Using API base URL override: %s", self.api_base)
         elif service_ip is not None and (service_ip.startswith("http://") or service_ip.startswith("https://")):
             decider_base_url = f"{service_ip}:{decider_port}/v1"
             grounder_base_url = f"{service_ip}:{grounder_port}/v1"
             planner_base_url = f"{service_ip}:{planner_port}/v1"
-            logger.info("Using service IP: %s", service_ip)
+            logger.debug("Using service IP: %s", service_ip)
         else:
             decider_base_url = f"http://{service_ip}:{decider_port}/v1"
             grounder_base_url = f"http://{service_ip}:{grounder_port}/v1"
             planner_base_url = f"http://{service_ip}:{planner_port}/v1"
 
-        logger.info(
+        logger.debug(
             "MobiAgent endpoints resolved: decider=%s grounder=%s planner=%s",
             decider_base_url,
             grounder_base_url,
@@ -246,11 +274,11 @@ class MobiAgentStepTask(BaseTask):
         # 加载prompt模板
         prompt_dir = os.path.join(os.path.dirname(__file__), "prompts")
         if use_e2e:
-            logging.info("MobiAgent initialized with e2e mode")
+            logger.debug("MobiAgent initialized with e2e mode")
         else:
             self.grounder_prompt_template_bbox = load_prompt("grounder_qwen3_bbox.md", prompt_dir)
             self.grounder_prompt_template_no_bbox = load_prompt("grounder_qwen3_coordinates.md", prompt_dir)
-            logger.info("MobiAgent initialized with decider+grounder mode")
+            logger.debug("MobiAgent initialized with decider+grounder mode")
         
         # 历史记录
         self.history = []
@@ -557,7 +585,7 @@ Important: Return ONLY the JSON object, no additional text or markdown formattin
         parameters = decider_response.get("parameters", {})
         reasoning = decider_response.get("reasoning", "")
         
-        logger.info(f"Action: {action}, Reasoning: {reasoning}")
+        # logger.info(f"Action: {action}, Reasoning: {reasoning}")
         
         # 记录推理过程
         self._add_react(
