@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Local mobile executor tool wrappers (legacy mobi API-compatible)."""
+"""本地移动执行器工具封装（兼容旧版 mobi 接口）。"""
 
 from __future__ import annotations
 
@@ -30,30 +30,117 @@ def _resolve_output_dir(output_dir: str | None = None) -> str:
     return str(path)
 
 
-def _flatten_execution(execution: dict[str, Any]) -> dict[str, Any]:
+def _build_execution_metadata(execution: dict[str, Any]) -> dict[str, Any]:
+    """构造 mobi 工具稳定输出的 metadata 结构。
+
+    MobileExecutor 返回的是嵌套 execution 树；上层工具只需要少量常用摘要字段，
+    同时也需要保留完整 execution 供下游继续读取。这里统一完成映射，避免调用点
+    重复做字段抽取和格式整理。
+
+    Args:
+        execution: MobileExecutor 返回的原始 execution 结果。
+    """
     summary = execution.get("summary") if isinstance(execution.get("summary"), dict) else {}
     history = execution.get("history") if isinstance(execution.get("history"), dict) else {}
-    ocr = execution.get("ocr") if isinstance(execution.get("ocr"), dict) else {}
     artifacts = execution.get("artifacts") if isinstance(execution.get("artifacts"), dict) else {}
 
     reasonings = history.get("reasonings") if isinstance(history.get("reasonings"), list) else []
-    last_reasoning = str(reasonings[-1]) if reasonings else ""
     images = artifacts.get("images") if isinstance(artifacts.get("images"), list) else []
-
     run_dir = str(execution.get("run_dir", ""))
     index_file = str(execution.get("index_file", "")) or (str(Path(run_dir) / "execution_result.json") if run_dir else "")
 
     return {
         "execution": execution,
-        "ocr_text": str(ocr.get("full_text", "")),
-        "screenshot_path": str(summary.get("final_screenshot_path", images[-1] if images else "")),
-        "last_reasoning": last_reasoning,
+        "final_image_path": str(summary.get("final_screenshot_path", images[-1] if images else "")),
+        "last_reasoning": str(reasonings[-1]) if reasonings else "",
         "action_count": int(summary.get("action_count", 0) or 0),
         "step_count": int(summary.get("step_count", 0) or 0),
         "status_hint": str(summary.get("status_hint", "")),
         "run_dir": run_dir,
         "index_file": index_file,
     }
+
+
+def _build_collect_content(
+    *,
+    task_desc: str,
+    metadata: dict[str, Any],
+    success: bool,
+    message: str,
+    attempt: int,
+    total_attempts: int,
+) -> list[TextBlock]:
+    """构造 collect 工具返回给agent模型阅读的内容块。
+
+    Args:
+        task_desc: 手机任务描述。
+        metadata: 已整理后的执行摘要 metadata。
+        success: 本次执行是否成功。
+        message: 执行器返回的消息文本。
+        attempt: 当前尝试次数。
+        total_attempts: 总尝试次数。
+    """
+    if success:
+        text = (
+            "[MobiAgent 收集完成(需Agent验证)]\n"
+            f"任务: {task_desc}\n"
+            f"Mobi手机任务执行器状态提示: {metadata['status_hint']}\n"
+            f"最后推理: {metadata['last_reasoning']}"
+        )
+    else:
+        text = (
+            "[MobiAgent 收集失败]\n"
+            f"任务: {task_desc}\n"
+            f"message: {message}\n"
+            f"status_hint: {metadata.get('status_hint', '')}\n"
+            f"run_dir: {metadata.get('run_dir', '')}\n"
+            f"attempt: {attempt}/{total_attempts}"
+        )
+
+    return [TextBlock(type="text", text=text)]
+
+
+def _build_collect_response(
+    *,
+    task_desc: str,
+    metadata: dict[str, Any],
+    success: bool,
+    message: str,
+    attempt: int,
+    total_attempts: int,
+) -> ToolResponse:
+    """构造单次 collect 尝试的最终 ToolResponse。
+
+    返回约定：
+    - content: 文本块
+    - metadata: execution 树 + 上层常用摘要字段
+
+    Args:
+        task_desc: 手机任务描述。
+        metadata: 已整理后的执行摘要 metadata。
+        success: 本次执行是否成功。
+        message: 执行器返回的消息文本。
+        attempt: 当前尝试次数。
+        total_attempts: 总尝试次数。
+    """
+    return ToolResponse(
+        content=_build_collect_content(
+            task_desc=task_desc,
+            metadata=metadata,
+            success=success,
+            message=message,
+            attempt=attempt,
+            total_attempts=total_attempts,
+        ),
+        metadata={
+            "success": success,
+            "requires_agent_validation": True,
+            "attempt": attempt,
+            "attempt_total": total_attempts,
+            "task": task_desc,
+            **metadata,
+        },
+    )
 
 
 def _build_task_from_action(action_type: str, params: dict[str, Any]) -> str:
@@ -76,76 +163,71 @@ def _build_task_from_action(action_type: str, params: dict[str, Any]) -> str:
         return f"打开应用 {app_name}"
     return f"完成以下任务：{json.dumps({'action_type': action_type, 'params': params}, ensure_ascii=False)}"
 
-
-async def call_mobi_collect(task_desc: str) -> ToolResponse:
-    """兼容别名：等价于单次 `call_mobi_collect_verified(max_retries=0)`。"""
-    return await call_mobi_collect_verified(task_desc, max_retries=0)
-
-
 async def call_mobi_collect_verified(
     task_desc: str,
-    max_retries: int = 2,
+    max_retries: int = 0,
     output_dir: str | None = None,
 ) -> ToolResponse:
     """执行本地移动任务，并返回兼容结构化证据。
 
     Args:
         task_desc: 待执行的手机任务描述。
-        max_retries: 兼容参数，当前本地执行器路径中不额外使用。
+        max_retries: 失败后的额外重试次数，`0` 表示仅执行 `1` 次。
         output_dir: 可选输出目录，用于保存执行产物。
     """
-    _ = max_retries
     try:
-        result = _EXECUTOR.run(task=task_desc, output_dir=_resolve_output_dir(output_dir), provider=None)
-        normalized = _flatten_execution(result.execution)
-        success = bool(result.success)
+        retry_cap = max(0, int(max_retries))
+    except (TypeError, ValueError):
+        retry_cap = 0
+    total_attempts = retry_cap + 1
+    target_output_dir = _resolve_output_dir(output_dir)
 
-        if not success:
-            return ToolResponse(
-                content=[
-                    TextBlock(
-                        type="text",
-                        text=(
-                            "[MobiAgent 收集失败]\n"
-                            f"任务: {task_desc}\n"
-                            f"message: {result.message}\n"
-                            f"status_hint: {normalized.get('status_hint', '')}\n"
-                            f"run_dir: {normalized.get('run_dir', '')}"
-                        ),
-                    )
-                ],
-                metadata={"success": False, "requires_agent_validation": True, **normalized},
-            )
+    last_error = ""
+    for attempt in range(1, total_attempts + 1):
+        try:
+            result = _EXECUTOR.run(task=task_desc, output_dir=target_output_dir, provider=None)
+            metadata = _build_execution_metadata(result.execution)
+            success = bool(result.success)
 
-        return ToolResponse(
-            content=[
-                TextBlock(
-                    type="text",
-                    text=(
-                        "[MobiAgent 收集完成(需Agent验证)]\n"
-                        f"任务: {task_desc}\n"
-                        f"执行器状态提示: {normalized['status_hint']}\n"
-                        f"截图路径: {normalized['screenshot_path']}\n"
-                        f"最后推理: {normalized['last_reasoning']}\n"
-                        f"OCR摘要: {(normalized['ocr_text'] or '')[:500]}"
-                    ),
+            if success:
+                return _build_collect_response(
+                    task_desc=task_desc,
+                    metadata=metadata,
+                    success=True,
+                    message=str(result.message or ""),
+                    attempt=attempt,
+                    total_attempts=total_attempts,
                 )
-            ],
-            metadata={
-                "success": True,
-                "requires_agent_validation": True,
-                "attempt": 1,
-                "original_task": task_desc,
-                "final_task": task_desc,
-                **normalized,
-            },
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("local mobile collect failed")
-        return ToolResponse(
-            content=[TextBlock(type="text", text=f"[MobiAgent 调用失败] 错误: {exc}")],
-            metadata={"success": False, "requires_agent_validation": True, "error": str(exc)},
-        )
+
+            last_error = str(result.message or metadata.get("status_hint", "collect_failed"))
+            if attempt >= total_attempts:
+                return _build_collect_response(
+                    task_desc=task_desc,
+                    metadata=metadata,
+                    success=False,
+                    message=str(result.message or ""),
+                    attempt=attempt,
+                    total_attempts=total_attempts,
+                )
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
+            logger.exception("local mobile collect failed: attempt=%s/%s", attempt, total_attempts)
+            if attempt >= total_attempts:
+                return ToolResponse(
+                    content=[TextBlock(type="text", text=f"[MobiAgent 调用失败] 错误: {exc}")],
+                    metadata={
+                        "success": False,
+                        "requires_agent_validation": True,
+                        "attempt": attempt,
+                        "attempt_total": total_attempts,
+                        "error": str(exc),
+                    },
+                )
+
+    return ToolResponse(
+        content=[TextBlock(type="text", text=f"[MobiAgent 调用失败] 错误: {last_error or 'unknown error'}")],
+        metadata={"success": False, "requires_agent_validation": True, "error": last_error or "unknown error"},
+    )
 
 
 async def call_mobi_action(action_type: str, payload: str, output_dir: str | None = None) -> ToolResponse:
@@ -165,7 +247,7 @@ async def call_mobi_action(action_type: str, payload: str, output_dir: str | Non
 
         task_desc = _build_task_from_action(action_type, payload_dict if isinstance(payload_dict, dict) else {})
         result = _EXECUTOR.run(task=task_desc, output_dir=_resolve_output_dir(output_dir), provider=None)
-        normalized = _flatten_execution(result.execution)
+        metadata = _build_execution_metadata(result.execution)
 
         return ToolResponse(
             content=[
@@ -183,7 +265,7 @@ async def call_mobi_action(action_type: str, payload: str, output_dir: str | Non
             metadata={
                 "success": bool(result.success),
                 "action_type": action_type,
-                **normalized,
+                **metadata,
             },
         )
 

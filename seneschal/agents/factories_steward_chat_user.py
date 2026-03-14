@@ -13,7 +13,7 @@ from typing import Any
 from agentscope.agent import ReActAgent, UserAgent
 from agentscope.formatter import OpenAIChatFormatter
 from agentscope.memory import InMemoryMemory
-from agentscope.message import Msg, TextBlock
+from agentscope.message import Msg, TextBlock, ImageBlock
 from agentscope.plan import PlanNotebook
 from agentscope.tool import Toolkit, ToolResponse
 
@@ -23,7 +23,7 @@ from .common import (
     _build_skill_prompt_suffix,
     _env_bool,
     _extract_vlm_evidence,
-    _judge_completion_with_vlm,
+    _summarize_execution_with_vlm,
     _trim_for_log,
     create_openai_model,
 )
@@ -50,9 +50,10 @@ def create_steward_agent(
 ) -> ReActAgent:
     """创建智能管家 Agent (StewardAgent)。"""
     toolkit = Toolkit()
-    retry_cap = max(0, min(int(os.environ.get("STEWARD_MOBI_MAX_RETRIES", "2")), 5))
     ctx = job_context if isinstance(job_context, dict) else {}
     mobi_output_dir = str(ctx.get("mobi_output_dir") or "").strip()
+
+    # 优先使用 job_context 中的 mobi_output_dir 配置, 以保存手机任务结果到对应job目录下；如果没有，再尝试使用环境变量指定的路径。
     if not mobi_output_dir:
         job_output_dir = str(ctx.get("job_output_dir") or "").strip()
         if job_output_dir:
@@ -78,23 +79,10 @@ def create_steward_agent(
         action_func = call_mobi_action
 
     toolkit.register_tool_function(
-        collect_func,
-        func_description=(
-            "优先使用：调用 MobiAgent 收集手机任务结果（单次执行）。"
-            "该工具不保证任务正确完成，也不会自动重试。"
-            "返回统一结构化证据：截图路径、OCR文本、动作历史和推理历史，供 Agent 自主判断。"
-        ),
-    )
-
-    toolkit.register_tool_function(
         action_func,
         func_description=(
-            "指挥 MobiAgent 在手机端执行 GUI 操作。"
-            "支持的操作例如: 'add_calendar_event'(添加日历事件), "
-            "'send_message'(发送消息), 'set_reminder'(设置提醒), go_shop(下单购物)等。"
-            "payload 参数为 JSON 格式字符串，如: "
-            "'{\"title\": \"Meeting\", \"time\": \"15:00\", \"date\": \"2024-01-20\"}'。"
-            "通常是数据整理流程的最后一步，根据分析结果执行具体操作。"
+            "指挥 MobiAgent 在手机端执行 GUI 操作，执行任务或设置事件状态。"
+            "支持的操作例如: 添加日历事件), 发送消息, 设置提醒下单购物)等。"
         ),
     )
 
@@ -112,7 +100,7 @@ def create_steward_agent(
         search_steward_knowledge,
         func_description=(
             "检索本地知识库中已存储的信息。"
-            "用于查找之前通过 store_steward_knowledge 存入的数据（OCR 文字、对话记录等）。"
+            "用于查找之前通过 store_steward_knowledge 存入的数据（图片内容、对话记录等）。"
             "检索后请根据返回的原始片段自行分析总结。"
         ),
     )
@@ -131,204 +119,148 @@ def create_steward_agent(
         func_description="从指定图片中提取文字。",
     )
 
-    async def call_mobi_collect_with_retry_report(task_desc: str, success_criteria: str = "") -> ToolResponse:
-        """执行带重试上限的 mobi 采集，并返回结构化证据包。
+    async def call_mobi_collect_with_report(task_desc: str) -> ToolResponse:
+        """执行一次手机采集任务，返回 VLM 摘要/提取结果与最后截图。
 
         Args:
             task_desc: 手机任务描述。
-            success_criteria: 可选成功判定条件文本。
+        Returns:
+            ToolResponse: 含 VLM 摘要、原始内容、原始元数据 和最后结果截图。
         """
-        attempts: list[dict[str, object]] = []
-        current_task = task_desc
-        criteria_matched = False
-        no_criteria_mode = not bool((success_criteria or "").strip())
         vlm_enabled = _env_bool("STEWARD_MOBI_VLM_ENABLED", True)
         vlm_last_n = max(1, int(os.environ.get("STEWARD_MOBI_VLM_LAST_N", "5")))
-        vlm_last_n_steps = max(1, int(os.environ.get("STEWARD_MOBI_VLM_LAST_N_STEPS", str(vlm_last_n))))
         vlm_timeout_s = max(5.0, float(os.environ.get("STEWARD_MOBI_VLM_TIMEOUT_S", "25")))
         vlm_max_reasonings_chars = max(1000, int(os.environ.get("STEWARD_MOBI_VLM_MAX_REASONINGS_CHARS", "12000")))
         vlm_model = create_openai_model(stream=False, temperature=0.0) if vlm_enabled else None
 
-        for idx in range(1, retry_cap + 2):
-            resp = await collect_func(current_task, max_retries=0)
-            md = (resp.metadata or {}) if resp else {}
-            ocr_text = str(md.get("ocr_text", "") or "")
-            last_reasoning = str(md.get("last_reasoning", "") or "")
-            extracted_info = md.get("extracted_info", {}) if isinstance(md.get("extracted_info"), dict) else {}
-            tool_success = bool(md.get("success", False))
-            has_evidence = bool(ocr_text.strip() or last_reasoning.strip() or extracted_info or md.get("raw_data"))
-            criteria_matched_text = False
-            criteria_matched_vlm = False
-            vlm_verdict: dict[str, Any] = {
-                "completed": False,
-                "confidence": 0.0,
-                "reason": "",
-                "evidence": [],
-                "missing_requirements": [],
-                "summary": {
-                    "screen_state": "",
-                    "trajectory_last_steps": [],
-                    "relevant_information": [],
-                    "extracted_text": [],
-                },
-            }
-            vlm_images_used: list[str] = []
-            reasonings_count = 0
+        def _lines_to_block(values: object) -> str:
+            # 将列表字段统一渲染为 markdown 列表块，
+            # 提升返回文本对模型和人工阅读的可读性。
+            if not isinstance(values, list):
+                return "[empty]"
+            lines = [f"- {str(item).strip()}" for item in values if str(item).strip()]
+            return "\n".join(lines) if lines else "[empty]"
 
-            if success_criteria:
-                haystack = ocr_text + "\n" + last_reasoning + "\n" + json.dumps(extracted_info, ensure_ascii=False)
-                criteria_matched_text = tool_success and (success_criteria in haystack)
-                if (not criteria_matched_text) and tool_success and has_evidence:
-                    generic_tokens = ("成功获取", "获取到", "收集到", "活动信息", "最近活动")
-                    if any(token in success_criteria for token in generic_tokens):
-                        criteria_matched_text = True
-            else:
-                criteria_matched_text = tool_success and has_evidence
+        # 单次执行：工具层不再管理重试与完成判定。
+        resp = await collect_func(task_desc, max_retries=0)
+        metadata = (resp.metadata or {}) if resp else {}
+        # 最后一张截图由 collect 工具写入 metadata.final_image_path；
+        # steward 侧直接复用，不再重复解析上游 content。
+        final_image_url = str(metadata.get("final_image_path", "") or "").strip()
 
-            if vlm_enabled and vlm_model is not None and tool_success and has_evidence:
-                vlm_evidence = _extract_vlm_evidence(
-                    md,
-                    last_n_images=vlm_last_n,
-                    last_n_steps=vlm_last_n_steps,
-                    max_reasonings_chars=vlm_max_reasonings_chars,
-                )
-                reasonings_count = int(vlm_evidence.get("reasonings_count", 0) or 0)
-                vlm_images_used = [str(p) for p in vlm_evidence.get("images_selected", []) if isinstance(p, str)]
-                vlm_verdict = await _judge_completion_with_vlm(
-                    model=vlm_model,
-                    task_desc=str(vlm_evidence.get("task_description", "") or current_task),
-                    success_criteria=success_criteria,
-                    status_hint=str(vlm_evidence.get("status_hint", "")),
-                    step_count=int(vlm_evidence.get("step_count", 0) or 0),
-                    action_count=int(vlm_evidence.get("action_count", 0) or 0),
-                    reasonings_text=str(vlm_evidence.get("reasonings_text", "")),
-                    recent_actions_text=str(vlm_evidence.get("recent_actions_text", "")),
-                    recent_reacts_text=str(vlm_evidence.get("recent_reacts_text", "")),
-                    recent_ocr_text=str(vlm_evidence.get("recent_ocr_text", "")),
-                    ocr_full_text=str(vlm_evidence.get("ocr_full_text", "")),
-                    last_n_steps=int(vlm_evidence.get("last_n_steps", vlm_last_n_steps) or vlm_last_n_steps),
-                    image_data_urls=[str(u) for u in vlm_evidence.get("image_data_urls", []) if isinstance(u, str)],
-                    timeout_s=vlm_timeout_s,
-                )
-                criteria_matched_vlm = bool(vlm_verdict.get("completed", False))
-
-            criteria_matched = criteria_matched_text or criteria_matched_vlm
-            vlm_summary = vlm_verdict.get("summary", {}) if isinstance(vlm_verdict.get("summary"), dict) else {}
-
-            attempt_item = {
-                "attempt": idx,
-                "task_desc": current_task,
-                "run_dir": md.get("run_dir", ""),
-                "index_file": md.get("index_file", ""),
-                "status_hint": md.get("status_hint", ""),
-                "step_count": md.get("step_count", 0),
-                "action_count": md.get("action_count", 0),
-                "screenshot_path": md.get("screenshot_path", ""),
-                "last_reasoning": last_reasoning,
-                "ocr_preview": ocr_text[:300],
-                "extracted_info": extracted_info,
-                "tool_success": tool_success,
-                "criteria_matched_text": criteria_matched_text,
-                "criteria_matched_vlm": criteria_matched_vlm,
-                "vlm_completed": bool(vlm_verdict.get("completed", False)),
-                "vlm_confidence": float(vlm_verdict.get("confidence", 0.0) or 0.0),
-                "vlm_reason": str(vlm_verdict.get("reason", "") or ""),
-                "vlm_error": str(vlm_verdict.get("error", "") or ""),
-                "vlm_images_used": vlm_images_used,
-                "reasonings_count": reasonings_count,
-                "vlm_missing_requirements": vlm_verdict.get("missing_requirements", []),
-                "vlm_summary_screen_state": str(vlm_summary.get("screen_state", "") or ""),
-                "vlm_summary_last_steps": vlm_summary.get("trajectory_last_steps", []),
-                "vlm_summary_relevant_information": vlm_summary.get("relevant_information", []),
-                "vlm_summary_extracted_text": vlm_summary.get("extracted_text", []),
-            }
-            attempts.append(attempt_item)
-
-            if criteria_matched:
-                break
-
-            if idx <= retry_cap:
-                failure_reason = "criteria_not_matched" if success_criteria else "no_evidence_collected"
-                current_task = f"{task_desc}\n"
-                logger.info(f"重试要求(第{idx}次失败，原因:{failure_reason})：" "请严格按目标完成后立即停止；避免重复无效操作；保留可验证证据。")
-
-        final_attempt = attempts[-1] if attempts else {}
-        pack: dict[str, object] = {
-            "report_type": "mobi_retry_evidence_pack_v1",
-            "original_task": task_desc,
-            "success_criteria": success_criteria,
-            "no_criteria_mode": no_criteria_mode,
-            "retry_limit": retry_cap,
-            "attempt_count": len(attempts),
-            "criteria_matched": criteria_matched,
-            "needs_agent_judgement": True,
-            "validation_mode": "text_or_vlm",
-            "vlm_enabled": vlm_enabled,
-            "vlm_last_n": vlm_last_n,
-            "vlm_last_n_steps": vlm_last_n_steps,
-            "attempts": attempts,
+        empty_summary: dict[str, Any] = {
+            "screen_state": "",
+            "trajectory_last_steps": [],
+            "relevant_information": [],
+            "extracted_text": [],
         }
+        # 默认空摘要；当 VLM 关闭或不可用时，仍返回稳定字段结构。
+        vlm_summary = empty_summary
+        vlm_error = ""
+        if vlm_model is not None:
+            # 将执行元数据压缩成 VLM prompt：
+            # 最近截图 + 轨迹历史 + 推理文本。
+            vlm_evidence = _extract_vlm_evidence(
+                metadata,
+                last_n_images=vlm_last_n,
+                last_n_steps=vlm_last_n,
+                max_reasonings_chars=vlm_max_reasonings_chars,
+            )
+            # 本工具路径下，VLM 仅做“摘要 + 可见信息提取”
+            vlm_result = await _summarize_execution_with_vlm(
+                model=vlm_model,
+                task_desc=str(vlm_evidence.get("task_description", "") or task_desc),
+                status_hint=str(vlm_evidence.get("status_hint", "")),
+                step_count=int(vlm_evidence.get("step_count", 0) or 0),
+                action_count=int(vlm_evidence.get("action_count", 0) or 0),
+                reasonings_text=str(vlm_evidence.get("reasonings_text", "")),
+                recent_actions_text=str(vlm_evidence.get("recent_actions_text", "")),
+                recent_reacts_text=str(vlm_evidence.get("recent_reacts_text", "")),
+                last_n_steps=int(vlm_evidence.get("last_n_steps", vlm_last_n) or vlm_last_n),
+                image_data_urls=[str(u) for u in vlm_evidence.get("image_data_urls", []) if isinstance(u, str)],
+                timeout_s=vlm_timeout_s,
+            )
+            vlm_summary = vlm_result.get("summary", {}) if isinstance(vlm_result.get("summary"), dict) else empty_summary
+            vlm_error = str(vlm_result.get("error", "") or "")
 
-        if not criteria_matched:
-            pack["failure_report"] = {
-                "status": "failed_after_retry_limit",
-                "latest_run_dir": final_attempt.get("run_dir", ""),
-                "latest_index_file": final_attempt.get("index_file", ""),
-                "latest_screenshot_path": final_attempt.get("screenshot_path", ""),
-                "latest_reasoning": final_attempt.get("last_reasoning", ""),
-                "latest_ocr_preview": final_attempt.get("ocr_preview", ""),
-                "latest_vlm_reason": final_attempt.get("vlm_reason", ""),
-                "vlm_missing_requirements": final_attempt.get("vlm_missing_requirements", []),
-                "latest_vlm_summary_screen_state": final_attempt.get("vlm_summary_screen_state", ""),
-                "latest_vlm_summary_last_steps": final_attempt.get("vlm_summary_last_steps", []),
-                "latest_vlm_summary_relevant_information": final_attempt.get("vlm_summary_relevant_information", []),
-                "latest_vlm_summary_extracted_text": final_attempt.get("vlm_summary_extracted_text", []),
-                "next_action_recommendation": "agent_decide_retry_or_handoff",
-            }
+        # metadata 是给 steward 消费的结构化结果包。
+        pack: dict[str, object] = {
+            "task": task_desc,
+            "success": bool(metadata.get("success", False)),
+            "requires_agent_validation": bool(metadata.get("requires_agent_validation", True)),
+            "attempt": int(metadata.get("attempt", 1) or 1),
+            "attempt_total": int(metadata.get("attempt_total", 1) or 1),
+            "run_dir": metadata.get("run_dir", ""),
+            "status_hint": metadata.get("status_hint", ""),
+            "last_reasoning": str(metadata.get("last_reasoning", "") or ""),
+            "vlm_summary_screen_state": str(vlm_summary.get("screen_state", "") or ""),
+            "vlm_summary_last_steps": vlm_summary.get("trajectory_last_steps", []),
+            "vlm_summary_relevant_information": vlm_summary.get("relevant_information", []),
+            "vlm_summary_extracted_text": vlm_summary.get("extracted_text", []),
+            "vlm_error": vlm_error,
+        }
+        logger.info(f"[MobiAgent] 收集结果包：{_trim_for_log(json.dumps(pack, ensure_ascii=False))}")
 
-        logger.info(f"[MobiAgent] 收集证据包：{_trim_for_log(json.dumps(pack, ensure_ascii=False))}")
-
-        relevant_info_lines = [
-            f"- {str(item).strip()}"
-            for item in final_attempt.get("vlm_summary_relevant_information", [])
-            if str(item).strip()
-        ]
-        extracted_text_lines = [
-            f"- {str(item).strip()}"
-            for item in final_attempt.get("vlm_summary_extracted_text", [])
-            if str(item).strip()
-        ]
-        relevant_info_block = "\n".join(relevant_info_lines) if relevant_info_lines else "[empty]"
-        extracted_text_block = "\n".join(extracted_text_lines) if extracted_text_lines else "[empty]"
-
-        return ToolResponse(
-            content=[
-                TextBlock(
-                    type="text",
-                    text=(
-                        "[MobiAgent 重试证据包]\n"
-                        f"任务: {task_desc}\n"
-                        f"重试上限: {retry_cap}\n"
-                        f"尝试次数: {len(attempts)}\n"
-                        f"criteria_matched: {criteria_matched}\n"
-                        f"最后状态提示: {final_attempt.get('status_hint', '')}\n"
-                        f"OCR摘要: {str(final_attempt.get('ocr_preview', '') or '')[:500]}\n"
-                        f"VLM页面摘要: {str(final_attempt.get('vlm_summary_screen_state', '') or '')[:300]}\n"
-                        f"VLM目标相关信息:\n{relevant_info_block}\n"
-                        f"VLM截图提取文本:\n{extracted_text_block}\n"
-                        "注意：该结果仅为证据汇总，最终完成判定必须由 Agent 自主做出。"
-                    ),
-                ),
-            ],
-            metadata=pack,
+        # content 是给人/模型直接阅读的摘要文本 + 最后截图
+        relevant_info_block = _lines_to_block(pack.get("vlm_summary_relevant_information", []))
+        extracted_text_block = _lines_to_block(pack.get("vlm_summary_extracted_text", []))
+        has_vlm_summary = bool(str(pack.get("vlm_summary_screen_state", "") or "").strip())
+        has_relevant_info = bool(
+            isinstance(pack.get("vlm_summary_relevant_information"), list)
+            and len(pack.get("vlm_summary_relevant_information", [])) > 0
         )
+        has_extracted_text = bool(
+            isinstance(pack.get("vlm_summary_extracted_text"), list)
+            and len(pack.get("vlm_summary_extracted_text", [])) > 0
+        )
+        has_image = bool(final_image_url)
+        content: list[TextBlock | ImageBlock] = [
+            TextBlock(
+                type="text",
+                text=(
+                    "[MobiAgent 执行结果包]\n"
+                    f"完成状态: {'success' if pack.get('success') else 'failed'}\n"
+                    f"证据可用性: vlm_summary={True if has_vlm_summary else False}, "
+                    f"relevant_info={True if has_relevant_info else False}, "
+                    f"extracted_text={True if has_extracted_text else False}, "
+                    f"image={True if has_image else False}\n"
+                    f"任务: {task_desc}\n"
+                    f"最后状态提示: {pack.get('status_hint', '')}\n"
+                    f"最后推理: {str(pack.get('last_reasoning', '') or '')[:500]}\n"
+                    f"VLM页面摘要: {str(pack.get('vlm_summary_screen_state', '') or '')}\n"
+                    f"VLM最后步骤摘要: {_lines_to_block(pack.get('vlm_summary_last_steps', []))}\n"
+                    f"VLM目标相关信息:\n{relevant_info_block}\n"
+                    f"VLM截图提取文本:\n{extracted_text_block}\n"
+                    "说明：该结果已包含执行后的 VLM 摘要、任务相关信息提取和截图文本提取。"
+                ),
+            )
+        ]
+
+        image_block: ImageBlock | None = None
+        if final_image_url:
+            logger.info(f"[MobiAgent] 最后截图路径: {final_image_url}")
+            image_block = {"type": "image", "source": {"type": "url", "url": final_image_url}}
+            # 读取路径中的图片内容，转换为 base64 内嵌格式，避免后续使用时的文件访问问题。
+            # try:
+            #     with open(final_image_url, "rb") as f:
+            #         image_data = f.read()
+            #         image_block = ImageBlock(type="image", source={"type": "base64", "data": image_data})
+            # except Exception:
+            #     logger.warning("[MobiAgent] 读取最后截图失败", exc_info=True)
+            #     # fallback: 如果读取失败，仍然返回路径信息供后续排查；但不提供图片内容。
+            #     image_block = None
+        else:
+            logger.warning("[MobiAgent] 未获取到最后截图")
+        if image_block is not None:
+            content.append(image_block)
+
+        return ToolResponse(content=content, metadata=pack)
 
     toolkit.register_tool_function(
-        call_mobi_collect_with_retry_report,
+        call_mobi_collect_with_report,
         func_description=(
-            "执行手机任务并应用显式重试上限（默认最多2次重试，总共3次尝试），"
-            "返回结构化证据包与失败报告模板。"
-            "该工具不做最终完成保证，最终判定由 Agent 根据证据自主决定。"
+            "执行手机任务，并返回 VLM 摘要/提取结果与最后结束时的手机截图。"
+            "该工具不做重试与完成判定，Steward 基于结果继续后续流程。"
         ),
     )
 
@@ -356,7 +288,7 @@ def create_steward_agent(
 
     toolkit.register_tool_function(
         delegate_to_worker,
-        func_description="将子任务委派给 Worker Agent 并汇总返回结果。",
+        func_description="将子任务委派给 Worker Agen 并汇总返回结果。",
     )
 
     sys_prompt = """你是 MobiClaw 手机操控 Agent，负责帮助用户操控手机，管理个人数据和日常事务。
@@ -370,28 +302,20 @@ def create_steward_agent(
 当用户要求进行数据整理或分析时，请严格按照以下步骤执行：
 
 ### 收集与验证 (Collect + Verify)
-- 优先使用 `call_mobi_collect_with_retry_report` 执行手机任务并获取证据包
-- 显式重试上限：最多 {retry_cap} 次重试
+- 执行手机任务收集只允许使用 `call_mobi_collect_with_report` 工具
 - 单一App原则：严禁将跨 App 的任务混在一个指令中。每个手机任务必须仅对应 1 个 App 的 1 种任务场景
 - 禁止过度拆分：不要使用 plan 工具去拆分单个 App 内的微操，交给 MobiAgent 自行推理
-- 必须基于返回证据（截图、OCR文本、动作/推理历史）自行判断任务是否完成，不要把工具返回中的状态提示当作最终真值；它只能作为参考
-- 对于购买、下单、发送类任务请勿重试，执行结束返回后，判断任务结果即可
+- 工具层只做单次执行，不做重试管理；你需要基于返回结果继续后续流程
+- 工具返回包含 VLM 页面摘要、任务相关信息提取和最后截图，请综合使用这些结果
 - 避免使用plan工具拆分单个APP内部的任务，每个任务只能对应一个APP中的1种任务场景
-- 若任务未完成，你必须在上限内改写任务并重试；超限后停止继续操作
-- 每次重试在回复中说明失败依据与改写思路
-
-### 失败报告模板 (Failure Pack)
-- 达到重试上限仍未完成时，必须输出结构化失败证据包，字段至少包括：
-- `report_type`, `original_task`, `retry_limit`, `attempt_count`, `attempts`, `failure_report`
-- `failure_report` 内至少包含：
-- `status`, `latest_run_dir`, `latest_index_file`, `latest_screenshot_path`, `latest_reasoning`, `latest_ocr_preview`, `next_action_recommendation`
+- 若任务返回的文本内容和图片中获取收集结果；若未获取到结果，请在最终返回时明确说明未完成原因
 
 ### 存储 (Store)
 - 使用 `store_steward_knowledge` 工具将收集到的信息存入管家知识库
 - 确保所有有价值的信息都被持久化保存
 
 ### 检索 (Retrieve)
-- 查找之前存储的管家知识库（OCR、对话记录等），使用 `search_steward_knowledge`
+- 查找之前存储的管家知识库（个人活动信息、对话记录等），使用 `search_steward_knowledge`
 - 对外部页面查询可用 `fetch_url_text` 获取原始文本
 
 ### 分析 (Analyze)
@@ -402,7 +326,7 @@ def create_steward_agent(
 - 使用 `call_mobi_action` 工具在手机端执行相应操作
 
 ## 注意事项
-- 每一步都要向用户汇报进展
+- 每一任务情况都要向用户汇报进展
 - 如果某一步失败，要尝试其他方法或向用户说明
 - 在执行敏感操作前，需要用户确认（除非用户明确授权自动执行）
 - 保持回复简洁专业，优先使用中文交流
@@ -413,11 +337,12 @@ def create_steward_agent(
 ## 示例对话
 用户：开始今日的数据整理和分析
 你应该：
-1. 思考并调用 call_mobi_collect_with_retry_report 获取证据（含显式重试上限）
-2. 基于证据自主判断是否完成；若未完成且已达上限，输出结构化失败证据包
-3. 调用 store_steward_knowledge 存储收集到的信息
-4. 调用 search_steward_knowledge 检索已存数据，自行分析待办和账单
-5. 如发现待办事项，询问是否需要添加到日历，然后调用 call_mobi_action
+1. 思考并调用 call_mobi_collect_with_report 获取单次执行结果（含 VLM 摘要、提取文本、最后截图）
+2. 直接消费返回中的 VLM 页面摘要、目标相关信息和截图提取文本；不要声称工具“没有返回这些内容”
+3. 基于结果继续完成后续分析与执行
+4. 调用 store_steward_knowledge 存储收集到的信息
+5. 调用 search_steward_knowledge 检索已存数据，自行分析待办和账单
+6. 如发现待办事项，询问是否需要添加到日历，然后调用 call_mobi_action
 
 现在，请准备好为用户服务！"""
     sys_prompt += _build_memory_prompt()
@@ -427,7 +352,7 @@ def create_steward_agent(
         name="Steward",
         sys_prompt=sys_prompt,
         model=create_openai_model(),
-        formatter=OpenAIChatFormatter(),
+        formatter=OpenAIChatFormatter(promote_tool_result_images=True),
         toolkit=toolkit,
         memory=InMemoryMemory(),
         max_iters=10,

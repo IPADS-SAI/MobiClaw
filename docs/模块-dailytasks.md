@@ -51,7 +51,7 @@ Daily 现在实际承担的目标是：
 
 当前执行方式：
 
-- 调 `call_mobi_collect(prompt)`
+- 调 `call_mobi_collect_verified(prompt, max_retries=0)`
 - 记录返回内容和 metadata
 - 写入 `RunContext`
 

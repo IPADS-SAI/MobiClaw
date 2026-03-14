@@ -19,7 +19,6 @@ office = importlib.import_module("seneschal.tools.office")
 ocr = importlib.import_module("seneschal.tools.ocr")
 
 call_mobi_action = mobi.call_mobi_action
-call_mobi_collect = mobi.call_mobi_collect
 call_mobi_collect_verified = mobi.call_mobi_collect_verified
 run_shell_command = shell.run_shell_command
 write_text_file = file_tools.write_text_file
@@ -42,7 +41,6 @@ extract_image_text_ocr = ocr.extract_image_text_ocr
 
 __all__ = [
     "call_mobi_action",
-    "call_mobi_collect",
     "call_mobi_collect_verified",
     "run_shell_command",
     "write_text_file",

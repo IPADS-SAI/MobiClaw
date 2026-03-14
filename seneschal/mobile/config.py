@@ -71,6 +71,8 @@ def _provider_key(name: str) -> str:
 
 def _normalize_extras(provider_name: str, extras: dict[str, str]) -> dict[str, object]:
     out: dict[str, object] = dict(extras)
+    if "max_retries" in out and str(out["max_retries"]).strip():
+        out["max_retries"] = max(0, int(str(out["max_retries"]).strip()))
     if provider_name == "mobiagent":
         if "enable_planning" in out:
             out["enable_planning"] = _as_bool(str(out["enable_planning"]), default=True)
@@ -135,6 +137,9 @@ def resolve_provider_config(provider: str | None, environ: Mapping[str, str] | N
         for key, value in env.items():
             if key.startswith(prefix):
                 extras[key[len(prefix):].lower()] = value
+    global_max_retries = int(env.get("MOBILE_MAX_RETRIES") or 0)
+    if global_max_retries:
+        extras.setdefault("max_retries", global_max_retries)
 
     # Legacy mobiagent compatibility
     if provider_name == "mobiagent":

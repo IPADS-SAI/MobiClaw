@@ -62,7 +62,7 @@ _WORKER_CORE_TOOLS = {
 }
 
 _STEWARD_CORE_TOOLS = {
-    "call_mobi_collect_with_retry_report",
+    "call_mobi_collect_with_report",
     "delegate_to_worker",
     "call_mobi_action",
     "store_steward_knowledge",

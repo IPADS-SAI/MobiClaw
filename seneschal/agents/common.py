@@ -82,20 +82,6 @@ def _format_recent_reacts(reacts: list[Any], *, limit: int) -> str:
     return "\n".join(lines)
 
 
-def _format_recent_ocr(ocr_by_step: list[Any], *, limit: int, max_chars: int) -> str:
-    lines: list[str] = []
-    for idx, item in enumerate(ocr_by_step[-max(1, limit):], start=1):
-        if not isinstance(item, dict):
-            continue
-        step_index = item.get("step", item.get("step_index", ""))
-        text = _trim_block(str(item.get("text", "") or item.get("ocr_text", "")), max_chars=max_chars)
-        if not text:
-            continue
-        step_label = f"step={step_index}" if str(step_index).strip() else "step=?"
-        lines.append(f"{idx}. {step_label} text={text}")
-    return "\n".join(lines)
-
-
 def create_openai_model(
     *,
     stream: bool = True,
@@ -209,9 +195,6 @@ def _extract_vlm_evidence(
     summary = execution.get("summary", {})
     if not isinstance(summary, dict):
         summary = {}
-    ocr = execution.get("ocr", {})
-    if not isinstance(ocr, dict):
-        ocr = {}
 
     images_raw = artifacts.get("images", [])
     images = [str(p) for p in images_raw if isinstance(p, str) and p.strip()]
@@ -240,9 +223,6 @@ def _extract_vlm_evidence(
     actions = actions_raw if isinstance(actions_raw, list) else []
     reacts_raw = history.get("reacts", [])
     reacts = reacts_raw if isinstance(reacts_raw, list) else []
-    ocr_by_step_raw = ocr.get("by_step", [])
-    ocr_by_step = ocr_by_step_raw if isinstance(ocr_by_step_raw, list) else []
-    ocr_full_text = _trim_block(str(ocr.get("full_text", "") or ""), max_chars=max_reasonings_chars)
     recent_actions_text = _trim_block(
         _format_recent_actions(actions, limit=last_n_steps),
         max_chars=max_reasonings_chars,
@@ -251,17 +231,13 @@ def _extract_vlm_evidence(
         _format_recent_reacts(reacts, limit=last_n_steps),
         max_chars=max_reasonings_chars,
     )
-    recent_ocr_text = _trim_block(
-        _format_recent_ocr(
-            ocr_by_step,
-            limit=last_n_steps,
-            max_chars=max(120, max_reasonings_chars // max(1, last_n_steps)),
-        ),
-        max_chars=max_reasonings_chars,
-    )
 
     return {
-        "task_description": str(execution.get("task_description", "") or metadata.get("final_task", "") or ""),
+        "task_description": str(
+            execution.get("task_description", "")
+            or metadata.get("task", "")
+            or ""
+        ),
         "status_hint": str(summary.get("status_hint", "") or metadata.get("status_hint", "") or ""),
         "step_count": int(summary.get("step_count", metadata.get("step_count", 0)) or 0),
         "action_count": int(summary.get("action_count", metadata.get("action_count", 0)) or 0),
@@ -271,25 +247,20 @@ def _extract_vlm_evidence(
         "reasonings_count": len(reasonings),
         "recent_actions_text": recent_actions_text,
         "recent_reacts_text": recent_reacts_text,
-        "recent_ocr_text": recent_ocr_text,
-        "ocr_full_text": ocr_full_text,
         "last_n_steps": max(1, last_n_steps),
     }
 
 
-async def _judge_completion_with_vlm(
+async def _summarize_execution_with_vlm(
     *,
     model: OpenAIChatModel,
     task_desc: str,
-    success_criteria: str,
     status_hint: str,
     step_count: int,
     action_count: int,
     reasonings_text: str,
     recent_actions_text: str,
     recent_reacts_text: str,
-    recent_ocr_text: str,
-    ocr_full_text: str,
     last_n_steps: int,
     image_data_urls: list[str],
     timeout_s: float,
@@ -304,18 +275,16 @@ async def _judge_completion_with_vlm(
         raw = _extract_text_from_model_response(response)
         return _parse_vlm_json(raw), raw
 
-    empty_summary = {
+    empty_summary: dict[str, Any] = {
         "screen_state": "",
         "trajectory_last_steps": [],
         "relevant_information": [],
         "extracted_text": [],
     }
-
-    judge_prompt = (
-        f"你是手机自动化任务验证器。请根据任务描述、执行摘要、完整 reasonings 历史、最后{last_n_steps}步轨迹信息以及最终{len(image_data_urls)}张截图，"
-        "判断任务是否已经完成、是否满足要求，并进行简要总结。\n"
+    summary_prompt = (
+        f"你是手机自动化任务执行摘要器。请根据任务描述、执行摘要、完整 reasonings 历史、最后{last_n_steps}步轨迹信息以及最终{len(image_data_urls)}张截图，"
+        "总结当前页面状态和关键轨迹，提取所有可见事实内容。\n"
         f"task_desc: {task_desc}\n"
-        f"success_criteria: {success_criteria}\n"
         f"status_hint: {status_hint}\n"
         f"step_count: {step_count}, action_count: {action_count}\n"
         "history_reasonings:\n"
@@ -324,88 +293,58 @@ async def _judge_completion_with_vlm(
         f"{recent_actions_text or '[empty]'}\n"
         "recent_reacts:\n"
         f"{recent_reacts_text or '[empty]'}\n"
-        "recent_ocr_by_step:\n"
-        f"{recent_ocr_text or '[empty]'}\n"
-        "ocr_full_text:\n"
-        f"{ocr_full_text or '[empty]'}\n"
-        "请严格基于截图、OCR 和轨迹判断，不要臆测未展示的结果。\n"
-        "summary 中只需输出：当前页面/结果概括，以及最后几步关键动作或变化；"
-        "不要在此阶段展开提取任务目标相关内容。\n"
+        "请严格基于截图和轨迹，不要臆测。\n"
         "请只输出 JSON，不要输出其他文本。\n"
         "JSON schema:\n"
-        '{"completed": bool, "confidence": float, "reason": str, "evidence": list[str], "missing_requirements": list[str], "summary": {"screen_state": str, "trajectory_last_steps": list[str]}}\n'
+        '{"summary": {"screen_state": str, "trajectory_last_steps": list[str], "relevant_information": list[str], "extracted_text": list[str]}}\n'
     )
 
     try:
-        judge_parsed, judge_raw_text = await _call_vlm_json(judge_prompt, image_data_urls)
+        summary_parsed, summary_raw_text = await _call_vlm_json(summary_prompt, image_data_urls)
     except Exception as exc:  # noqa: BLE001
         return {
-            "completed": False,
-            "confidence": 0.0,
-            "reason": "",
-            "evidence": [],
-            "missing_requirements": [],
             "summary": empty_summary,
             "error": str(exc),
             "fallback_used": True,
         }
 
-    if not judge_parsed:
+    if not summary_parsed:
         return {
-            "completed": False,
-            "confidence": 0.0,
-            "reason": "",
-            "evidence": [],
-            "missing_requirements": [],
             "summary": empty_summary,
             "error": "vlm_non_json_output",
-            "raw_text": judge_raw_text[:800],
+            "raw_text": summary_raw_text[:800],
             "fallback_used": True,
         }
 
-    logger.debug("vlm.judge_json_output")
-    logger.debug(judge_parsed)
-    evidence = _normalize_str_list(judge_parsed.get("evidence", []), max_items=10)
-    missing = _normalize_str_list(judge_parsed.get("missing_requirements", []), max_items=10)
-    judge_summary_raw = judge_parsed.get("summary", {})
-    if not isinstance(judge_summary_raw, dict):
-        judge_summary_raw = {}
+    logger.debug("vlm.summary_json_output")
+    logger.debug(summary_parsed)
+    summary_raw = summary_parsed.get("summary", {})
+    if not isinstance(summary_raw, dict):
+        summary_raw = {}
     summary = {
-        "screen_state": str(judge_summary_raw.get("screen_state", "") or ""),
+        "screen_state": str(summary_raw.get("screen_state", "") or ""),
         "trajectory_last_steps": _normalize_str_list(
-            judge_summary_raw.get("trajectory_last_steps", []),
+            summary_raw.get("trajectory_last_steps", []),
             max_items=last_n_steps,
         ),
         "relevant_information": _normalize_str_list(
-            judge_summary_raw.get("relevant_information", []),
+            summary_raw.get("relevant_information", []),
             max_items=10,
         ),
         "extracted_text": _normalize_str_list(
-            judge_summary_raw.get("extracted_text", []),
+            summary_raw.get("extracted_text", []),
             max_items=10,
         ),
     }
 
-    completed = bool(judge_parsed.get("completed", False))
-    result: dict[str, Any] = {
-        "completed": completed,
-        "confidence": float(judge_parsed.get("confidence", 0.0) or 0.0),
-        "reason": str(judge_parsed.get("reason", "") or ""),
-        "evidence": evidence,
-        "missing_requirements": missing,
-        "summary": summary,
-    }
-
-    if not completed:
-        return result
+    result: dict[str, Any] = {"summary": summary}
 
     extraction_images = image_data_urls[-3:] if image_data_urls else []
     extract_prompt = (
-        "你是手机自动化任务结果提取器。任务已经被确认完成。\n"
-        "请仅根据最后3张截图中可见内容，提取与任务目标直接相关的信息；"
+        "你是手机自动化任务结果提取器。\n"
+        f"请仅根据最后{len(extraction_images)}张截图中可见内容，提取与任务目标直接相关的所有信息；"
         "不要重复输出无关页面元素，不要推断截图中没有展示的内容。\n"
         f"task_desc: {task_desc}\n"
-        f"success_criteria: {success_criteria}\n"
         "输出应聚焦最终结果、关键字段、页面上能直接读到的目标相关文本。\n"
         "请只输出 JSON，不要输出其他文本。\n"
         "JSON schema:\n"

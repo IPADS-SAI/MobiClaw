@@ -1,11 +1,11 @@
 ---
 name: mobiagent-task-spec
-description: Use this skill whenever a task involves MobiAgent or steward mobile execution. It defines how to write high-precision mobile task descriptions, including goal + step-level click/swipe/input instructions, explicit completion criteria, and retry rewrites based on screenshot/OCR/action-history evidence. Trigger for requests about mobile automation success rate, steward task wording, retry optimization, or improving phone-side accuracy.
+description: Use this skill whenever a task involves MobiAgent or steward mobile execution. It defines how to write high-precision mobile task descriptions, including goal + step-level click/swipe/input instructions, explicit completion criteria, and evidence-driven rewrites based on final screenshot + status/reasoning + VLM extraction evidence. Trigger for requests about mobile automation success rate, steward task wording, evidence-based correction, or improving phone-side accuracy.
 ---
 
 # MobiAgent Task Spec
 
-用于把“模糊手机任务”改写成 MobiAgent 可执行、可验证、可重试的描述，提升完成率与准确率。
+用于把“模糊手机任务”改写成 MobiAgent 可执行、可验证的描述，并指导 steward 正确消费单次执行结果。
 
 ## 1) 能力边界（必须先遵守）
 
@@ -49,15 +49,18 @@ description: Use this skill whenever a task involves MobiAgent or steward mobile
 ## 5) 重试改写流程（基于已有证据）
 
 当执行失败后，必须读取并利用以下证据再改写任务：
-- `screenshot_path`
-- `ocr_text / ocr_preview`
+- 最后一张截图（ImageBlock / `final_image_url`）
+- `last_reasoning`
 - `status_hint`
-- `action_history` / `reasoning_history`
+- `vlm_summary_screen_state` / `vlm_summary_last_steps`
+- `vlm_summary_relevant_information` / `vlm_summary_extracted_text`
+
+注意：不要依赖已废弃的 `ocr_text` / `screenshot_path` 字段。
 
 按下面顺序改写：
 
 1. 先定位失败类型  
-- 锚点不明确：OCR里没有可匹配文本  
+- 锚点不明确：VLM提取文本里没有可匹配文本  
 - 页面走偏：截图显示进入了错误页面  
 - 步骤过粗：一个步骤含多个动作决策  
 - 约束缺失：执行了不希望的副作用操作
@@ -76,13 +79,14 @@ description: Use this skill whenever a task involves MobiAgent or steward mobile
 
 ## 6) steward 专用执行建议
 
-- 优先让 `call_mobi_collect_with_retry_report` 执行结构化采集任务，不要一开始就走高风险动作。
-- 每次重试都要在 agent 内部完成“失败证据 -> 改写依据 -> 新任务”的推理，但不要把这段说明写进 `task_desc`。
-- 如果达到重试上限仍失败，输出失败证据包并停止盲目重试。
+- 执行手机采集时，只允许调用 `call_mobi_collect_with_report`。
+- 不要调用或猜测其他旧工具名：如`call_mobi_collect_verified`、`call_mobi_collect_with_retry_report`。
+- `call_mobi_collect_with_report` 的返回结果已经包含 VLM 页面摘要、目标相关信息、截图提取文本和最后截图；应直接消费这些结果，不要声称“工具没有返回这些内容”。
+- 如果结果不足以回答用户问题，应基于当前证据明确说明缺口，而不是改用未注册工具名盲试。
 
 ## 7) 最小检查清单（发送给 MobiAgent 前）
 
-- 是否只有一个核心目标？
+- 是否只有1个APP的1个完整任务？
 - 是否每一步都有可见锚点？
 - 是否定义了“找不到锚点怎么办”？
 - 是否定义了明确成功判定？
