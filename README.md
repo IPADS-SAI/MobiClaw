@@ -50,14 +50,12 @@ MobiClaw 是轻量化的openClaw替代，能够支持网页搜索，文档生成
 
 ## 当前运行模式概览
 
-`python app.py` 统一从 `mobiclaw/workflows.py` 进入，按参数分为 4 种模式：
+`python app.py` 统一从 `mobiclaw/workflows.py` 进入，按参数分为 3 种模式：
 
-- **无参数**：Demo 模式，执行预置对话 `run_demo_conversation()`
 - **`--interactive`**：交互模式，终端多轮对话
-- **`--daily --daily-trigger <trigger>`**：Daily 任务模式
-- **`--agent-task "..."`**：多智能体任务模式，默认走 orchestrator
+- **`--daily --daily-trigger <trigger>`**：每日任务模式，也可通过--agent-task通过自然语言下发定时任务
+- **`--agent-task "..."(推荐) `**：多智能体任务模式，会选择一个或者多个合适的智能体完成任务
 
-> 注意：当前 `--agent-task` 默认不是 legacy 单 Agent，而是 `router` 模式。
 
 ---
 
