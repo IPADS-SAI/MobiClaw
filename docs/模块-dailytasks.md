@@ -1,4 +1,4 @@
-# 模块文档：DailyTasks（日常任务）
+# 模块文档：DailyTasks
 
 DailyTasks 用于把周期任务配置化执行，并为每次运行生成可追踪记录。
 
@@ -35,7 +35,9 @@ Daily 现在实际承担的目标是：
 3. 按 trigger 过滤任务
 4. 遍历任务
 5. 记录结构化事件
-6. 返回 `run_id / task_count / collected / analysis`
+6. 返回 `run_id / task_count / collected`
+
+注意：当前返回值里已经没有旧文档中的 `analysis` 字段。
 
 ---
 
@@ -73,7 +75,6 @@ Daily 现在实际承担的目标是：
 这说明 Daily 当前并没有完全对齐现行 orchestrator 主架构。
 
 ---
----
 
 ## 5. 日志与可观测性
 
@@ -86,9 +87,8 @@ Daily 现在实际承担的目标是：
 - `task_selection`
 - `collect_start` / `collect_done`
 - `agent_task_start` / `agent_task_done`
-- `analyze_start` / `analyze_done`
 
-从可观测性角度看，Daily 当前最稳定的价值其实是：
+从可观测性角度看，Daily 当前最稳定的价值是：
 
 - 任务选择
 - 运行追踪
@@ -96,44 +96,42 @@ Daily 现在实际承担的目标是：
 
 ---
 
-## 5. 返回结构
+## 6. 与 Scheduler 的关系
 
-`run_daily_tasks()` 返回：
+需要区分两套能力：
 
-- `run_id`
-- `task_count`
-- `collected`
-- `analysis`
+### 6.1 DailyTasks
 
-注意：
+- 基于 `tasks.json`
+- 由 CLI 主动触发：`python app.py --daily --daily-trigger ...`
+- 更像“预定义批处理清单”
 
-- `analysis` 当前仍可能来自 legacy 路径
-- `task_count` 是命中数量，不等于成功数量
+### 6.2 Scheduler
+
+- 基于 `mobiclaw/scheduler/`
+- 由 APScheduler + JSON store 驱动
+- 可通过 Gateway API 和 Worker 工具创建、查看、取消
+- 更像“动态定时任务系统”
+
+因此，Daily 与 Scheduler 是互补关系，不应再混为一个模块。
 
 ---
 
-## 5. 当前应采用的文档口径
+## 7. 当前应采用的文档口径
 
 关于 Daily，建议统一这样描述：
-
-### 推荐表述
 
 - Daily 是一个批量任务执行器
 - 它当前负责 trigger 过滤、任务遍历和运行日志记录
 - 它内部仍保留部分 legacy 路径，尚未完全收敛到现行主架构
+- 动态定时任务能力应归入 `scheduler/`，不是 Daily 自身的一部分
 
 ---
 
-## 5. 后续收敛建议
+## 8. 后续收敛方向
 
-1. 把 `collect` 结果统一落到本地 memory / local knowledge 路径
-2. 把 `agent_task` 切换到 orchestrator 主链路，而不是直接 Worker
-3. 保留 RunContext 和事件日志设计
+当前最合理的收敛方向包括：
 
----
-
-## 5. 最终判断
-
-Daily 当前是一个含 legacy 路径的批量任务执行器，更准确的定位是：
-
-> **一个仍含 legacy 路径的批量任务执行器，核心价值在任务调度与运行追踪，而不是外部知识库写入本身。**
+1. 把 `agent_task` 切换到 orchestrator 主链路，而不是直接 Worker
+2. 保留 `RunContext` 与事件日志设计
+3. 继续把 Daily 定位为批处理入口，而不是通用调度器

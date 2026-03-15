@@ -210,6 +210,68 @@ python app.py --agent-task "从 arXiv 搜索今天的 Agent 论文并总结" --m
 ```bash
 # 默认多智能体路由
 python app.py --agent-task "帮我查看今天美伊战争的情况总结，并且生成对应的 md 总结"
+```
+
+#### 4.2 手机任务执行器 `mobiclaw/mobile` 的配置和用法
+
+`MobiClaw` 中的手机 GUI 执行统一由 `mobiclaw/mobile/` 提供，既可以被 `app.py` / `mobi` 工具间接调用，也可以单独运行 `mobiclaw/mobile/run.py` 做本地联调。
+
+推荐先在根目录 `.env` 中配置 mobile 相关环境变量；`app.py` 与 `mobiclaw/gateway_server/` 启动时会自动读取它们。
+
+常用配置如下：
+
+```bash
+# 选择执行 provider：mobiagent / uitars / qwen / autoglm
+export MOBILE_PROVIDER=mobiagent
+
+# 设备配置；未设置时默认为 Android
+export MOBILE_DEVICE_TYPE=Android
+export MOBILE_DEVICE_ID=emulator-5554 #为空时默认连接到第一个设备
+
+# 通用执行配置
+export MOBILE_MAX_STEPS=15
+
+# MobiAgent provider 专属配置，其他privider 参考.env-example配置
+export MOBILE_MOBIAGENT_SERVICE_IP=localhost # 具体根据实际部署的MobiAgent服务IP、端口配置
+export MOBILE_MOBIAGENT_DECIDER_PORT=<decider_port>
+export MOBILE_MOBIAGENT_GROUNDER_PORT=<grounder_port>
+export MOBILE_MOBIAGENT_PLANNER_PORT=<planner_port>
+export MOBILE_MOBIAGENT_ENABLE_PLANNING=1
+export MOBILE_MOBIAGENT_USE_E2E=1
+export MOBILE_MOBIAGENT_USE_EXPERIENCE=0
+```
+
+说明：
+
+- `MOBILE_PROVIDER` 决定底层用哪个执行器，默认是 `mobiagent`
+- `MOBILE_DEVICE_TYPE` / `MOBILE_DEVICE_ID` 控制连接的手机或模拟器；
+- `MOBILE_API_BASE` / `MOBILE_MODEL` / `MOBILE_API_KEY` / `MOBILE_TEMPERATURE` 是通用模型参数
+- provider 专属参数通过前缀传入，例如 `MOBILE_MOBIAGENT_*`、`MOBILE_UITARS_*`、`MOBILE_QWEN_*`、`MOBILE_AUTOGLM_*`
+- 模型部署参考：[MobiAgent 模型部署](https://github.com/IPADS-SAI/MobiAgent/blob/main/README_zh.md#3-%E6%A8%A1%E5%9E%8B%E9%83%A8%E7%BD%B2)
+
+如果只想单独验证手机执行链路，可以直接运行：
+
+```bash
+# 单任务执行
+python -m mobiclaw.mobile.run \
+  --provider mobiagent \
+  --task "在淘宝上搜索电动牙刷，选最畅销的那款并加入购物车" \
+  --device-type Android \
+  --device-id emulator-5554 \
+  --service-ip localhost \
+  --decider-port 9002 \
+  --grounder-port 9002 \
+  --planner-port 8080 \
+  --enable-planning \
+  --use-e2e \
+  --max-steps 30 \
+  --output-dir results
+```
+
+也可以切换到其他 provider，运行示例可以参考`mobiclaw/mobile/examples`
+
+执行结果会输出到 `MOBILE_OUTPUT_DIR` 或 `--output-dir` 指定目录，通常包含每一步截图、标注图、UI 树、`actions.json`、`react.json` 以及最终结果索引。对于通过 `app.py` 发起的手机任务，默认输出目录是 `outputs/jobxxx/mobile_exec`。
+
 
 #### 智能路由多智能体模式（Router + Steward + Worker）
 
@@ -247,8 +309,8 @@ python app.py --agent-task "帮我查看近三年 OSDI 会议上关于 端侧大
 # 指定输出路径
 python app.py --agent-task "帮我查看今天美伊战争的情况总结，并且生成对应的 md 总结" --output "outputs/summary.md"
 
-# 强制走 legacy 单 Agent 模式
-python app.py --agent-task "帮我总结今天待办" --mode steward
+# 直接走单 Agent 模式, 涉及手机的任务会自动选择对应工具调用手机
+python app.py --agent-task "帮我看一下微信最近的未读消息" --mode steward 
 python app.py --agent-task "帮我检索最新 Agent 论文" --mode worker
 
 # 给 Router 提示偏好 Agent
@@ -271,7 +333,7 @@ python app.py --agent-task "每周一10：00帮我搜索最新计算机科学新
 python app.py --agent-task "帮我取消每周一搜索新闻的定时任务"
 ```
 
-#### 4.2.4 输出文件提示机制
+#### 4.3.4 输出文件提示机制
 
 当前实现会为每次任务创建独立目录：`<项目根>/outputs/job_<时间戳>/`，并在其下创建临时目录：`tmp/`。
 
@@ -292,7 +354,7 @@ python app.py --agent-task "帮我取消每周一搜索新闻的定时任务"
 python -m mobiclaw.gateway_server
 ```
 
-默认监听：`http://0.0.0.0:8090`
+默认监听：`http://0.0.0.0:8090`，可以浏览器访问本地`http://0.0.0.0:8090`使用Web UI 访问控制台，进行对话和配置系统设置。
 
 可选环境变量：
 - `MOBICLAW_GATEWAY_PORT`：自定义端口（默认 `8090`）

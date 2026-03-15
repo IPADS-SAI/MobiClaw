@@ -713,7 +713,7 @@ async def run_demo_conversation() -> None:
     print("-" * 70)
     print()
 
-    preset_message = "开始今日的数据整理和分析，给出最近的待办事项。"
+    preset_message = "看一下微信聊天列表第一个消息是什么，再看一下淘宝有哪些东西待收货。"
     print(f"[User]: {preset_message}")
     print()
 
