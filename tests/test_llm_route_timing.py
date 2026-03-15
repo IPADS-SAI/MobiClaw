@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from seneschal import orchestrator
+from mobiclaw import orchestrator
 
 
 class _TimedRouterProxy:

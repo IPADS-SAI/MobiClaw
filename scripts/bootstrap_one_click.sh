@@ -353,7 +353,7 @@ if ! wait_http_ready "http://127.0.0.1:8081/" 60 2; then
   die "mobiagent_server did not become ready in time. Check $MOBI_SERVER_LOG"
 fi
 
-log "Running Seneschal demo..."
+log "Running MobiClaw demo..."
 # 启动链路通过，后续如果 demo 失败不再做"启动失败回滚"
 STARTUP_SUCCEEDED=1
 uv run python app.py

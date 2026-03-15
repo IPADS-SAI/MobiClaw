@@ -5,7 +5,7 @@ import asyncio
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
-from seneschal.agents.factories_steward_chat_user import create_steward_agent
+from mobiclaw.agents.factories_steward_chat_user import create_steward_agent
 
 
 def _build_collect_response(task_desc: str) -> ToolResponse:
@@ -29,7 +29,7 @@ def _build_collect_response(task_desc: str) -> ToolResponse:
 
 
 def test_steward_collect_report_runs_single_attempt_and_returns_image(monkeypatch):
-    from seneschal.agents import factories_steward_chat_user as steward_mod
+    from mobiclaw.agents import factories_steward_chat_user as steward_mod
 
     monkeypatch.setenv("STEWARD_MOBI_VLM_ENABLED", "1")
     collect_calls: list[str] = []
@@ -80,7 +80,7 @@ def test_steward_collect_report_runs_single_attempt_and_returns_image(monkeypatc
 
 
 def test_steward_collect_report_vlm_disabled_still_returns_pack(monkeypatch):
-    from seneschal.agents import factories_steward_chat_user as steward_mod
+    from mobiclaw.agents import factories_steward_chat_user as steward_mod
 
     monkeypatch.setenv("STEWARD_MOBI_VLM_ENABLED", "0")
     collect_calls: list[str] = []

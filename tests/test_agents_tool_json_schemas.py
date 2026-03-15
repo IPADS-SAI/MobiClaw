@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from jsonschema import Draft202012Validator
 
-from seneschal.agents import create_steward_agent, create_worker_agent
+from mobiclaw.agents import create_steward_agent, create_worker_agent
 
 
 _FUNCTION_TOOL_SCHEMA = {

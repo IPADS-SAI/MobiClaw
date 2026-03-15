@@ -10,8 +10,8 @@ import pytest
 from fastapi import HTTPException
 from fastapi import UploadFile
 
-from seneschal import gateway_server
-from seneschal.gateway_server import EnvStructuredRequest, GatewayConfig, JobContext, TaskRequest
+from mobiclaw import gateway_server
+from mobiclaw.gateway_server import EnvStructuredRequest, GatewayConfig, JobContext, TaskRequest
 
 
 def _cfg(*, api_key: str = "") -> GatewayConfig:
@@ -105,13 +105,13 @@ def test_parse_split_and_render_env_content() -> None:
     content = """
 # comment
 export OPENROUTER_API_KEY="k"
-SENESCHAL_LOG_LEVEL=DEBUG
+MOBICLAW_LOG_LEVEL=DEBUG
 CUSTOM=42
 INVALID_LINE
 """
     variables = gateway_server._parse_env_variables(content)
     assert variables["OPENROUTER_API_KEY"] == "k"
-    assert variables["SENESCHAL_LOG_LEVEL"] == "DEBUG"
+    assert variables["MOBICLAW_LOG_LEVEL"] == "DEBUG"
     assert variables["CUSTOM"] == "42"
     assert "INVALID_LINE" not in variables
 
@@ -120,10 +120,10 @@ INVALID_LINE
     assert unmanaged["CUSTOM"] == "42"
 
     rendered = gateway_server._render_structured_env_content(
-        values={"SENESCHAL_LOG_LEVEL": "INFO", "OPENROUTER_API_KEY": "abc"},
+        values={"MOBICLAW_LOG_LEVEL": "INFO", "OPENROUTER_API_KEY": "abc"},
         unmanaged={"CUSTOM": "42"},
     )
-    assert "export SENESCHAL_LOG_LEVEL=\"INFO\"" in rendered
+    assert "export MOBICLAW_LOG_LEVEL=\"INFO\"" in rendered
     assert "export OPENROUTER_API_KEY=\"abc\"" in rendered
     assert "export CUSTOM=\"42\"" in rendered
 
@@ -252,7 +252,7 @@ def test_run_job_success_non_chat(monkeypatch) -> None:
     monkeypatch.setattr(gateway_server, "_decorate_result_with_files", lambda job_id, result, request, cfg: {**result, "decorated": True})
     monkeypatch.setattr(gateway_server, "load_config", lambda: _cfg())
 
-    import seneschal.config as seneschal_config
+    import mobiclaw.config as seneschal_config
 
     monkeypatch.setitem(seneschal_config.RAG_CONFIG, "task_history_enabled", False)
 
@@ -485,7 +485,7 @@ def test_put_env_schema_preserve_unmanaged(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(gateway_server, "_env_file_path", lambda: env_file)
 
     req = EnvStructuredRequest(
-        values={"OPENROUTER_API_KEY": "new-key", "SENESCHAL_LOG_LEVEL": "INFO"},
+        values={"OPENROUTER_API_KEY": "new-key", "MOBICLAW_LOG_LEVEL": "INFO"},
         unmanaged=None,
         preserve_unmanaged=True,
     )

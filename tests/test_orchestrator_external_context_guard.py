@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from seneschal import orchestrator
+from mobiclaw import orchestrator
 
 
 class _DummyAgent:

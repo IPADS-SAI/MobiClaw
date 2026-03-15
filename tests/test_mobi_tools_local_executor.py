@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
-from seneschal.mobile.types import MobileExecutionResult
-from seneschal.tools import mobi
+from mobiclaw.mobile.types import MobileExecutionResult
+from mobiclaw.tools import mobi
 
 
 class _ExecutorOK:

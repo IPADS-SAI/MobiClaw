@@ -2,8 +2,8 @@ import asyncio
 import subprocess
 from pathlib import Path
 
-from seneschal import orchestrator
-from seneschal.tools.skill_runner import run_skill_script
+from mobiclaw import orchestrator
+from mobiclaw.tools.skill_runner import run_skill_script
 
 
 def test_run_skill_script_runs_command_in_execution_dir(monkeypatch) -> None:
@@ -15,9 +15,9 @@ def test_run_skill_script_runs_command_in_execution_dir(monkeypatch) -> None:
             stderr="",
         )
 
-    monkeypatch.setattr("seneschal.tools.skill_runner.subprocess.run", fake_run)
+    monkeypatch.setattr("mobiclaw.tools.skill_runner.subprocess.run", fake_run)
 
-    skill_root = Path(__file__).resolve().parents[1] / "seneschal" / "skills" / "pptx"
+    skill_root = Path(__file__).resolve().parents[1] / "mobiclaw" / "skills" / "pptx"
     response = asyncio.run(
         run_skill_script(
             command="python -m markitdown presentation.pptx",
@@ -75,10 +75,10 @@ def test_run_skill_script_restores_previous_dir(monkeypatch) -> None:
             stderr="",
         )
 
-    monkeypatch.setattr("seneschal.tools.skill_runner.subprocess.run", fake_run)
+    monkeypatch.setattr("mobiclaw.tools.skill_runner.subprocess.run", fake_run)
 
     before = Path.cwd().resolve()
-    skill_root = Path(__file__).resolve().parents[1] / "seneschal" / "skills" / "pptx"
+    skill_root = Path(__file__).resolve().parents[1] / "mobiclaw" / "skills" / "pptx"
     response = asyncio.run(
         run_skill_script(
             command="python -m markitdown presentation.pptx",
@@ -93,7 +93,7 @@ def test_run_skill_script_restores_previous_dir(monkeypatch) -> None:
 
 
 def test_run_skill_script_rejects_non_whitelisted_command() -> None:
-    skill_root = Path(__file__).resolve().parents[1] / "seneschal" / "skills" / "pptx"
+    skill_root = Path(__file__).resolve().parents[1] / "mobiclaw" / "skills" / "pptx"
     response = asyncio.run(
         run_skill_script(
             command="/bin/pwd",

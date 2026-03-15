@@ -10,8 +10,8 @@ DailyTasks 用于把周期任务配置化执行，并为每次运行生成可追
 
 ## 1. 模块范围
 
-- 执行器：`seneschal/dailytasks/runner.py`
-- 任务清单：`seneschal/dailytasks/tasks/tasks.json`
+- 执行器：`mobiclaw/dailytasks/runner.py`
+- 任务清单：`mobiclaw/dailytasks/tasks/tasks.json`
 
 ---
 
@@ -79,7 +79,7 @@ Daily 现在实际承担的目标是：
 
 每次运行会写：
 
-- `seneschal/logs/{run_id}.jsonl`
+- `mobiclaw/logs/{run_id}.jsonl`
 
 典型事件：
 

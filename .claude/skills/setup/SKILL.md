@@ -17,13 +17,8 @@ Verify the essential tools are available.
 
 Run:
 - `git --version`
-- `python3 --version`
 - `uv --version`
 - `curl --version`
-
-**If python3 is missing or < 3.12:** AskUserQuestion: "Python 3.12+ is required but not found. Would you like me to install it?"
-- Yes (recommended) — install via system package manager or pyenv
-- No — abort setup, tell user to install Python 3.12+ manually
 
 **If uv is missing:** Install it automatically:
 ```bash
@@ -59,8 +54,8 @@ uv sync
 **Optional: Tesseract OCR (for Chinese document OCR)**
 
 AskUserQuestion: "Install Tesseract OCR with Chinese language support? (Needed only if you plan to use OCR features)"
-- Yes — run `sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-chi-sim`
-- Skip — continue without OCR support
+- Yes — run `sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-chi-sim` (find alternatives for other package managers like `dnf`)
+- Skip — continue without Chinese OCR support
 
 ## 3. Configure Environment
 
@@ -89,9 +84,9 @@ This is the only **required** configuration. AskUserQuestion: "Which LLM provide
   - google/gemini-3-flash-preview
   - Other — let user type a model ID
 - Write `OPENROUTER_MODEL` to `.env`
-- AskUserQuestion: "Use a different (stronger) model for Router/Planner orchestration?"
-  - Yes — ask for model ID, write `OPENROUTER_MODEL_FOR_ORCHESTRATOR`
+- AskUserQuestion: "Use a different model for Router/Planner orchestration?"
   - No — leave empty, will fall back to the default model
+  - User types model via "Other" → write `OPENROUTER_MODEL_FOR_ORCHESTRATOR` to `.env`
 
 **OpenAI-compatible path:**
 - Tell user to add `export OPENAI_API_KEY=<key>` and `export OPENAI_BASE_URL=<url>` to `.env`. Do NOT collect the key in chat.
@@ -122,9 +117,12 @@ AskUserQuestion: "Which mobile execution provider?"
 Write `MOBILE_PROVIDER` to `.env`.
 
 AskUserQuestion: "What device type are you connecting to?"
-- Android — set `MOBILE_DEVICE_TYPE=Android`, ask for `MOBILE_DEVICE_ID` (e.g. `127.0.0.1:5555`)
-- HarmonyOS — set `MOBILE_DEVICE_TYPE=Harmony`, ask for `MOBILE_DEVICE_ID`
-- Mock (no real device) — set `MOBILE_DEVICE_TYPE=mock`
+- Android — set `MOBILE_DEVICE_TYPE=Android`
+- HarmonyOS — set `MOBILE_DEVICE_TYPE=Harmony`
+
+AskUserQuestion: "Do you want to manually set device ID (e.g., serial number or IP:port) to specify the device to control"
+- Skip — leave `MOBILE_DEVICE_ID` empty, will use the first controllable device.
+- User types ID via "Other" → write `MOBILE_DEVICE_ID` to `.env`
 
 For MobiAgent provider, configure the server endpoints:
 - Ask for MobiAgent server IP/port or accept defaults (`166.111.53.96:7003`)
@@ -151,8 +149,6 @@ AskUserQuestion: "Which Feishu event transport mode?"
 
 Write `FEISHU_EVENT_TRANSPORT` to `.env`.
 
-Optionally tell user to add `export FEISHU_VERIFICATION_TOKEN=<verification-token>` and `export FEISHU_ENCRYPT_KEY=<encrypt-key>` to `.env`.
-
 ### 3e. Advanced Options (Optional)
 
 AskUserQuestion: "Configure advanced options? (routing, scheduling, memory, RAG)"
@@ -162,21 +158,21 @@ AskUserQuestion: "Configure advanced options? (routing, scheduling, memory, RAG)
 **If yes, present each category:**
 
 **Routing:**
-- `SENESCHAL_ROUTING_DEFAULT_MODE` — default `router` (options: router, intelligent, worker, steward, auto)
-- `SENESCHAL_ROUTING_STRATEGY` — default `llm_rule_hybrid`
-- `SENESCHAL_ROUTING_MAX_SUBTASKS` — default `4`
+- `MOBICLAW_ROUTING_DEFAULT_MODE` — default `router` (options: router, intelligent, worker, steward, auto)
+- `MOBICLAW_ROUTING_STRATEGY` — default `llm_rule_hybrid`
+- `MOBICLAW_ROUTING_MAX_SUBTASKS` — default `4`
 
 **Scheduling:**
-- `SENESCHAL_SCHEDULE_ENABLED` — default `1` (enabled)
-- `SENESCHAL_SCHEDULE_STORE_PATH` — default `~/.seneschal/schedules.json`
+- `MOBICLAW_SCHEDULE_ENABLED` — default `1` (enabled)
+- `MOBICLAW_SCHEDULE_STORE_PATH` — default `~/.mobiclaw/schedules.json`
 
 **Memory:**
-- `SENESCHAL_MEMORY_ENABLED` — default `1` (enabled)
-- `SENESCHAL_MEMORY_FILE` — default `~/.seneschal/MEMORY.md`
+- `MOBICLAW_MEMORY_ENABLED` — default `1` (enabled)
+- `MOBICLAW_MEMORY_FILE` — default `~/.mobiclaw/MEMORY.md`
 
 **RAG:**
-- `SENESCHAL_RAG_STORE_HISTORY` — default `1` (enabled)
-- `SENESCHAL_RAG_STORE_PATH` — default `~/.seneschal/rag_store`
+- `MOBICLAW_RAG_STORE_HISTORY` — default `1` (enabled)
+- `MOBICLAW_RAG_STORE_PATH` — default `~/.mobiclaw/rag_store`
 
 Write any user-modified values to `.env`.
 
@@ -185,7 +181,7 @@ Write any user-modified values to `.env`.
 Ensure working directories exist:
 ```bash
 mkdir -p logs tmp outputs
-mkdir -p ~/.seneschal
+mkdir -p ~/.mobiclaw
 ```
 
 ## 5. Start Gateway Server
@@ -195,16 +191,16 @@ Check if the gateway port is already in use:
 ss -lnt "( sport = :8090 )" 2>/dev/null || lsof -iTCP:8090 -sTCP:LISTEN 2>/dev/null
 ```
 
-Read `SENESCHAL_GATEWAY_PORT` from `.env` (default `8090`).
+Read `MOBICLAW_GATEWAY_PORT` from `.env` (default `8090`).
 
 **If port is occupied:** AskUserQuestion: "Port <port> is already in use. What should we do?"
 - Kill existing process and restart — identify and stop the process, then start
-- Use a different port — ask for port number, update `SENESCHAL_GATEWAY_PORT` in `.env`
+- Use a different port — ask for port number, update `MOBICLAW_GATEWAY_PORT` in `.env`
 - Skip — don't start the gateway server
 
 **Start the gateway in background:**
 ```bash
-nohup uv run python -m seneschal.gateway_server > logs/gateway-server.log 2>&1 &
+nohup uv run python -m mobiclaw.gateway_server > logs/gateway-server.log 2>&1 &
 echo $! > tmp/gateway-server.pid
 ```
 
@@ -247,11 +243,6 @@ To stop the gateway server later:
 kill $(cat tmp/gateway-server.pid 2>/dev/null) 2>/dev/null; rm -f tmp/gateway-server.pid
 ```
 
-Or use the project's stop script:
-```bash
-bash scripts/stop_all.sh
-```
-
 ## Troubleshooting
 
 **Gateway not starting:** Check `logs/gateway-server.log`. Common causes:
@@ -266,6 +257,6 @@ bash scripts/stop_all.sh
 
 **Feishu bot not responding:** Verify `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are correct. Check `logs/gateway-server.log` for connection errors. For long connection mode, no public IP is needed. For webhook mode, ensure the public URL is reachable.
 
-**Task execution fails with timeout:** Increase `SENESCHAL_SUBTASK_TIMEOUT_S` (default 300s) or `SENESCHAL_ROUTER_TIMEOUT_S` (default 120s) in `.env`. Restart the gateway after changes.
+**Task execution fails with timeout:** Increase `MOBICLAW_SUBTASK_TIMEOUT_S` (default 300s) or `MOBICLAW_ROUTER_TIMEOUT_S` (default 120s) in `.env`. Restart the gateway after changes.
 
-**Out of memory or slow responses:** Try a lighter model (e.g. `google/gemini-3-flash-preview`). Reduce `SENESCHAL_ROUTING_MAX_SUBTASKS` to limit parallel work.
+**Out of memory or slow responses:** Try a lighter model (e.g. `google/gemini-3-flash-preview`). Reduce `MOBICLAW_ROUTING_MAX_SUBTASKS` to limit parallel work.

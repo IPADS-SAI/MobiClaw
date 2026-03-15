@@ -4,7 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from seneschal.session import ChatSessionManager
+from mobiclaw.session import ChatSessionManager
 
 
 class _DummyAgent:
@@ -95,7 +95,7 @@ def test_save_agent_state_and_interrupt(monkeypatch, tmp_path: Path) -> None:
     agent = _DummyAgent()
 
     _DummyJSONSession.calls = []
-    monkeypatch.setattr("seneschal.session.manager.JSONSession", _DummyJSONSession)
+    monkeypatch.setattr("mobiclaw.session.manager.JSONSession", _DummyJSONSession)
 
     asyncio.run(manager.save_agent_state(handle, agent, command="message", introduced=True))
 

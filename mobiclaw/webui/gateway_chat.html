@@ -1,0 +1,1418 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MobiClaw Chat</title>
+    <style>
+      :root {
+        --bg: #f4f6ef;
+        --ink: #20241f;
+        --muted: #5a665a;
+        --line: #d8dfd2;
+        --accent: #105f4a;
+        --warn: #d58f2e;
+        --danger: #b42318;
+        --mono: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+        --sans: "Work Sans", "PingFang SC", "Noto Sans SC", sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: var(--sans);
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 10% 0%, #dce8ce 0%, transparent 30%),
+          radial-gradient(circle at 90% 100%, #f3dbbd 0%, transparent 26%),
+          var(--bg);
+      }
+      .wrap { max-width: 1240px; margin: 0 auto; padding: 28px 18px 40px; }
+      h1 { margin: 0; letter-spacing: 0.03em; font-size: 30px; }
+      .sub { margin-top: 8px; color: var(--muted); font-size: 14px; }
+      .topbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+      .nav { display: flex; gap: 8px; }
+      .nav a {
+        text-decoration: none;
+        border: 1px solid var(--line);
+        background: #fff;
+        color: var(--ink);
+        border-radius: 10px;
+        padding: 8px 12px;
+        font-size: 13px;
+      }
+      .nav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+      .layout { margin-top: 20px; display: grid; grid-template-columns: 320px 1fr; gap: 14px; }
+      .panel {
+        background: linear-gradient(160deg, #fffffc, #f8fbf6);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 14px;
+        box-shadow: 0 8px 24px rgba(31, 34, 27, 0.08);
+      }
+      .panel h2 { margin: 0 0 10px; font-size: 16px; }
+      .hint { font-size: 12px; color: var(--muted); }
+      .status {
+        margin-top: 8px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: #fff;
+        font-size: 12px;
+      }
+      .session-select {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 9px 10px;
+        background: #fff;
+        color: var(--ink);
+        font-family: var(--mono);
+      }
+      .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+      button {
+        border: 0;
+        border-radius: 10px;
+        padding: 8px 12px;
+        cursor: pointer;
+        color: #fff;
+        background: var(--accent);
+        font: inherit;
+      }
+      button.alt { background: #486a62; }
+      button.warn { background: var(--warn); }
+      button.danger { background: var(--danger); }
+      .chat-box {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #fff;
+        height: 520px;
+        overflow: auto;
+        padding: 10px;
+        display: grid;
+        gap: 8px;
+      }
+      .loading-bar {
+        margin-top: 8px;
+        border: 1px solid #d4dfd5;
+        border-radius: 10px;
+        background: #f8fbf7;
+        padding: 8px 10px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        color: #355a4f;
+      }
+      .loading-bar[hidden] { display: none; }
+      .loading-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: #2e8b6a;
+        animation: loadingPulse 1s ease-in-out infinite;
+      }
+      .loading-dot:nth-child(2) { animation-delay: 0.15s; }
+      .loading-dot:nth-child(3) { animation-delay: 0.3s; }
+      @keyframes loadingPulse {
+        0%, 80%, 100% { opacity: 0.25; transform: scale(0.8); }
+        40% { opacity: 1; transform: scale(1); }
+      }
+      .loading-text { font-family: var(--mono); }
+      .planner-box {
+        margin-top: 10px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #fbfcf8;
+        padding: 10px;
+      }
+      .planner-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+      .planner-title { font-size: 13px; font-weight: 600; }
+      .planner-state { font-size: 12px; color: var(--muted); }
+      .planner-current {
+        font-size: 12px;
+        border: 1px dashed #cad4c5;
+        border-radius: 8px;
+        padding: 6px 8px;
+        margin-bottom: 6px;
+        background: #fff;
+      }
+      .planner-summary { margin-bottom: 8px; }
+      .planner-subtasks { display: grid; gap: 6px; }
+      .planner-subtask {
+        border: 1px solid #e1e7dc;
+        border-radius: 8px;
+        padding: 6px 8px;
+        background: #fcfdfb;
+      }
+      .planner-subtask-title { font-weight: 600; margin-bottom: 4px; }
+      .planner-subtask-line { color: #4d5a4f; margin-top: 2px; }
+      .planner-subtask-outcome { margin-top: 4px; }
+      .planner-subtask-outcome summary { cursor: pointer; color: #355a4f; }
+      .planner-subtask-outcome pre {
+        white-space: pre-wrap;
+        margin: 4px 0 0;
+        font-family: var(--mono);
+        background: #fff;
+        border: 1px solid #dfe6db;
+        border-radius: 6px;
+        padding: 6px;
+      }
+      .planner-events {
+        max-height: 130px;
+        overflow: auto;
+        display: grid;
+        gap: 6px;
+      }
+      .planner-event {
+        font-size: 12px;
+        background: #fff;
+        border: 1px solid #d8dfd2;
+        border-radius: 8px;
+        padding: 6px 8px;
+      }
+      .planner-empty { font-size: 12px; color: var(--muted); }
+      .msg {
+        max-width: 88%;
+        border-radius: 10px;
+        padding: 9px 10px;
+        white-space: pre-wrap;
+        line-height: 1.4;
+        font-size: 13px;
+      }
+      .msg.user { justify-self: end; background: #dff2e8; border: 1px solid #b6ddca; }
+      .msg.agent { justify-self: start; background: #f6f8fa; border: 1px solid #d9e2e8; }
+      .msg.system { justify-self: center; background: #fff8e6; border: 1px solid #f0d7a9; color: #7b5718; }
+      .msg.progress {
+        justify-self: start;
+        background: #eef5ff;
+        border: 1px solid #c8dcff;
+        color: #1e4f8a;
+      }
+      .msg.error { justify-self: start; background: #fde8e8; border: 1px solid #f6bcbc; color: #8a1f1f; }
+      .msg-meta { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+      .composer { margin-top: 10px; display: grid; gap: 8px; }
+      .row { display: flex; align-items: center; gap: 8px; }
+      .row-wrap { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+      .row label { font-size: 12px; color: var(--muted); }
+      select, textarea, input {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fff;
+        color: var(--ink);
+        padding: 9px 10px;
+        font: inherit;
+      }
+      textarea#chat-input { width: 100%; min-height: 92px; resize: vertical; }
+      .mono { font-family: var(--mono); }
+      .cmds { font-size: 12px; color: var(--muted); }
+      .cmd-suggest {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fff;
+        overflow: hidden;
+      }
+      .cmd-suggest[hidden] { display: none; }
+      .cmd-suggest-item {
+        display: block;
+        width: 100%;
+        text-align: left;
+        border: 0;
+        border-top: 1px solid #edf1ea;
+        background: #fff;
+        color: var(--ink);
+        border-radius: 0;
+        padding: 8px 10px;
+      }
+      .cmd-suggest-item:first-child { border-top: 0; }
+      .cmd-suggest-item.active { background: #e8f4ee; }
+      .cmd-suggest-item code {
+        font-family: var(--mono);
+        font-size: 12px;
+        margin-right: 8px;
+      }
+      .cmd-suggest-item .desc {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .log {
+        margin-top: 10px;
+        background: #1b1f1c;
+        color: #d7f4d6;
+        border-radius: 10px;
+        padding: 8px;
+        max-height: 150px;
+        overflow: auto;
+        font-size: 11px;
+      }
+      @media (max-width: 980px) {
+        .layout { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="topbar">
+        <div>
+          <h1>MobiClaw Chat</h1>
+          <div class="sub">交互式聊天 · Session 管理 · 指令控制</div>
+        </div>
+        <div class="nav">
+          <a class="active" href="/console/chat">聊天</a>
+          <a href="/console">控制台</a>
+          <a href="/console/settings">设置</a>
+        </div>
+      </div>
+
+      <div class="layout">
+        <section class="panel">
+          <h2>Session 管理</h2>
+          <select id="session-select" class="session-select" size="10"></select>
+          <div class="btns">
+            <button id="btn-refresh" class="alt" type="button">刷新</button>
+            <button id="btn-load" type="button">加载</button>
+            <button id="btn-new" class="warn" type="button">新建</button>
+            <button id="btn-delete" class="danger" type="button">删除</button>
+          </div>
+          <div id="session-status" class="status">状态: <strong>未初始化</strong></div>
+          <div class="hint" style="margin-top: 8px;">当前会话会作为 `context_id` 发送给网关。</div>
+          <div class="log mono" id="mini-log">(empty)</div>
+        </section>
+
+        <section class="panel">
+          <h2>聊天窗口</h2>
+          <div id="chat-box" class="chat-box"></div>
+          <div id="task-loading" class="loading-bar" hidden>
+            <span class="loading-dot"></span>
+            <span class="loading-dot"></span>
+            <span class="loading-dot"></span>
+            <span id="task-loading-text" class="loading-text">任务执行中，请稍候...</span>
+          </div>
+          <div id="planner-box" class="planner-box">
+            <div class="planner-head">
+              <div class="planner-title">Planner 监控</div>
+              <div id="planner-state" class="planner-state">未启用</div>
+            </div>
+            <div id="planner-current" class="planner-current">当前计划: -</div>
+            <div id="planner-events" class="planner-events">
+              <div class="planner-empty">暂无计划事件。</div>
+            </div>
+          </div>
+
+          <div class="composer">
+            <div class="row-wrap">
+              <label>模式</label>
+              <select id="chat-mode">
+                <option value="chat" selected>chat</option>
+                <option value="router">router</option>
+                <option value="intelligent">intelligent</option>
+                <option value="worker">worker</option>
+                <option value="steward">steward</option>
+                <option value="auto">auto</option>
+              </select>
+
+              <label>异步</label>
+              <input id="chat-async" type="checkbox" checked />
+
+              <label>联网</label>
+              <input id="chat-web-search" type="checkbox" checked />
+
+              <label>job_id</label>
+              <input id="current-job" class="mono" style="width: 260px;" placeholder="当前轮询任务ID" />
+
+              <button id="btn-query-job" class="alt" type="button">查询Job</button>
+            </div>
+
+            <textarea id="chat-input" placeholder="输入消息，或输入指令: /new /quit /interrupt"></textarea>
+            <div class="row-wrap">
+              <label>附件</label>
+              <input id="chat-files" type="file" multiple />
+            </div>
+            <div id="cmd-suggest" class="cmd-suggest" hidden></div>
+
+            <div class="row-wrap">
+              <button id="btn-send" type="button">发送</button>
+              <button id="btn-clear-chat" class="alt" type="button">清空聊天记录</button>
+              <span class="cmds">指令: <code>/new</code> 新建会话, <code>/quit</code> 结束当前会话, <code>/interrupt</code> 中断轮询</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <script>
+      const cfgKey = "seneschal_gateway_console_config_v1";
+      const activeSessionKey = "seneschal_chat_active_session_v1";
+      let pollingTimer = null;
+      let sessions = [];
+      let activeSessionId = "";
+      const renderedJobs = new Set();
+      const seenPlannerEventKeys = new Set();
+      const seenOrchestratorEventKeys = new Set();
+      const messages = [];
+      const commandSpecs = [
+        { cmd: "/new", desc: "新建会话" },
+        { cmd: "/quit", desc: "结束当前会话" },
+        { cmd: "/interrupt", desc: "中断轮询" },
+      ];
+      let commandSuggestVisible = false;
+      let commandSuggestItems = [];
+      let commandSuggestIndex = -1;
+      const plannerMonitor = {
+        enabled: false,
+        currentPlan: null,
+        events: [],
+        updatedAt: "",
+      };
+
+      const el = {
+        sessionSelect: document.getElementById("session-select"),
+        btnRefresh: document.getElementById("btn-refresh"),
+        btnLoad: document.getElementById("btn-load"),
+        btnNew: document.getElementById("btn-new"),
+        btnDelete: document.getElementById("btn-delete"),
+        sessionStatus: document.getElementById("session-status"),
+        miniLog: document.getElementById("mini-log"),
+        chatBox: document.getElementById("chat-box"),
+        chatMode: document.getElementById("chat-mode"),
+        chatAsync: document.getElementById("chat-async"),
+        chatWebSearch: document.getElementById("chat-web-search"),
+        currentJob: document.getElementById("current-job"),
+        btnQueryJob: document.getElementById("btn-query-job"),
+        chatInput: document.getElementById("chat-input"),
+        cmdSuggest: document.getElementById("cmd-suggest"),
+        chatFiles: document.getElementById("chat-files"),
+        btnSend: document.getElementById("btn-send"),
+        btnClearChat: document.getElementById("btn-clear-chat"),
+        plannerState: document.getElementById("planner-state"),
+        plannerCurrent: document.getElementById("planner-current"),
+        plannerEvents: document.getElementById("planner-events"),
+        taskLoading: document.getElementById("task-loading"),
+        taskLoadingText: document.getElementById("task-loading-text"),
+      };
+
+      function nowTime() {
+        return new Date().toLocaleTimeString("zh-CN", { hour12: false });
+      }
+
+      function logMini(text) {
+        el.miniLog.textContent = `[${nowTime()}] ${text}\n` + (el.miniLog.textContent || "");
+      }
+
+      function setSessionStatus(text, kind = "ok") {
+        const color = kind === "error" ? "#b42318" : "#105f4a";
+        el.sessionStatus.innerHTML = `状态: <strong style="color:${color}">${text}</strong>`;
+      }
+
+      function setTaskLoading(active, text = "") {
+        if (!el.taskLoading || !el.taskLoadingText) return;
+        if (active) {
+          el.taskLoading.hidden = false;
+          el.taskLoadingText.textContent = text || "任务执行中，请稍候...";
+          return;
+        }
+        el.taskLoading.hidden = true;
+        el.taskLoadingText.textContent = "任务执行中，请稍候...";
+      }
+
+      function normalizeBaseUrl(raw) {
+        const value = (raw || "").trim();
+        if (!value) {
+          return window.location.origin || "http://127.0.0.1:8090";
+        }
+        try {
+          const u = new URL(value, window.location.origin);
+          return `${u.protocol}//${u.host}`;
+        } catch (_) {
+          return value.replace(/\/+$/, "");
+        }
+      }
+
+      function getConfig() {
+        const raw = localStorage.getItem(cfgKey);
+        let parsed = {};
+        if (raw) {
+          try {
+            parsed = JSON.parse(raw) || {};
+          } catch (_) {
+            parsed = {};
+          }
+        }
+        return {
+          baseUrl: normalizeBaseUrl(parsed.baseUrl || window.location.origin),
+          apiKey: (parsed.apiKey || "").trim(),
+          pollMs: Number(parsed.pollMs || 2000),
+          timeoutMs: Number(parsed.timeoutMs || 30000),
+        };
+      }
+
+      function authHeaders(baseHeaders = {}) {
+        const cfg = getConfig();
+        const headers = { ...baseHeaders };
+        if (cfg.apiKey) {
+          headers.Authorization = `Bearer ${cfg.apiKey}`;
+        }
+        return headers;
+      }
+
+      async function requestJson(path, options = {}) {
+        const cfg = getConfig();
+        const url = `${cfg.baseUrl}${path}`;
+        const controller = new AbortController();
+        const timeoutMs = Math.max(5000, Number(cfg.timeoutMs) || 30000);
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const resp = await fetch(url, { ...options, signal: controller.signal });
+          const text = await resp.text();
+          let json;
+          try {
+            json = text ? JSON.parse(text) : null;
+          } catch (_) {
+            json = { raw: text };
+          }
+          if (!resp.ok) {
+            const detail = (json && (json.detail || json.error || json.message || json.raw)) || "";
+            throw new Error(detail ? `HTTP ${resp.status}: ${detail}` : `HTTP ${resp.status}`);
+          }
+          return json;
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+
+      function pushMessage(role, text, meta = "") {
+        messages.push({ role, text: String(text || ""), meta: meta || nowTime() });
+        renderMessages();
+      }
+
+      function normalizeRole(role) {
+        const r = String(role || "").trim().toLowerCase();
+        if (r === "assistant" || r === "agent" || r === "bot") return "agent";
+        if (r === "user") return "user";
+        if (r === "progress") return "progress";
+        if (r === "error") return "error";
+        return "system";
+      }
+
+      function renderMessages() {
+        el.chatBox.innerHTML = "";
+        if (messages.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "hint";
+          empty.textContent = "暂无聊天记录。";
+          el.chatBox.appendChild(empty);
+          return;
+        }
+
+        messages.forEach((m) => {
+          const box = document.createElement("div");
+          box.className = `msg ${m.role}`;
+          const meta = document.createElement("div");
+          meta.className = "msg-meta";
+          meta.textContent = m.meta || "";
+          const body = document.createElement("div");
+          const text = String(m.text || "");
+          const lines = text.split("\n");
+          lines.forEach((line, idx) => {
+            const match = line.match(/^(\s*-\s*)([^:]+):\s*(https?:\/\/\S+|\/api\/v1\/files\/\S+)\s*$/);
+            if (match) {
+              const prefix = document.createElement("span");
+              prefix.textContent = `${match[1]}${match[2]}: `;
+              body.appendChild(prefix);
+              const link = document.createElement("a");
+              const rawUrl = String(match[3] || "").trim();
+              const cfg = getConfig();
+              link.href = /^https?:\/\//i.test(rawUrl)
+                ? rawUrl
+                : `${cfg.baseUrl}${rawUrl.startsWith("/") ? "" : "/"}${rawUrl}`;
+              link.textContent = "下载文件";
+              link.target = "_blank";
+              link.rel = "noopener noreferrer";
+              body.appendChild(link);
+            } else {
+              body.appendChild(document.createTextNode(line));
+            }
+            if (idx < lines.length - 1) {
+              body.appendChild(document.createElement("br"));
+            }
+          });
+          box.appendChild(meta);
+          box.appendChild(body);
+          el.chatBox.appendChild(box);
+        });
+        el.chatBox.scrollTop = el.chatBox.scrollHeight;
+      }
+
+      function plannerLabel(state) {
+        const v = String(state || "").trim();
+        if (!v) return "unknown";
+        if (v === "done") return "已完成";
+        if (v === "in_progress") return "进行中";
+        if (v === "todo") return "待处理";
+        if (v === "abandoned") return "已放弃";
+        return v;
+      }
+
+      function escapeHtml(value) {
+        return String(value || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function summarizeText(text, maxLen = 120) {
+        const normalized = String(text || "").replace(/\s+/g, " ").trim();
+        if (!normalized) return "";
+        if (normalized.length <= maxLen) return normalized;
+        return `${normalized.slice(0, maxLen)}...`;
+      }
+
+      function emitPlannerIncrementalMessages(events) {
+        if (!Array.isArray(events) || events.length === 0) return;
+        for (const event of events) {
+          if (!event || typeof event !== "object") continue;
+          const eventKey = String(event.event_key || "").trim();
+          if (!eventKey || seenPlannerEventKeys.has(eventKey)) continue;
+          seenPlannerEventKeys.add(eventKey);
+
+          const eventType = String(event.event_type || "plan_revised");
+          const delta = event.delta && typeof event.delta === "object" ? event.delta : {};
+          const subtaskName = String(delta.subtask_name || "").trim();
+          const subtaskIdx = Number.isInteger(delta.subtask_idx) ? Number(delta.subtask_idx) : null;
+          const outcome = summarizeText(delta.outcome || "");
+          const eventAt = String(event.event_at || nowTime());
+
+          let text = "";
+          if (eventType === "plan_created") {
+            text = `已创建计划：${delta.plan_name || event.plan?.name || "未命名计划"}`;
+          } else if (eventType === "subtask_activated") {
+            const target = subtaskName || (subtaskIdx !== null ? `子任务 #${subtaskIdx + 1}` : "子任务");
+            text = `开始执行：${target}`;
+          } else if (eventType === "subtask_done") {
+            const target = subtaskName || (subtaskIdx !== null ? `子任务 #${subtaskIdx + 1}` : "子任务");
+            text = outcome ? `已完成：${target}\n结果：${outcome}` : `已完成：${target}`;
+          } else if (eventType === "plan_done") {
+            const pName = delta.plan_name || event.plan?.name || "当前计划";
+            text = `计划已完成：${pName}`;
+            if (delta.outcome) {
+              text += `\n结果：${summarizeText(delta.outcome, 180)}`;
+            }
+          } else if (eventType === "plan_abandoned") {
+            const pName = delta.plan_name || event.plan?.name || "当前计划";
+            text = `计划已结束（abandoned）：${pName}`;
+          } else {
+            const pName = event.plan?.name || delta.plan_name || "当前计划";
+            text = `计划已更新：${pName}`;
+          }
+
+          if (text) {
+            pushMessage("system", text, `Planner · ${eventAt}`);
+          }
+        }
+      }
+
+      function emitOrchestratorIncrementalMessages(events) {
+        if (!Array.isArray(events) || events.length === 0) return;
+        for (const event of events) {
+          if (!event || typeof event !== "object") continue;
+          const eventKey = String(event.event_key || "").trim();
+          if (!eventKey || seenOrchestratorEventKeys.has(eventKey)) continue;
+          seenOrchestratorEventKeys.add(eventKey);
+
+          const stage = Number(event.stage || 0) || 0;
+          const subtask = Number(event.subtask || 0) || 0;
+          const agent = String(event.agent || "").trim() || "agent";
+          const state = String(event.state || "").trim().toLowerCase() || "started";
+          const task = summarizeText(event.task || "", 140);
+          const preview = summarizeText(event.reply_preview || "", 180);
+          const err = summarizeText(event.error || "", 160);
+          const eventAt = String(event.event_at || nowTime());
+
+          let text = `Stage ${stage}`;
+          if (subtask > 0) text += `.${subtask}`;
+          text += ` · ${agent} · ${state}`;
+          if (task) text += `\n任务: ${task}`;
+          if (preview && state !== "started") text += `\n输出: ${preview}`;
+          if (err) text += `\n错误: ${err}`;
+          pushMessage("system", text, `Orchestrator · ${eventAt}`);
+        }
+      }
+
+      function renderPlannerMonitor() {
+        if (!el.plannerState || !el.plannerCurrent || !el.plannerEvents) return;
+        el.plannerState.textContent = plannerMonitor.enabled ? "已启用" : "未启用";
+        const current = plannerMonitor.currentPlan;
+        if (current && typeof current === "object") {
+          const name = String(current.name || "(未命名计划)");
+          const state = plannerLabel(current.state);
+          const subtasks = Array.isArray(current.subtasks) ? current.subtasks : [];
+          const inProgress = subtasks.filter((s) => String(s.state || "") === "in_progress").length;
+          const done = subtasks.filter((s) => String(s.state || "") === "done").length;
+          const subtaskHtml = subtasks.map((s, idx) => {
+            const subName = escapeHtml(s.name || `子任务 #${idx + 1}`);
+            const subState = escapeHtml(plannerLabel(s.state || ""));
+            const subDesc = escapeHtml(s.description || "-");
+            const subExpected = escapeHtml(s.expected_outcome || "-");
+            const subOutcome = String(s.outcome || "").trim();
+            const outcomeHtml = subOutcome
+              ? `<details class="planner-subtask-outcome"><summary>查看结果</summary><pre>${escapeHtml(subOutcome)}</pre></details>`
+              : "";
+            return `<div class="planner-subtask">
+              <div class="planner-subtask-title">${idx + 1}. ${subName} · ${subState}</div>
+              <div class="planner-subtask-line"><strong>Description:</strong> ${subDesc}</div>
+              <div class="planner-subtask-line"><strong>Expected:</strong> ${subExpected}</div>
+              ${outcomeHtml}
+            </div>`;
+          }).join("");
+          el.plannerCurrent.innerHTML = `<div class="planner-summary">当前计划: ${escapeHtml(name)} · ${escapeHtml(state)} · 子任务 ${done}/${subtasks.length} 完成 · 进行中 ${inProgress}</div><div class="planner-subtasks">${subtaskHtml || '<div class="planner-empty">暂无子任务</div>'}</div>`;
+        } else {
+          el.plannerCurrent.textContent = "当前计划: -";
+        }
+
+        const events = Array.isArray(plannerMonitor.events) ? plannerMonitor.events : [];
+        if (events.length === 0) {
+          el.plannerEvents.innerHTML = '<div class="planner-empty">暂无计划事件。</div>';
+          return;
+        }
+        const rows = events.slice(-10).reverse().map((item) => {
+          const eventAt = String(item.event_at || "");
+          const eventType = String(item.event_type || "plan_revised");
+          const delta = item && typeof item.delta === "object" ? item.delta : {};
+          const plan = item && typeof item.plan === "object" ? item.plan : null;
+          const planName = plan ? String(plan.name || "(无计划)") : "(无计划)";
+          const state = plan ? plannerLabel(plan.state) : "none";
+          const subtasks = plan && Array.isArray(plan.subtasks) ? plan.subtasks : [];
+          const done = subtasks.filter((s) => String(s.state || "") === "done").length;
+          const target = String(delta.subtask_name || delta.plan_name || "").trim();
+          const targetText = target ? ` · 目标: ${escapeHtml(target)}` : "";
+          return `<div class="planner-event"><div>${eventAt || nowTime()} · ${escapeHtml(planName)}</div><div>类型: ${escapeHtml(eventType)}${targetText}</div><div>状态: ${escapeHtml(state)} · 完成 ${done}/${subtasks.length}</div></div>`;
+        });
+        el.plannerEvents.innerHTML = rows.join("");
+      }
+
+      function updatePlannerMonitor(data) {
+        const root = data && typeof data === "object" ? data : {};
+        const monitor =
+          (root.planner_monitor && typeof root.planner_monitor === "object" ? root.planner_monitor : null) ||
+          (root.progress && root.progress.planner_monitor && typeof root.progress.planner_monitor === "object"
+            ? root.progress.planner_monitor
+            : null);
+        if (!monitor) return;
+        plannerMonitor.enabled = !!monitor.enabled;
+        plannerMonitor.currentPlan = monitor.current_plan && typeof monitor.current_plan === "object" ? monitor.current_plan : null;
+        plannerMonitor.events = Array.isArray(monitor.events) ? monitor.events.slice(-40) : [];
+        plannerMonitor.updatedAt = String((root.progress && root.progress.updated_at) || "");
+        emitPlannerIncrementalMessages(plannerMonitor.events);
+        renderPlannerMonitor();
+      }
+
+      function resetPlannerMonitor() {
+        plannerMonitor.enabled = false;
+        plannerMonitor.currentPlan = null;
+        plannerMonitor.events = [];
+        plannerMonitor.updatedAt = "";
+        seenPlannerEventKeys.clear();
+        seenOrchestratorEventKeys.clear();
+        renderPlannerMonitor();
+      }
+
+      function newSessionId() {
+        const d = new Date();
+        const stamp = d.toISOString().replace(/[.:TZ-]/g, "").slice(0, 17);
+        const rand = Math.random().toString(36).slice(2, 8);
+        return `chat_${stamp}_${rand}`;
+      }
+
+      function setActiveSession(sessionId) {
+        activeSessionId = String(sessionId || "").trim();
+        if (activeSessionId) {
+          localStorage.setItem(activeSessionKey, activeSessionId);
+        } else {
+          localStorage.removeItem(activeSessionKey);
+        }
+        refreshSessionSelect();
+      }
+
+      function refreshSessionSelect() {
+        el.sessionSelect.innerHTML = "";
+        sessions.forEach((item) => {
+          const contextId = String(item.context_id || item.session_id || "").trim();
+          if (!contextId) return;
+          const option = document.createElement("option");
+          option.value = contextId;
+          const updatedAt = String(item.updated_at || "").trim();
+          option.textContent = updatedAt ? `${contextId} · ${updatedAt}` : contextId;
+          if (contextId === activeSessionId) {
+            option.selected = true;
+          }
+          el.sessionSelect.appendChild(option);
+        });
+      }
+
+      function upsertSession(sessionId) {
+        const id = String(sessionId || "").trim();
+        if (!id) return;
+        const nowIso = new Date().toISOString();
+        sessions = sessions.filter((s) => String(s.context_id || s.session_id || "").trim() !== id);
+        sessions.unshift({ context_id: id, session_id: id, updated_at: nowIso });
+        refreshSessionSelect();
+      }
+
+      async function refreshSessions() {
+        const resp = await requestJson("/api/v1/chat/sessions", {
+          method: "GET",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+        });
+        sessions = Array.isArray(resp.sessions) ? resp.sessions : [];
+        refreshSessionSelect();
+      }
+
+      async function loadSession(sessionId) {
+        const id = String(sessionId || "").trim();
+        if (!id) {
+          throw new Error("session_id 为空");
+        }
+        const resp = await requestJson(`/api/v1/chat/sessions/${encodeURIComponent(id)}?limit=120`, {
+          method: "GET",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+        });
+        const loaded = Array.isArray(resp.messages) ? resp.messages : [];
+        messages.length = 0;
+        renderedJobs.clear();
+        resetPlannerMonitor();
+        loaded.forEach((item) => {
+          const role = normalizeRole(item.role);
+          const text = String(item.text || "").trim();
+          if (!text) return;
+          const ts = String(item.ts || "").trim();
+          messages.push({ role, text, meta: ts ? `LOADED · ${ts}` : `LOADED · ${nowTime()}` });
+        });
+        setActiveSession(id);
+        upsertSession(id);
+        renderMessages();
+      }
+
+      async function deleteSession(sessionId) {
+        const id = String(sessionId || "").trim();
+        if (!id) {
+          throw new Error("session_id 为空");
+        }
+        await requestJson(`/api/v1/chat/sessions/${encodeURIComponent(id)}`, {
+          method: "DELETE",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+        });
+        sessions = sessions.filter((s) => String(s.context_id || s.session_id || "").trim() !== id);
+        if (activeSessionId === id) {
+          setActiveSession("");
+          messages.length = 0;
+          renderedJobs.clear();
+          resetPlannerMonitor();
+          renderMessages();
+        }
+        refreshSessionSelect();
+      }
+
+      function resolveContextId(result) {
+        if (!result || typeof result !== "object") return "";
+        const direct = String(result.context_id || result.session_id || "").trim();
+        if (direct) return direct;
+        const sessionObj = result.session && typeof result.session === "object" ? result.session : {};
+        return String(sessionObj.context_id || sessionObj.session_id || "").trim();
+      }
+
+      function isTextLikeFile(name, mimeType = "") {
+        const mime = String(mimeType || "").trim().toLowerCase();
+        if (mime.startsWith("text/")) return true;
+        if (mime.includes("json") || mime.includes("xml") || mime.includes("yaml") || mime.includes("csv")) return true;
+        const suffix = String(name || "").toLowerCase().split(".").pop() || "";
+        return ["md", "txt", "json", "csv", "tsv", "log", "xml", "yaml", "yml"].includes(suffix);
+      }
+
+      async function fetchTextPreview(downloadUrl, maxLen = 320) {
+        const raw = String(downloadUrl || "").trim();
+        if (!raw) return "";
+        const cfg = getConfig();
+        const url = /^https?:\/\//i.test(raw)
+          ? raw
+          : `${cfg.baseUrl}${raw.startsWith("/") ? "" : "/"}${raw}`;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        try {
+          const resp = await fetch(url, {
+            method: "GET",
+            headers: authHeaders({}),
+            signal: controller.signal,
+          });
+          if (!resp.ok) return "";
+          const text = await resp.text();
+          const normalized = String(text || "").replace(/\s+/g, " ").trim();
+          if (!normalized) return "";
+          return normalized.length > maxLen ? `${normalized.slice(0, maxLen)}...` : normalized;
+        } catch (_) {
+          return "";
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+
+      async function renderResultFiles(files) {
+        if (!Array.isArray(files) || files.length === 0) return;
+        const lines = ["产出文件:"];
+        for (const file of files) {
+          if (!file || typeof file !== "object") continue;
+          const name = String(file.name || "file").trim() || "file";
+          const downloadUrl = String(file.download_url || "").trim();
+          const path = String(file.path || "").trim();
+          lines.push(`- ${name}: ${downloadUrl || path || "(no path)"}`);
+          if (downloadUrl && isTextLikeFile(name, file.mime_type || "")) {
+            const preview = await fetchTextPreview(downloadUrl, 280);
+            if (preview) {
+              lines.push(`  preview: ${preview}`);
+            }
+          }
+        }
+        pushMessage("system", lines.join("\n"), `FILES · ${nowTime()}`);
+      }
+
+      async function appendAgentOutput(taskResult) {
+        if (!taskResult || !taskResult.job_id) return;
+        updatePlannerMonitor(taskResult.result || {});
+        if (renderedJobs.has(taskResult.job_id)) return;
+        renderedJobs.add(taskResult.job_id);
+
+        if (taskResult.status === "failed") {
+          pushMessage("error", `任务失败(job=${taskResult.job_id})\n${taskResult.error || "unknown error"}`, `ERROR · ${nowTime()}`);
+          return;
+        }
+
+        const result = taskResult.result || {};
+        const trace = result.routing_trace && typeof result.routing_trace === "object" ? result.routing_trace : {};
+        const stages = Array.isArray(trace.stages) ? trace.stages : [];
+
+        stages.forEach((stage, idx) => {
+          const subtasks = Array.isArray(stage.subtasks) ? stage.subtasks : [];
+          subtasks.forEach((item, subIdx) => {
+            const agent = item.agent || "agent";
+            const subtaskText = String(item.task || "").trim();
+            const reply = String(item.reply || "").trim() || "(无文本输出)";
+            const text = subtaskText ? `子任务: ${subtaskText}\n\n${reply}` : reply;
+            pushMessage("progress", text, `Stage ${idx + 1}.${subIdx + 1} · ${agent} · ${nowTime()}`);
+          });
+        });
+
+        let finalReply = String(result.reply || "").trim();
+        if (!finalReply) {
+          finalReply = String(result.reply_fallback || "").trim();
+        }
+        if (finalReply) {
+          pushMessage("agent", finalReply, `Final Reply · ${nowTime()}`);
+        } else if (stages.length === 0) {
+          pushMessage("system", `任务完成(job=${taskResult.job_id})，但无文本输出。`, `SYSTEM · ${nowTime()}`);
+        }
+
+        const contextId = resolveContextId(result);
+        if (contextId) {
+          setActiveSession(contextId);
+          upsertSession(contextId);
+        }
+        await renderResultFiles(Array.isArray(result.files) ? result.files : []);
+      }
+
+      function stopPolling() {
+        if (pollingTimer) {
+          clearInterval(pollingTimer);
+          pollingTimer = null;
+        }
+        setTaskLoading(false);
+      }
+
+      async function queryJob(jobId) {
+        const id = String(jobId || "").trim();
+        if (!id) throw new Error("job_id 为空");
+        const resp = await requestJson(`/api/v1/jobs/${encodeURIComponent(id)}`, {
+          method: "GET",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+        });
+        if (resp && resp.result && resp.status === "running") {
+          updatePlannerMonitor(resp.result);
+          const progress = resp.result.progress && typeof resp.result.progress === "object" ? resp.result.progress : {};
+          emitOrchestratorIncrementalMessages(Array.isArray(progress.orchestrator_events) ? progress.orchestrator_events : []);
+        }
+        if (resp.status === "completed" || resp.status === "failed") {
+          await appendAgentOutput(resp);
+          setTaskLoading(false);
+        }
+        return resp;
+      }
+
+      function startPolling(jobId) {
+        stopPolling();
+        const cfg = getConfig();
+        const configured = Number(cfg.pollMs) || 800;
+        const delay = Math.max(300, Math.min(configured, 800));
+
+        const pollOnce = async () => {
+          const data = await queryJob(jobId);
+          if (data.status === "completed" || data.status === "failed") {
+            stopPolling();
+            setSessionStatus(`任务完成: ${data.status}`, data.status === "failed" ? "error" : "ok");
+          }
+        };
+
+        const isAbortLikeError = (err) => {
+          const name = String(err?.name || "").toLowerCase();
+          const msg = String(err?.message || "").toLowerCase();
+          return name === "aborterror" || msg.includes("aborted") || msg.includes("signal is aborted");
+        };
+
+        // 立即拉取一次，避免短任务在首个 interval 前就完成导致看不到中间进度
+        setTaskLoading(true, `任务执行中（job=${jobId}）...`);
+        pollOnce().catch((err) => {
+          if (isAbortLikeError(err)) {
+            return;
+          }
+          stopPolling();
+          setSessionStatus(`轮询失败: ${err.message || err}`, "error");
+          pushMessage("error", String(err.message || err), `ERROR · ${nowTime()}`);
+        });
+
+        pollingTimer = setInterval(async () => {
+          try {
+            await pollOnce();
+          } catch (err) {
+            if (isAbortLikeError(err)) {
+              return;
+            }
+            stopPolling();
+            setSessionStatus(`轮询失败: ${err.message || err}`, "error");
+            pushMessage("error", String(err.message || err), `ERROR · ${nowTime()}`);
+          }
+        }, delay);
+      }
+
+      function ensureSession() {
+        if (!activeSessionId) {
+          const id = newSessionId();
+          setActiveSession(id);
+          upsertSession(id);
+          pushMessage("system", `已创建新会话: ${id}`, `SYSTEM · ${nowTime()}`);
+        }
+        return activeSessionId;
+      }
+
+      function normalizeMode(raw) {
+        const mode = String(raw || "chat").trim().toLowerCase();
+        if (mode === "chat") return "chat";
+        return mode || "chat";
+      }
+
+      async function uploadSelectedFiles() {
+        const selected = Array.from(el.chatFiles?.files || []);
+        if (selected.length === 0) return [];
+        const form = new FormData();
+        selected.forEach((file) => form.append("files", file, file.name || "file"));
+        const resp = await requestJson("/api/v1/chat/files", {
+          method: "POST",
+          headers: authHeaders({}),
+          body: form,
+        });
+        const uploaded = Array.isArray(resp?.files) ? resp.files : [];
+        if (el.chatFiles) {
+          el.chatFiles.value = "";
+        }
+        return uploaded.filter((item) => item && typeof item === "object");
+      }
+
+      function commandPrefixInfo(raw, selectionStart) {
+        const text = String(raw || "");
+        const cursor = Number.isFinite(selectionStart) ? Math.max(0, selectionStart) : text.length;
+        const before = text.slice(0, cursor);
+        const lastLine = before.split("\n").pop() || "";
+        const leading = /^\s*/.exec(lastLine)?.[0] || "";
+        const token = lastLine.slice(leading.length);
+        if (!token.startsWith("/")) return { visible: false, prefix: "" };
+        if (/\s/.test(token)) return { visible: false, prefix: "" };
+        return { visible: true, prefix: token.toLowerCase() };
+      }
+
+      function hideCommandSuggest() {
+        commandSuggestVisible = false;
+        commandSuggestItems = [];
+        commandSuggestIndex = -1;
+        el.cmdSuggest.hidden = true;
+        el.cmdSuggest.innerHTML = "";
+      }
+
+      function applyCommandSuggestion(item) {
+        if (!item || !item.cmd) return;
+        const value = String(el.chatInput.value || "");
+        const cursor = Number.isFinite(el.chatInput.selectionStart) ? el.chatInput.selectionStart : value.length;
+        const before = value.slice(0, cursor);
+        const after = value.slice(cursor);
+        const lineStart = before.lastIndexOf("\n") + 1;
+        const currentLine = before.slice(lineStart);
+        const leading = /^\s*/.exec(currentLine)?.[0] || "";
+        const replacement = `${leading}${item.cmd} `;
+        const nextValue = `${before.slice(0, lineStart)}${replacement}${after}`;
+        const nextCursor = lineStart + replacement.length;
+        el.chatInput.value = nextValue;
+        el.chatInput.focus();
+        el.chatInput.setSelectionRange(nextCursor, nextCursor);
+        hideCommandSuggest();
+      }
+
+      function renderCommandSuggest(items) {
+        if (!Array.isArray(items) || items.length === 0) {
+          hideCommandSuggest();
+          return;
+        }
+        commandSuggestVisible = true;
+        commandSuggestItems = items.slice();
+        if (commandSuggestIndex < 0 || commandSuggestIndex >= commandSuggestItems.length) {
+          commandSuggestIndex = 0;
+        }
+        el.cmdSuggest.hidden = false;
+        el.cmdSuggest.innerHTML = "";
+        commandSuggestItems.forEach((item, idx) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = `cmd-suggest-item${idx === commandSuggestIndex ? " active" : ""}`;
+          btn.innerHTML = `<code>${escapeHtml(item.cmd)}</code><span class="desc">${escapeHtml(item.desc)}</span>`;
+          btn.addEventListener("mousedown", (event) => {
+            event.preventDefault();
+            applyCommandSuggestion(item);
+          });
+          el.cmdSuggest.appendChild(btn);
+        });
+      }
+
+      function updateCommandSuggest() {
+        const raw = el.chatInput.value || "";
+        const info = commandPrefixInfo(raw, el.chatInput.selectionStart);
+        if (!info.visible) {
+          hideCommandSuggest();
+          return;
+        }
+        const prefix = info.prefix || "/";
+        const matches = commandSpecs.filter((it) => it.cmd.startsWith(prefix));
+        if (matches.length === 0) {
+          hideCommandSuggest();
+          return;
+        }
+        renderCommandSuggest(matches);
+      }
+
+      function moveCommandSuggest(step) {
+        if (!commandSuggestVisible || commandSuggestItems.length === 0) return;
+        commandSuggestIndex = (commandSuggestIndex + step + commandSuggestItems.length) % commandSuggestItems.length;
+        renderCommandSuggest(commandSuggestItems);
+      }
+
+      async function sendChatMessage(text) {
+        const userText = String(text || "").trim();
+        if (!userText) return;
+
+        const contextId = ensureSession();
+        pushMessage("user", userText, `USER · ${nowTime()}`);
+
+        const mode = normalizeMode(el.chatMode.value);
+        let asyncMode = !!el.chatAsync.checked;
+        // chat 模式默认强制异步，才能实时轮询 planner 进度
+        if (mode === "chat" && !asyncMode) {
+          asyncMode = true;
+          el.chatAsync.checked = true;
+          pushMessage("system", "已自动切换为异步模式，以支持 Planner 实时监控。", `SYSTEM · ${nowTime()}`);
+        }
+        const webSearchEnabled = !!el.chatWebSearch.checked;
+        const uploadedFiles = await uploadSelectedFiles();
+        if (uploadedFiles.length > 0) {
+          const names = uploadedFiles.map((item) => String(item.name || "file")).join(", ");
+          pushMessage("system", `已附加文件：${names}`, `SYSTEM · ${nowTime()}`);
+        }
+        const payload = {
+          task: userText,
+          async_mode: asyncMode,
+          mode,
+          context_id: contextId,
+          web_search_enabled: webSearchEnabled,
+          output_path: null,
+          agent_hint: null,
+          skill_hint: null,
+          routing_strategy: null,
+          webhook_url: null,
+          webhook_token: null,
+          callback_headers: {},
+          input_files: uploadedFiles.map((item) => String(item.path || "").trim()).filter(Boolean),
+        };
+
+        pushMessage(
+          "system",
+          `已发送（mode=${mode}, async=${asyncMode ? "true" : "false"}, web_search=${webSearchEnabled ? "true" : "false"}）`,
+          `SYSTEM · ${nowTime()}`,
+        );
+
+        setTaskLoading(true, "任务执行中，请稍候...");
+        try {
+          const resp = await requestJson("/api/v1/task", {
+            method: "POST",
+            headers: authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify(payload),
+          });
+          if (resp && resp.result) {
+            updatePlannerMonitor(resp.result);
+          }
+
+          el.currentJob.value = resp.job_id || "";
+          if (asyncMode && resp.job_id) {
+            setSessionStatus(`异步任务已提交: ${resp.job_id}`, "ok");
+            startPolling(resp.job_id);
+          } else {
+            await appendAgentOutput(resp);
+            setSessionStatus(`任务完成: ${resp.status || "completed"}`, "ok");
+            setTaskLoading(false);
+          }
+        } catch (err) {
+          setTaskLoading(false);
+          throw err;
+        }
+      }
+
+      async function initSessionGreeting(sessionId) {
+        const id = String(sessionId || "").trim();
+        if (!id) throw new Error("session_id 为空");
+
+        const payload = {
+          task: "/new",
+          async_mode: false,
+          mode: "chat",
+          context_id: id,
+          web_search_enabled: !!el.chatWebSearch.checked,
+          output_path: null,
+          agent_hint: null,
+          skill_hint: null,
+          routing_strategy: null,
+          webhook_url: null,
+          webhook_token: null,
+          callback_headers: {},
+          input_files: [],
+        };
+        const resp = await requestJson("/api/v1/task", {
+          method: "POST",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify(payload),
+        });
+        el.currentJob.value = resp.job_id || "";
+        await appendAgentOutput(resp);
+      }
+
+      async function handleCommand(raw) {
+        const text = String(raw || "").trim();
+        if (!text.startsWith("/")) return false;
+        const cmd = text.split(/\s+/, 1)[0].toLowerCase();
+
+        if (cmd === "/new") {
+          const id = newSessionId();
+          setActiveSession(id);
+          upsertSession(id);
+          messages.length = 0;
+          renderedJobs.clear();
+          resetPlannerMonitor();
+          renderMessages();
+          setSessionStatus(`新会话初始化中: ${id}`, "ok");
+          pushMessage("system", `已创建并切换到新会话: ${id}`, `SYSTEM · ${nowTime()}`);
+          await initSessionGreeting(id);
+          setSessionStatus(`新会话已就绪: ${id}`, "ok");
+          return true;
+        }
+
+        if (cmd === "/quit") {
+          stopPolling();
+          setSessionStatus("已退出当前会话", "ok");
+          pushMessage("system", `会话已退出: ${activeSessionId || "(none)"}`, `SYSTEM · ${nowTime()}`);
+          setActiveSession("");
+          return true;
+        }
+
+        if (cmd === "/interrupt") {
+          stopPolling();
+          setSessionStatus("已中断轮询", "ok");
+          pushMessage("system", `已中断任务轮询。当前job=${el.currentJob.value || "(none)"}`, `SYSTEM · ${nowTime()}`);
+          return true;
+        }
+
+        pushMessage("error", `未知指令: ${text}`, `ERROR · ${nowTime()}`);
+        return true;
+      }
+
+      async function onSend() {
+        const raw = el.chatInput.value || "";
+        if (!raw.trim()) return;
+        el.chatInput.value = "";
+        hideCommandSuggest();
+
+        try {
+          const handled = await handleCommand(raw);
+          if (handled) return;
+          await sendChatMessage(raw);
+        } catch (err) {
+          setSessionStatus(err.message || String(err), "error");
+          pushMessage("error", String(err.message || err), `ERROR · ${nowTime()}`);
+          logMini(`发送失败: ${err.message || err}`);
+        }
+      }
+
+      el.btnSend.addEventListener("click", onSend);
+      el.chatInput.addEventListener("keydown", (event) => {
+        if (commandSuggestVisible) {
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            moveCommandSuggest(1);
+            return;
+          }
+          if (event.key === "ArrowUp") {
+            event.preventDefault();
+            moveCommandSuggest(-1);
+            return;
+          }
+          if (event.key === "Tab" || event.key === "Enter") {
+            event.preventDefault();
+            const item = commandSuggestItems[commandSuggestIndex] || commandSuggestItems[0];
+            applyCommandSuggestion(item);
+            return;
+          }
+          if (event.key === "Escape") {
+            event.preventDefault();
+            hideCommandSuggest();
+            return;
+          }
+        }
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          onSend();
+        }
+      });
+      el.chatInput.addEventListener("input", updateCommandSuggest);
+      el.chatInput.addEventListener("click", updateCommandSuggest);
+      el.chatInput.addEventListener("keyup", updateCommandSuggest);
+      el.chatInput.addEventListener("blur", () => {
+        setTimeout(() => hideCommandSuggest(), 80);
+      });
+
+      el.btnClearChat.addEventListener("click", () => {
+        messages.length = 0;
+        renderedJobs.clear();
+        resetPlannerMonitor();
+        renderMessages();
+      });
+
+      el.btnQueryJob.addEventListener("click", async () => {
+        try {
+          const jobId = (el.currentJob.value || "").trim();
+          const result = await queryJob(jobId);
+          setSessionStatus(`Job状态: ${result.status || "unknown"}`, result.status === "failed" ? "error" : "ok");
+        } catch (err) {
+          setSessionStatus(err.message || String(err), "error");
+          pushMessage("error", String(err.message || err), `ERROR · ${nowTime()}`);
+        }
+      });
+
+      el.btnRefresh.addEventListener("click", async () => {
+        try {
+          await refreshSessions();
+          setSessionStatus("会话列表已刷新", "ok");
+        } catch (err) {
+          setSessionStatus(err.message || String(err), "error");
+        }
+      });
+
+      el.btnLoad.addEventListener("click", async () => {
+        try {
+          const selected = String(el.sessionSelect.value || "").trim();
+          await loadSession(selected);
+          setSessionStatus(`已加载会话: ${selected}`, "ok");
+        } catch (err) {
+          setSessionStatus(err.message || String(err), "error");
+          pushMessage("error", String(err.message || err), `ERROR · ${nowTime()}`);
+        }
+      });
+
+      el.btnNew.addEventListener("click", async () => {
+        try {
+          const id = newSessionId();
+          setActiveSession(id);
+          upsertSession(id);
+          messages.length = 0;
+          renderedJobs.clear();
+          resetPlannerMonitor();
+          renderMessages();
+          setSessionStatus(`新会话初始化中: ${id}`, "ok");
+          pushMessage("system", `已创建并切换到新会话: ${id}`, `SYSTEM · ${nowTime()}`);
+          await initSessionGreeting(id);
+          setSessionStatus(`新会话已就绪: ${id}`, "ok");
+        } catch (err) {
+          setSessionStatus(err.message || String(err), "error");
+          pushMessage("error", String(err.message || err), `ERROR · ${nowTime()}`);
+        }
+      });
+
+      el.btnDelete.addEventListener("click", async () => {
+        try {
+          const selected = String(el.sessionSelect.value || activeSessionId || "").trim();
+          if (!selected) throw new Error("请选择要删除的会话");
+          await deleteSession(selected);
+          setSessionStatus(`已删除会话: ${selected}`, "ok");
+          pushMessage("system", `会话已删除: ${selected}`, `SYSTEM · ${nowTime()}`);
+        } catch (err) {
+          setSessionStatus(err.message || String(err), "error");
+          pushMessage("error", String(err.message || err), `ERROR · ${nowTime()}`);
+        }
+      });
+
+      el.sessionSelect.addEventListener("dblclick", async () => {
+        const selected = String(el.sessionSelect.value || "").trim();
+        if (!selected) return;
+        try {
+          await loadSession(selected);
+          setSessionStatus(`已加载会话: ${selected}`, "ok");
+        } catch (err) {
+          setSessionStatus(err.message || String(err), "error");
+        }
+      });
+
+      (async () => {
+        renderMessages();
+        renderPlannerMonitor();
+        const storedSession = String(localStorage.getItem(activeSessionKey) || "").trim();
+        if (storedSession) {
+          activeSessionId = storedSession;
+        }
+
+        try {
+          await refreshSessions();
+          if (activeSessionId) {
+            const exists = sessions.some((s) => String(s.context_id || s.session_id || "").trim() === activeSessionId);
+            if (exists) {
+              await loadSession(activeSessionId);
+              setSessionStatus(`恢复会话: ${activeSessionId}`, "ok");
+            } else {
+              setActiveSession("");
+              setSessionStatus("已刷新会话列表", "ok");
+            }
+          } else {
+            setSessionStatus("已刷新会话列表", "ok");
+          }
+        } catch (err) {
+          setSessionStatus(`初始化失败: ${err.message || err}`, "error");
+          logMini(`初始化失败: ${err.message || err}`);
+        }
+      })();
+    </script>
+  </body>
+</html>

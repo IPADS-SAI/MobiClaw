@@ -3,7 +3,7 @@
 本项目包含两层 Gateway：
 
 1. `mobiagent_server/server.py`：手机执行适配网关
-2. `seneschal/gateway_server.py`：Seneschal 对外任务接入网关
+2. `mobiclaw/gateway_server.py`：MobiClaw 对外任务接入网关
 
 两者职责不同，建议独立部署与监控。
 
@@ -98,7 +98,7 @@
 
 ---
 
-## 2. `seneschal/gateway_server.py`
+## 2. `mobiclaw/gateway_server.py`
 
 ## 2.1 模块职责
 
@@ -143,12 +143,12 @@
 
 ## 2.5 鉴权
 
-- `SENESCHAL_GATEWAY_API_KEY` 设置后启用 Bearer 校验
+- `MOBICLAW_GATEWAY_API_KEY` 设置后启用 Bearer 校验
 - 未设置时可匿名访问（仅建议内网开发环境）
 
 ## 2.6 附加能力
 
-- 任务结果中的 `files` 会按 `SENESCHAL_GATEWAY_FILE_ROOT` 与 `SENESCHAL_GATEWAY_PUBLIC_BASE_URL` 生成可下载链接
+- 任务结果中的 `files` 会按 `MOBICLAW_GATEWAY_FILE_ROOT` 与 `MOBICLAW_GATEWAY_PUBLIC_BASE_URL` 生成可下载链接
 - 异步任务完成后支持回调 `webhook_url`
 - 支持飞书 webhook 事件入口
 - 支持按配置自动启动飞书长连接（`FEISHU_EVENT_TRANSPORT=long_conn/both/auto`）
@@ -165,7 +165,7 @@
 
 典型链路：
 
-1. 外部系统调用 `seneschal/gateway_server` 提交任务
+1. 外部系统调用 `mobiclaw/gateway_server` 提交任务
 2. gateway 调用 `run_gateway_task()`
 3. orchestrator 完成 Router / Planner / Executor / Skill Selector 编排
 4. 如需端侧执行，工具再调用 `mobiagent_server`
@@ -184,7 +184,7 @@
   - 检查执行器是否写回 result 文件
 - CLI 无产物
   - 检查 `MOBIAGENT_CLI_CMD` 模板、工作目录、设备连通性
-- Seneschal 异步任务丢失
+- MobiClaw 异步任务丢失
   - 说明网关进程重启，需持久化任务存储
 
 ---
@@ -192,6 +192,6 @@
 ## 5. 扩展路线
 
 - `mobiagent_server`：新增 mode（如 grpc、mq）
-- `seneschal/gateway_server`：支持批任务、回调、取消任务
+- `mobiclaw/gateway_server`：支持批任务、回调、取消任务
 - 双网关统一：标准化 trace_id，贯穿全链路观测
 - 进一步增强文件暴露策略、异步任务持久化与飞书双向交互能力

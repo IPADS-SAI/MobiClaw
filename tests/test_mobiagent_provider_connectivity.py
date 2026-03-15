@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from seneschal.mobile.executor import MobileExecutor
+from mobiclaw.mobile.executor import MobileExecutor
 
 
 class _CaptureMobiagentProvider:
@@ -26,7 +26,7 @@ def test_mobiagent_env_connectivity_config_is_passed_to_provider(monkeypatch, tm
     monkeypatch.setenv("MOBILE_MOBIAGENT_GROUNDER_PORT", "7004")
     monkeypatch.setenv("MOBILE_MOBIAGENT_PLANNER_PORT", "7002")
     monkeypatch.setattr(
-        "seneschal.mobile.executor.get_provider_class",
+        "mobiclaw.mobile.executor.get_provider_class",
         lambda name: _CaptureMobiagentProvider if name == "mobiagent" else None,
     )
 

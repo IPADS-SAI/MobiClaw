@@ -3,7 +3,7 @@ from __future__ import annotations
 import functools
 from pathlib import Path
 
-from seneschal.agents import create_steward_agent
+from mobiclaw.agents import create_steward_agent
 
 
 def test_steward_mobi_tools_bind_job_mobile_exec(tmp_path):
