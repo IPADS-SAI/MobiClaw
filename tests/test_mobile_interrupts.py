@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from seneschal.mobile import executor as mobile_executor
-from seneschal.mobile.interrupts import clear_interrupt, interruptible_sleep, request_interrupt
+from mobiclaw.mobile import executor as mobile_executor
+from mobiclaw.mobile.interrupts import clear_interrupt, interruptible_sleep, request_interrupt
 
 
 def test_interruptible_sleep_raises_promptly() -> None:

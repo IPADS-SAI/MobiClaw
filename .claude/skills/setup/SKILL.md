@@ -162,21 +162,21 @@ AskUserQuestion: "Configure advanced options? (routing, scheduling, memory, RAG)
 **If yes, present each category:**
 
 **Routing:**
-- `SENESCHAL_ROUTING_DEFAULT_MODE` — default `router` (options: router, intelligent, worker, steward, auto)
-- `SENESCHAL_ROUTING_STRATEGY` — default `llm_rule_hybrid`
-- `SENESCHAL_ROUTING_MAX_SUBTASKS` — default `4`
+- `MOBICLAW_ROUTING_DEFAULT_MODE` — default `router` (options: router, intelligent, worker, steward, auto)
+- `MOBICLAW_ROUTING_STRATEGY` — default `llm_rule_hybrid`
+- `MOBICLAW_ROUTING_MAX_SUBTASKS` — default `4`
 
 **Scheduling:**
-- `SENESCHAL_SCHEDULE_ENABLED` — default `1` (enabled)
-- `SENESCHAL_SCHEDULE_STORE_PATH` — default `~/.seneschal/schedules.json`
+- `MOBICLAW_SCHEDULE_ENABLED` — default `1` (enabled)
+- `MOBICLAW_SCHEDULE_STORE_PATH` — default `~/.mobiclaw/schedules.json`
 
 **Memory:**
-- `SENESCHAL_MEMORY_ENABLED` — default `1` (enabled)
-- `SENESCHAL_MEMORY_FILE` — default `~/.seneschal/MEMORY.md`
+- `MOBICLAW_MEMORY_ENABLED` — default `1` (enabled)
+- `MOBICLAW_MEMORY_FILE` — default `~/.mobiclaw/MEMORY.md`
 
 **RAG:**
-- `SENESCHAL_RAG_STORE_HISTORY` — default `1` (enabled)
-- `SENESCHAL_RAG_STORE_PATH` — default `~/.seneschal/rag_store`
+- `MOBICLAW_RAG_STORE_HISTORY` — default `1` (enabled)
+- `MOBICLAW_RAG_STORE_PATH` — default `~/.mobiclaw/rag_store`
 
 Write any user-modified values to `.env`.
 
@@ -185,7 +185,7 @@ Write any user-modified values to `.env`.
 Ensure working directories exist:
 ```bash
 mkdir -p logs tmp outputs
-mkdir -p ~/.seneschal
+mkdir -p ~/.mobiclaw
 ```
 
 ## 5. Start Gateway Server
@@ -195,16 +195,16 @@ Check if the gateway port is already in use:
 ss -lnt "( sport = :8090 )" 2>/dev/null || lsof -iTCP:8090 -sTCP:LISTEN 2>/dev/null
 ```
 
-Read `SENESCHAL_GATEWAY_PORT` from `.env` (default `8090`).
+Read `MOBICLAW_GATEWAY_PORT` from `.env` (default `8090`).
 
 **If port is occupied:** AskUserQuestion: "Port <port> is already in use. What should we do?"
 - Kill existing process and restart — identify and stop the process, then start
-- Use a different port — ask for port number, update `SENESCHAL_GATEWAY_PORT` in `.env`
+- Use a different port — ask for port number, update `MOBICLAW_GATEWAY_PORT` in `.env`
 - Skip — don't start the gateway server
 
 **Start the gateway in background:**
 ```bash
-nohup uv run python -m seneschal.gateway_server > logs/gateway-server.log 2>&1 &
+nohup uv run python -m mobiclaw.gateway_server > logs/gateway-server.log 2>&1 &
 echo $! > tmp/gateway-server.pid
 ```
 
@@ -266,6 +266,6 @@ bash scripts/stop_all.sh
 
 **Feishu bot not responding:** Verify `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are correct. Check `logs/gateway-server.log` for connection errors. For long connection mode, no public IP is needed. For webhook mode, ensure the public URL is reachable.
 
-**Task execution fails with timeout:** Increase `SENESCHAL_SUBTASK_TIMEOUT_S` (default 300s) or `SENESCHAL_ROUTER_TIMEOUT_S` (default 120s) in `.env`. Restart the gateway after changes.
+**Task execution fails with timeout:** Increase `MOBICLAW_SUBTASK_TIMEOUT_S` (default 300s) or `MOBICLAW_ROUTER_TIMEOUT_S` (default 120s) in `.env`. Restart the gateway after changes.
 
-**Out of memory or slow responses:** Try a lighter model (e.g. `google/gemini-3-flash-preview`). Reduce `SENESCHAL_ROUTING_MAX_SUBTASKS` to limit parallel work.
+**Out of memory or slow responses:** Try a lighter model (e.g. `google/gemini-3-flash-preview`). Reduce `MOBICLAW_ROUTING_MAX_SUBTASKS` to limit parallel work.

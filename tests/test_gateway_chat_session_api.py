@@ -7,9 +7,9 @@ from pathlib import Path
 
 from agentscope.message import Msg
 
-from seneschal import gateway_server
-from seneschal import workflows
-from seneschal.session import ChatSessionManager
+from mobiclaw import gateway_server
+from mobiclaw import workflows
+from mobiclaw.session import ChatSessionManager
 
 
 class _DummyChatAgent:
@@ -48,7 +48,7 @@ def test_list_chat_sessions_sorted_desc(monkeypatch, tmp_path: Path):
     _make_session_dir(root, "20260312_120000_000002-chat_20260312120000002_s2", mtime=30)
     _make_session_dir(root, "20260312_120000_000003-chat_20260312120000003_s3", mtime=20)
 
-    monkeypatch.setenv("SENESCHAL_GATEWAY_API_KEY", "")
+    monkeypatch.setenv("MOBICLAW_GATEWAY_API_KEY", "")
     monkeypatch.setenv("FEISHU_EVENT_TRANSPORT", "off")
     monkeypatch.setattr(gateway_server, "_chat_session_root_dir", lambda: root)
 
@@ -73,7 +73,7 @@ def test_get_chat_session_recent_messages_limit(monkeypatch, tmp_path: Path):
         )
     _make_session_dir(root, "20260312_120000_000010-chat_20260312120000010_limit_ctx", mtime=50, history_rows=rows)
 
-    monkeypatch.setenv("SENESCHAL_GATEWAY_API_KEY", "")
+    monkeypatch.setenv("MOBICLAW_GATEWAY_API_KEY", "")
     monkeypatch.setenv("FEISHU_EVENT_TRANSPORT", "off")
     monkeypatch.setattr(gateway_server, "_chat_session_root_dir", lambda: root)
 
@@ -90,7 +90,7 @@ def test_get_chat_session_without_history_file(monkeypatch, tmp_path: Path):
     root.mkdir(parents=True, exist_ok=True)
     _make_session_dir(root, "20260312_120000_000100-chat_20260312120000100_empty_ctx", mtime=70, history_rows=None)
 
-    monkeypatch.setenv("SENESCHAL_GATEWAY_API_KEY", "")
+    monkeypatch.setenv("MOBICLAW_GATEWAY_API_KEY", "")
     monkeypatch.setenv("FEISHU_EVENT_TRANSPORT", "off")
     monkeypatch.setattr(gateway_server, "_chat_session_root_dir", lambda: root)
 
@@ -106,7 +106,7 @@ def test_chat_mode_not_double_append_history(monkeypatch, tmp_path: Path):
     manager = ChatSessionManager(root_dir=root)
     monkeypatch.setattr(workflows, "_CHAT_SESSION_MANAGER", manager)
     monkeypatch.setattr(workflows, "create_chat_agent", lambda **_: _DummyChatAgent())
-    monkeypatch.setenv("SENESCHAL_GATEWAY_API_KEY", "")
+    monkeypatch.setenv("MOBICLAW_GATEWAY_API_KEY", "")
     monkeypatch.setenv("FEISHU_EVENT_TRANSPORT", "off")
 
     result = asyncio.run(

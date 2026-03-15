@@ -6,8 +6,8 @@ from pathlib import Path
 
 from agentscope.message import Msg
 
-from seneschal import workflows
-from seneschal.session import ChatSessionManager
+from mobiclaw import workflows
+from mobiclaw.session import ChatSessionManager
 
 
 class _DummyChatAgent:

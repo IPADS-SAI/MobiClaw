@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from seneschal.mobile.config import resolve_provider_config
+from mobiclaw.mobile.config import resolve_provider_config
 
 
 def test_provider_alias_and_defaults(monkeypatch):

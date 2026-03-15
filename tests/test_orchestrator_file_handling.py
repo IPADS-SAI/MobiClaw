@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from seneschal import orchestrator
+from mobiclaw import orchestrator
 
 
 def test_collect_file_paths_extracts_existing_absolute_paths(tmp_path: Path) -> None:

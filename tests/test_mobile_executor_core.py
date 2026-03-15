@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from seneschal.mobile.executor import MobileExecutor
+from mobiclaw.mobile.executor import MobileExecutor
 
 
 class _DummyProvider:
@@ -41,7 +41,7 @@ def test_mobile_executor_run_success(monkeypatch, tmp_path):
     monkeypatch.setenv("MOBILE_DEVICE_TYPE", "mock")
     monkeypatch.setenv("MOBILE_OUTPUT_DIR", str(tmp_path))
     monkeypatch.setattr(
-        "seneschal.mobile.executor.get_provider_class",
+        "mobiclaw.mobile.executor.get_provider_class",
         lambda name: _DummyProvider if name == "qwen" else None,
     )
 

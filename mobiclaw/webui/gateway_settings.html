@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MobiClaw Settings</title>
+    <style>
+      :root {
+        --bg: #f4f6ef;
+        --card: #fffffc;
+        --ink: #20241f;
+        --muted: #5a665a;
+        --line: #d8dfd2;
+        --accent: #105f4a;
+        --warn: #d58f2e;
+        --danger: #b42318;
+        --mono: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+        --sans: "Work Sans", "PingFang SC", "Noto Sans SC", sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: var(--sans);
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 12% 0%, #dbe8d2 0%, transparent 30%),
+          radial-gradient(circle at 90% 100%, #f5ddc0 0%, transparent 24%),
+          var(--bg);
+      }
+      .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 18px 40px; }
+      h1 { margin: 0; letter-spacing: 0.03em; font-size: 30px; }
+      .sub { margin-top: 8px; color: var(--muted); font-size: 14px; }
+      .topbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+      .nav { display: flex; gap: 8px; }
+      .nav a {
+        text-decoration: none; border: 1px solid var(--line); background: #fff;
+        color: var(--ink); border-radius: 10px; padding: 8px 12px; font-size: 13px;
+      }
+      .nav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+      .grid { margin-top: 24px; display: grid; gap: 14px; grid-template-columns: repeat(12, 1fr); }
+      .panel {
+        grid-column: span 12;
+        background: linear-gradient(160deg, #fffffc, #f8fbf6);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 16px;
+        box-shadow: 0 8px 24px rgba(31, 34, 27, 0.08);
+      }
+      .panel h2 { margin: 0 0 14px; font-size: 17px; }
+      .fields { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .fields.compact { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
+      input, select, textarea, button { font: inherit; }
+      input, select, textarea {
+        width: 100%; border: 1px solid var(--line); border-radius: 10px;
+        background: #fff; color: var(--ink); padding: 9px 10px;
+      }
+      textarea { min-height: 130px; resize: vertical; }
+      .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+      button { border: 0; border-radius: 10px; padding: 9px 13px; cursor: pointer; color: #fff; background: var(--accent); }
+      button.alt { background: #486a62; }
+      button.warn { background: var(--warn); }
+      .status { margin-top: 10px; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: #fff; font-size: 13px; }
+      .mono { font-family: var(--mono); }
+      .hint { font-size: 12px; color: var(--muted); }
+      .env-categories { margin-top: 10px; display: grid; gap: 10px; }
+      .env-category { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: #fff; }
+      .env-category-title { font-size: 13px; margin-bottom: 8px; color: var(--accent); font-weight: 700; }
+      .env-grid { display: grid; gap: 8px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .env-grid textarea { min-height: 66px; }
+      pre {
+        margin: 0; background: #1b1f1c; color: #d7f4d6; border-radius: 10px;
+        padding: 10px; overflow: auto; max-height: 260px; font-size: 12px;
+      }
+      @media (max-width: 900px) {
+        .fields, .fields.compact, .env-grid { grid-template-columns: 1fr; }
+        .topbar { flex-direction: column; align-items: flex-start; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="topbar">
+        <div>
+          <h1>MobiClaw Settings</h1>
+          <div class="sub">Gateway 本地配置与 .env 分类配置</div>
+        </div>
+        <div class="nav">
+          <a href="/console/chat">聊天</a>
+          <a href="/console">控制台</a>
+          <a class="active" href="/console/settings">设置</a>
+        </div>
+      </div>
+
+      <div class="grid">
+        <section class="panel">
+          <h2>控制台本地配置（浏览器 localStorage）</h2>
+          <div class="fields compact">
+            <label>
+              Gateway Base URL
+              <input id="cfg-base" placeholder="http://127.0.0.1:8090" />
+            </label>
+            <label>
+              API Key
+              <input id="cfg-api-key" placeholder="MOBICLAW_GATEWAY_API_KEY" />
+            </label>
+            <label>
+              轮询间隔(ms)
+              <input id="cfg-poll-ms" type="number" min="500" step="100" value="2000" />
+            </label>
+            <label>
+              请求超时(ms)
+              <input id="cfg-timeout-ms" type="number" min="1000" step="500" value="30000" />
+            </label>
+          </div>
+          <div class="btns">
+            <button id="btn-save-cfg">保存本地配置</button>
+            <button id="btn-load-cfg" class="alt">重载本地配置</button>
+            <button id="btn-health" class="warn">健康检查</button>
+          </div>
+          <div id="health-status" class="status">状态: <strong>未检查</strong></div>
+        </section>
+
+        <section class="panel">
+          <h2>.env 分类配置（保存到项目 .env）</h2>
+          <div class="hint">逐项填写后保存。保存后通常需要重启网关进程才会完全生效。</div>
+          <div class="btns">
+            <button id="btn-load-env" class="alt">加载分类配置</button>
+            <button id="btn-save-env">保存分类配置</button>
+          </div>
+          <div id="env-status" class="status">状态: <strong>未加载</strong></div>
+
+          <label style="margin-top: 10px;">
+            未纳入分类变量(JSON)
+            <textarea id="env-unmanaged-json" class="mono" placeholder='{"CUSTOM_KEY":"value"}'></textarea>
+          </label>
+
+          <div id="env-categories" class="env-categories"></div>
+
+          <label style="margin-top: 10px;">
+            分类变量预览(JSON)
+            <textarea id="env-vars-preview" class="mono" readonly></textarea>
+          </label>
+          <label style="margin-top: 10px;">
+            .env 内容预览
+            <textarea id="env-content-preview" class="mono" readonly></textarea>
+          </label>
+        </section>
+
+        <section class="panel">
+          <h2>通信日志</h2>
+          <pre id="req-log">(empty)</pre>
+          <pre id="resp-log" style="margin-top: 10px;">(empty)</pre>
+        </section>
+      </div>
+    </div>
+
+    <script>
+      const cfgKey = "seneschal_gateway_console_config_v1";
+      let envSchema = [];
+
+      const el = {
+        cfgBase: document.getElementById("cfg-base"),
+        cfgApiKey: document.getElementById("cfg-api-key"),
+        cfgPollMs: document.getElementById("cfg-poll-ms"),
+        cfgTimeoutMs: document.getElementById("cfg-timeout-ms"),
+        btnSaveCfg: document.getElementById("btn-save-cfg"),
+        btnLoadCfg: document.getElementById("btn-load-cfg"),
+        btnHealth: document.getElementById("btn-health"),
+        healthStatus: document.getElementById("health-status"),
+        btnLoadEnv: document.getElementById("btn-load-env"),
+        btnSaveEnv: document.getElementById("btn-save-env"),
+        envStatus: document.getElementById("env-status"),
+        envUnmanagedJson: document.getElementById("env-unmanaged-json"),
+        envVarsPreview: document.getElementById("env-vars-preview"),
+        envContentPreview: document.getElementById("env-content-preview"),
+        envCategories: document.getElementById("env-categories"),
+        reqLog: document.getElementById("req-log"),
+        respLog: document.getElementById("resp-log"),
+      };
+
+      function normalizeBaseUrl(raw) {
+        const value = (raw || "").trim();
+        if (!value) {
+          return window.location.origin || "http://127.0.0.1:8090";
+        }
+        try {
+          const u = new URL(value, window.location.origin);
+          return `${u.protocol}//${u.host}`;
+        } catch (_) {
+          return value.replace(/\/+$/, "");
+        }
+      }
+
+      function getConfig() {
+        return {
+          baseUrl: normalizeBaseUrl(el.cfgBase.value),
+          apiKey: (el.cfgApiKey.value || "").trim(),
+          pollMs: Number(el.cfgPollMs.value || 2000),
+          timeoutMs: Number(el.cfgTimeoutMs.value || 30000),
+        };
+      }
+
+      function loadConfig() {
+        const raw = localStorage.getItem(cfgKey);
+        let parsed = {};
+        if (raw) {
+          try {
+            parsed = JSON.parse(raw) || {};
+          } catch (_) {
+            parsed = {};
+          }
+        }
+        el.cfgBase.value = normalizeBaseUrl(parsed.baseUrl || window.location.origin);
+        el.cfgApiKey.value = parsed.apiKey || "";
+        el.cfgPollMs.value = parsed.pollMs || 2000;
+        el.cfgTimeoutMs.value = parsed.timeoutMs || 30000;
+      }
+
+      function saveConfig() {
+        const cfg = getConfig();
+        el.cfgBase.value = cfg.baseUrl;
+        localStorage.setItem(cfgKey, JSON.stringify(cfg));
+        setHealthStatus("本地配置已保存", "ok");
+      }
+
+      function setHealthStatus(text, kind) {
+        const color = kind === "error" ? "#b42318" : "#105f4a";
+        el.healthStatus.innerHTML = `状态: <strong style="color:${color}">${text}</strong>`;
+      }
+
+      function setEnvStatus(text, kind) {
+        const color = kind === "error" ? "#b42318" : "#105f4a";
+        el.envStatus.innerHTML = `状态: <strong style="color:${color}">${text}</strong>`;
+      }
+
+      function writeReqLog(data) {
+        el.reqLog.textContent = JSON.stringify(data, null, 2);
+      }
+
+      function writeRespLog(data) {
+        el.respLog.textContent = JSON.stringify(data, null, 2);
+      }
+
+      function authHeaders(baseHeaders = {}) {
+        const cfg = getConfig();
+        const headers = { ...baseHeaders };
+        if (cfg.apiKey) {
+          headers["Authorization"] = `Bearer ${cfg.apiKey}`;
+        }
+        return headers;
+      }
+
+      async function requestJson(path, options = {}) {
+        const cfg = getConfig();
+        const url = `${cfg.baseUrl}${path}`;
+        writeReqLog({
+          url,
+          method: options.method || "GET",
+          headers: options.headers || {},
+          body: options.body ? JSON.parse(options.body) : null,
+        });
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), Math.max(1000, cfg.timeoutMs || 30000));
+
+        try {
+          const resp = await fetch(url, { ...options, signal: controller.signal });
+          const text = await resp.text();
+          let json;
+          try {
+            json = text ? JSON.parse(text) : null;
+          } catch (_) {
+            json = { raw: text };
+          }
+          writeRespLog({ status: resp.status, ok: resp.ok, body: json });
+          if (!resp.ok) {
+            const detail = (json && (json.detail || json.error || json.message)) || "";
+            throw new Error(detail ? `HTTP ${resp.status}: ${detail}` : `HTTP ${resp.status}`);
+          }
+          return json;
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+
+      function createEnvField(item, value) {
+        const key = item.key || "";
+        const type = item.type || "text";
+
+        const label = document.createElement("label");
+        label.dataset.key = key;
+
+        const title = document.createElement("span");
+        title.textContent = `${item.label || key} (${key})`;
+        label.appendChild(title);
+
+        let input;
+        if (type === "select") {
+          input = document.createElement("select");
+          (item.options || []).forEach((option) => {
+            const op = document.createElement("option");
+            op.value = option;
+            op.textContent = option;
+            input.appendChild(op);
+          });
+          if (value && !Array.from(input.options).some((op) => op.value === value)) {
+            const extra = document.createElement("option");
+            extra.value = value;
+            extra.textContent = value;
+            input.appendChild(extra);
+          }
+          input.value = value || "";
+        } else if (type === "textarea") {
+          input = document.createElement("textarea");
+          input.className = "mono";
+          input.value = value || "";
+        } else {
+          input = document.createElement("input");
+          input.type = type === "password" ? "password" : type === "number" ? "number" : "text";
+          input.value = value || "";
+        }
+        input.dataset.key = key;
+        label.appendChild(input);
+        return label;
+      }
+
+      function renderEnvSchema(schema, values) {
+        el.envCategories.innerHTML = "";
+        envSchema = Array.isArray(schema) ? schema : [];
+        envSchema.forEach((category) => {
+          const box = document.createElement("div");
+          box.className = "env-category";
+
+          const title = document.createElement("div");
+          title.className = "env-category-title";
+          title.textContent = category.title || category.id || "Settings";
+          box.appendChild(title);
+
+          const grid = document.createElement("div");
+          grid.className = "env-grid";
+          (category.items || []).forEach((item) => {
+            const key = item.key || "";
+            const current = values && typeof values === "object" ? values[key] || "" : "";
+            grid.appendChild(createEnvField(item, current));
+          });
+          box.appendChild(grid);
+          el.envCategories.appendChild(box);
+        });
+      }
+
+      function collectEnvValues() {
+        const values = {};
+        el.envCategories.querySelectorAll("input[data-key], select[data-key], textarea[data-key]").forEach((input) => {
+          const key = (input.dataset.key || "").trim();
+          if (!key) {
+            return;
+          }
+          values[key] = (input.value || "").trim();
+        });
+        return values;
+      }
+
+      async function checkHealth() {
+        try {
+          const resp = await requestJson("/health", {
+            method: "GET",
+            headers: { "Content-Type": "application/json" },
+          });
+          setHealthStatus(resp.status || "ok", "ok");
+        } catch (err) {
+          setHealthStatus(err.message || String(err), "error");
+        }
+      }
+
+      async function loadEnv() {
+        try {
+          const resp = await requestJson("/api/v1/env/schema", {
+            method: "GET",
+            headers: authHeaders({ "Content-Type": "application/json" }),
+          });
+          renderEnvSchema(resp.schema || [], resp.values || {});
+          el.envUnmanagedJson.value = JSON.stringify(resp.unmanaged || {}, null, 2);
+          el.envVarsPreview.value = JSON.stringify(resp.values || {}, null, 2);
+          el.envContentPreview.value = resp.content || "";
+          setEnvStatus(`已加载: ${resp.path || ".env"}`, "ok");
+        } catch (err) {
+          setEnvStatus(err.message || String(err), "error");
+        }
+      }
+
+      async function saveEnv() {
+        try {
+          let unmanaged = {};
+          const unmanagedRaw = (el.envUnmanagedJson.value || "").trim();
+          if (unmanagedRaw) {
+            unmanaged = JSON.parse(unmanagedRaw);
+          }
+          const payload = {
+            values: collectEnvValues(),
+            unmanaged,
+            preserve_unmanaged: true,
+          };
+
+          const resp = await requestJson("/api/v1/env/schema", {
+            method: "PUT",
+            headers: authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify(payload),
+          });
+
+          renderEnvSchema(resp.schema || envSchema, resp.values || {});
+          el.envUnmanagedJson.value = JSON.stringify(resp.unmanaged || {}, null, 2);
+          el.envVarsPreview.value = JSON.stringify(resp.values || {}, null, 2);
+          el.envContentPreview.value = resp.content || "";
+          setEnvStatus(`保存成功: ${resp.path || ".env"}`, "ok");
+        } catch (err) {
+          setEnvStatus(err.message || String(err), "error");
+        }
+      }
+
+      el.btnSaveCfg.addEventListener("click", saveConfig);
+      el.btnLoadCfg.addEventListener("click", loadConfig);
+      el.btnHealth.addEventListener("click", checkHealth);
+      el.btnLoadEnv.addEventListener("click", loadEnv);
+      el.btnSaveEnv.addEventListener("click", saveEnv);
+
+      loadConfig();
+      setHealthStatus("就绪", "ok");
+      setEnvStatus("就绪", "ok");
+      loadEnv();
+    </script>
+  </body>
+</html>

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from seneschal import workflows
+from mobiclaw import workflows
 
 
 def test_serialize_plan_for_monitor_with_subtasks() -> None:

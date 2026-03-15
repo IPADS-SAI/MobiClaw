@@ -11,15 +11,15 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
   set +a
 fi
 
-GATEWAY_HOST="${SENESCHAL_GATEWAY_HOST:-127.0.0.1}"
-GATEWAY_PORT="${SENESCHAL_GATEWAY_PORT:-8090}"
+GATEWAY_HOST="${MOBICLAW_GATEWAY_HOST:-127.0.0.1}"
+GATEWAY_PORT="${MOBICLAW_GATEWAY_PORT:-8090}"
 GATEWAY_URL="http://${GATEWAY_HOST}:${GATEWAY_PORT}"
 
 echo "[info] This script validates webhook callback simulation only."
 echo "[info] It does not validate Feishu long-connection ingress."
 echo "[info] Incoming Feishu tasks are executed by the unified intelligent router pipeline."
 
-python -m seneschal.gateway_server &
+python -m mobiclaw.gateway_server &
 GATEWAY_PID=$!
 
 cleanup() {

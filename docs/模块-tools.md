@@ -1,4 +1,4 @@
-# 模块文档：seneschal/tools 工具层（按当前实际代码口径）
+# 模块文档：mobiclaw/tools 工具层（按当前实际代码口径）
 
 本文档说明当前工具层的能力分类、主链路接入情况，以及 legacy 工具的现实定位。
 
@@ -10,21 +10,21 @@
 
 ### 1.1 当前主链路工具
 
-- `seneschal/tools/mobi.py`
-- `seneschal/tools/web.py`
-- `seneschal/tools/papers.py`
-- `seneschal/tools/shell.py`
-- `seneschal/tools/file.py`
-- `seneschal/tools/ocr.py`
-- `seneschal/tools/office.py`
-- `seneschal/tools/ppt.py`
-- `seneschal/tools/memory.py`
-- `seneschal/tools/skill_runner.py`
+- `mobiclaw/tools/mobi.py`
+- `mobiclaw/tools/web.py`
+- `mobiclaw/tools/papers.py`
+- `mobiclaw/tools/shell.py`
+- `mobiclaw/tools/file.py`
+- `mobiclaw/tools/ocr.py`
+- `mobiclaw/tools/office.py`
+- `mobiclaw/tools/ppt.py`
+- `mobiclaw/tools/memory.py`
+- `mobiclaw/tools/skill_runner.py`
 
 ### 1.2 聚合导出层
 
-- `seneschal/tools/__init__.py`
-- `seneschal/tools.py`
+- `mobiclaw/tools/__init__.py`
+- `mobiclaw/tools.py`
 
 ---
 
@@ -63,7 +63,7 @@
 
 文件：
 
-- `seneschal/tools/mobi.py`
+- `mobiclaw/tools/mobi.py`
 
 核心能力：
 
@@ -96,7 +96,7 @@
 
 文件：
 
-- `seneschal/tools/web.py`
+- `mobiclaw/tools/web.py`
 
 能力：
 
@@ -116,7 +116,7 @@
 
 文件：
 
-- `seneschal/tools/papers.py`
+- `mobiclaw/tools/papers.py`
 
 能力：
 
@@ -135,7 +135,7 @@
 
 文件：
 
-- `seneschal/tools/shell.py`
+- `mobiclaw/tools/shell.py`
 
 特性：
 
@@ -152,7 +152,7 @@
 
 文件：
 
-- `seneschal/tools/file.py`
+- `mobiclaw/tools/file.py`
 
 能力：
 
@@ -162,7 +162,7 @@
 
 文件：
 
-- `seneschal/tools/ocr.py`
+- `mobiclaw/tools/ocr.py`
 
 能力：
 
@@ -172,8 +172,8 @@
 
 文件：
 
-- `seneschal/tools/office.py`
-- `seneschal/tools/ppt.py`
+- `mobiclaw/tools/office.py`
+- `mobiclaw/tools/ppt.py`
 
 能力：
 
@@ -186,7 +186,7 @@
 
 文件：
 
-- `seneschal/tools/skill_runner.py`
+- `mobiclaw/tools/skill_runner.py`
 
 作用：
 
@@ -199,7 +199,7 @@
 
 文件：
 
-- `seneschal/tools/memory.py`
+- `mobiclaw/tools/memory.py`
 
 当前这是工具层里非常关键但旧文档经常低估的一块。
 

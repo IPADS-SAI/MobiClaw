@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from seneschal.agents.common import _extract_vlm_evidence, _summarize_execution_with_vlm
+from mobiclaw.agents.common import _extract_vlm_evidence, _summarize_execution_with_vlm
 
 
 class _FakeResponse:

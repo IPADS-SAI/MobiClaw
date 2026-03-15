@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Seneschal 应用入口。"""
+"""MobiClaw 应用入口。"""
 
 from __future__ import annotations
 
@@ -8,18 +8,18 @@ import asyncio
 import logging
 import os
 
-from seneschal.env import load_project_env
+from mobiclaw.env import load_project_env
 
 load_project_env()
 
-from seneschal.workflows import main
+from mobiclaw.workflows import main
 
 # logging.basicConfig(
-#     level=os.environ.get("SENESCHAL_LOG_LEVEL", "INFO"),
+#     level=os.environ.get("MOBICLAW_LOG_LEVEL", "INFO"),
 #     format="%(asctime)s-%(levelname)s-%(name)s : %(message)s",
 # )
 logging.basicConfig(
-    level=os.environ.get("SENESCHAL_LOG_LEVEL", "INFO"),
+    level=os.environ.get("MOBICLAW_LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s : %(message)s",
 )
 

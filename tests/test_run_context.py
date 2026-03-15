@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from seneschal import run_context
-from seneschal.run_context import RunContext, create_run_context
+from mobiclaw import run_context
+from mobiclaw.run_context import RunContext, create_run_context
 
 
 def test_create_run_context_writes_run_start_event(tmp_path: Path) -> None:
