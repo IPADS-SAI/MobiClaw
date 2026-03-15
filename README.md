@@ -257,11 +257,18 @@ python app.py --agent-task "整理并补充今日行动建议" --agent-hint stew
 # 手动指定 skill（优先级高于自动选择，支持逗号分隔）
 python app.py --agent-task "做一个内部周报草稿" --skill-hint internal-comms
 python app.py --agent-task "生成一个前端页面原型" --skill-hint web-artifacts-builder,frontend-design
+```
 
-# 定时任务
-python app.py --agent-task "请在明天8：00帮我搜索上海天气并总结成文档" # 单次定时任务
-python app.py --agent-task "每周一10：00帮我搜索最新计算机科学新闻" # 周期任务
-python app.py --agent-task "帮我取消每周一搜索新闻的定时任务" # 取消之前创建的任务
+示例：定时任务
+```bash
+# 单次定时任务
+python app.py --agent-task "请在明天8：00帮我搜索上海天气并总结成文档" 
+
+# 周期任务，基于cron表达式
+python app.py --agent-task "每周一10：00帮我搜索最新计算机科学新闻" 
+
+# 取消之前创建的任务
+python app.py --agent-task "帮我取消每周一搜索新闻的定时任务"
 ```
 
 #### 4.2.4 输出文件提示机制
