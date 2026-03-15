@@ -63,6 +63,19 @@ MobiClaw 是轻量化的openClaw替代，能够支持网页搜索，文档生成
 
 ## 从 0 到运行（推荐路径）
 
+### 0) 自动安装
+
+如果你希望让Claude Code自动完成项目的环境配置与安装，可以在项目根目录启动 `claude`，然后输入 `/setup`，Claude Code会：
+
+- 检查本地环境
+- 安装项目依赖
+- 交互式完成选项配置（如选择模型，接入飞书，配置可选项等）
+- 在后台启动gateway server
+
+在此过程中，随时与Claude Code聊天来进行任何你想要的个性化定制。
+
+若你不想使用Claude Code，或者希望自主控制项目的安装过程，你也可以按照下面的步骤手动安装项目：
+
 ### 1) 拉取代码与子模块
 
 ```bash
@@ -244,6 +257,11 @@ python app.py --agent-task "整理并补充今日行动建议" --agent-hint stew
 # 手动指定 skill（优先级高于自动选择，支持逗号分隔）
 python app.py --agent-task "做一个内部周报草稿" --skill-hint internal-comms
 python app.py --agent-task "生成一个前端页面原型" --skill-hint web-artifacts-builder,frontend-design
+
+# 定时任务
+python app.py --agent-task "请在明天8：00帮我搜索上海天气并总结成文档" # 单次定时任务
+python app.py --agent-task "每周一10：00帮我搜索最新计算机科学新闻" # 周期任务
+python app.py --agent-task "帮我取消每周一搜索新闻的定时任务" # 取消之前创建的任务
 ```
 
 #### 4.2.4 输出文件提示机制
