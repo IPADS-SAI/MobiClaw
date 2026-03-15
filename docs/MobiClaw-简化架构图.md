@@ -4,9 +4,9 @@
 
 ```mermaid
 flowchart LR
-    U[用户 / 外部调用方] --> E[CLI / Gateway / Chat / Daily]
-    E --> WF[workflows.py]
-    WF --> ORCH[orchestrator.py]
+    U[用户 / API / Chat / Daily] --> E[CLI / Gateway / Console]
+    E --> WF[mobiclaw.workflows]
+    WF --> ORCH[mobiclaw.orchestrator]
     WF --> CHAT[Chat Session Flow]
 
     ORCH --> R[Router]
@@ -15,20 +15,19 @@ flowchart LR
     ORCH --> W[Worker Agent]
     ORCH --> ST[Steward Agent]
 
-    W --> T[Local Tools\nweb / papers / shell / office / ocr / file / skills / memory]
-    ST --> MG[MobiAgent Gateway]
-    MG --> PHONE[Mobile Device Runtime]
+    W --> T[Web / Papers / Office / OCR / Shell / File / Memory / Skills / Schedule / Feishu]
+    ST --> M[mobiclaw.mobile]
+    M --> MP[mobiagent / uitars / qwen / autoglm]
 
-    CHAT --> STATE[Sessions / Outputs / RunContext / Local Memory]
+    CHAT --> STATE[Sessions / Outputs / Logs / Memory / Schedules]
     ORCH --> STATE
     T --> STATE
-
 ```
 
-## 2. 当前主链路
+## 2. Main Path
 
 ```text
-Input -> Dispatch -> Route -> Plan -> Execute -> Persist -> Return
+Input -> Dispatch -> Route -> Plan -> Select Skills -> Execute -> Persist -> Return
 ```
 
 - Input：CLI / Gateway / Chat / Daily

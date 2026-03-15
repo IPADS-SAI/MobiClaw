@@ -1,27 +1,39 @@
 # 模块文档：mobiclaw/tools 工具层（按当前实际代码口径）
 
-本文档说明当前工具层的能力分类、主链路接入情况，以及 legacy 工具的现实定位。
+本文档说明当前工具层的能力分类、主链路接入情况，以及与 scheduler / memory / mobile executor 的真实关系。
 
 ---
 
 ## 1. 模块范围
 
-当前工具层可按 4 类理解：
+当前工具层可按 5 类理解：
 
-### 1.1 当前主链路工具
+### 1.1 移动执行工具
 
 - `mobiclaw/tools/mobi.py`
+
+### 1.2 联网与资料工具
+
 - `mobiclaw/tools/web.py`
 - `mobiclaw/tools/papers.py`
+
+### 1.3 本地处理工具
+
 - `mobiclaw/tools/shell.py`
 - `mobiclaw/tools/file.py`
 - `mobiclaw/tools/ocr.py`
 - `mobiclaw/tools/office.py`
 - `mobiclaw/tools/ppt.py`
-- `mobiclaw/tools/memory.py`
 - `mobiclaw/tools/skill_runner.py`
 
-### 1.2 聚合导出层
+### 1.4 状态与集成工具
+
+- `mobiclaw/tools/feishu.py`
+- `mobiclaw/tools/schedule.py`
+- `mobiclaw/tools/memory/long_term_memory.py`
+- `mobiclaw/tools/memory/rag.py`
+
+### 1.5 聚合导出层
 
 - `mobiclaw/tools/__init__.py`
 - `mobiclaw/tools.py`
@@ -31,31 +43,54 @@
 ## 2. 当前工具层的真实定位
 
 更准确的现实是：
-更准确的现实是：
 
-1. **Mobi 工具**：手机执行边界
-2. **Web / Papers 工具**：联网信息获取
-3. **Local 工具**：shell / ocr / file / office / ppt / skill
-4. **Memory 工具**：本地长期记忆、本地知识、任务历史
+1. **Mobi 工具**：把手机任务转给 `mobiclaw.mobile.MobileExecutor`
+2. **Web / Papers 工具**：负责联网检索与学术资料处理
+3. **Local 工具**：负责 shell、OCR、文件、Office、PPT 与 skill 脚本执行
+4. **Stateful 工具**：负责 memory、schedule、feishu 等带状态或外部集成的能力
+5. **聚合导出层**：为 agent factory 提供统一工具注册入口
 
-也就是说，当前工具层的主轴已经变成：
+也就是说，当前工具层的主轴是：
 
-> **Mobi + Local Tools + Local Memory**
+> **Mobile + Local Tools + Memory + Scheduler + Integrations**
 
 ---
 
-## 3. 统一返回契约
+## 3. 聚合导出层实际导出的能力
 
-大部分工具函数返回 `ToolResponse`：
+`mobiclaw/tools/__init__.py` 当前实际导出：
 
-- `content`：给 Agent 看的人类可读内容
-- `metadata`：给程序判断的结构化字段
+- `call_mobi_action`
+- `call_mobi_collect_verified`
+- `write_text_file`
+- `arxiv_search`
+- `dblp_conference_search`
+- `download_file`
+- `extract_pdf_text`
+- `read_docx_text`
+- `create_docx_from_text`
+- `edit_docx`
+- `create_pdf_from_text`
+- `read_xlsx_summary`
+- `write_xlsx_from_records`
+- `write_xlsx_from_rows`
+- `run_skill_script`
+- `extract_image_text_ocr`
+- `run_shell_command`
+- `brave_search`
+- `fetch_url_text`
+- `fetch_url_readable_text`
+- `fetch_url_links`
+- `fetch_feishu_chat_history`
+- `get_feishu_message`
+- `read_memory`
+- `update_long_term_memory`
+- `store_task_result`
+- `search_task_history`
+- `store_steward_knowledge`
+- `search_steward_knowledge`
 
-当前推荐约定：
-
-- `content` 强调可读摘要
-- `metadata` 强调可判断性和复盘能力
-- 错误同时保存在文本与结构化字段里
+注意：`schedule.py` 中的定时任务工具并不在 `tools/__init__.py` 统一导出，而是由 `Worker` factory 单独引入并注册。
 
 ---
 
@@ -69,24 +104,25 @@
 
 - `call_mobi_collect_verified`
 - `call_mobi_action`
-- 旧名 `call_mobi_collect` 已废弃，统一使用 `call_mobi_collect_verified`
 
-当前现实作用：
+当前真实作用：
 
-- 是 Steward 主链路最关键的工具边界
-- 负责把 collect/action 请求转给 `mobiagent_server`
-- 负责把执行结果封成统一 `ToolResponse`
+- 是 Steward 主链路最关键的工具边界之一
+- 不再直接依赖旧文档里的外部单独网关口径，而是调用 `mobiclaw.mobile.MobileExecutor`
+- 统一返回 `ToolResponse + metadata`
 
-实践里重点关注的 metadata：
+重点 metadata 包括：
 
 - `success`
+- `requires_agent_validation`
+- `execution`
+- `final_image_path`
+- `last_reasoning`
+- `action_count`
+- `step_count`
+- `status_hint`
 - `run_dir`
 - `index_file`
-- `final_image_path`（配合 `ImageBlock` 使用）
-- `status_hint`
-- `step_count`
-- `action_count`
-- `last_reasoning`
 
 ---
 
@@ -105,13 +141,6 @@
 - `fetch_url_readable_text`
 - `fetch_url_links`
 
-推荐顺序：
-
-1. `brave_search`
-2. `fetch_url_readable_text`
-3. `fetch_url_links`
-4. 必要时再看 `fetch_url_text`
-
 ### 5.2 Papers 工具
 
 文件：
@@ -125,7 +154,7 @@
 - `download_file`
 - `extract_pdf_text`
 
-当前它们是 Worker 主链路的重要组成部分。
+这些能力当前仍是 Worker 主链路的重要组成部分。
 
 ---
 
@@ -141,12 +170,6 @@
 
 - 白名单约束
 - 禁止危险 token
-
-适合：
-
-- 轻量读取
-- 简单环境查询
-- 快速辅助命令
 
 ### 6.2 file
 
@@ -180,7 +203,7 @@
 - DOCX / XLSX / PDF 读写
 - PPTX 创建、编辑、插图、样式处理
 
-这些工具当前已经进入 Worker 主链路能力集，不应再被视为“未接入实验工具”。
+这些工具已经进入 Worker 主链路能力集，不应再被视为“未接入实验工具”。
 
 ### 6.5 skill_runner
 
@@ -191,53 +214,72 @@
 作用：
 
 - 执行 skill 中声明的脚本
-- 配合 Skill Selector 成为 Worker/Steward 的增强层
+- 配合 Skill Selector 成为 Worker 的增强层
+- 运行时会读取 `SKILL.md` 并约束白名单命令
 
 ---
 
-## 7. Memory 工具族
+## 7. Memory / Feishu / Schedule 工具族
+
+### 7.1 Memory
 
 文件：
 
-- `mobiclaw/tools/memory.py`
+- `mobiclaw/tools/memory/long_term_memory.py`
+- `mobiclaw/tools/memory/rag.py`
 
-当前这是工具层里非常关键但旧文档经常低估的一块。
+负责：
 
-它负责的不是外部知识库，而是本地状态能力：
+- 长期记忆读写
+- 历史任务检索
+- Steward 知识存储与检索
 
-- 长期记忆
-- 本地任务历史
-- steward knowledge
+### 7.2 Feishu
 
+文件：
+
+- `mobiclaw/tools/feishu.py`
+
+能力：
+
+- `fetch_feishu_chat_history`
+- `get_feishu_message`
+
+### 7.3 Schedule
+
+文件：
+
+- `mobiclaw/tools/schedule.py`
+
+能力：
+
+- `list_scheduled_tasks`
+- `create_scheduled_task`
+- `cancel_scheduled_task`
+
+这组工具通过 `mobiclaw.scheduler.ScheduleManager` 接入 APScheduler + JSON store。
 
 ---
 
-## 8. 工具扩展建议
+## 8. Worker 实际工具能力补充
 
-### 9.1 新增主链路工具
+除了旧文档常见的 web / papers / office / shell / memory 之外，当前 Worker 还已接入：
 
-步骤：
+- 飞书相关工具
+- 定时任务工具
+- skill 运行时脚本执行
 
-1. 在对应文件实现函数并返回 `ToolResponse`
-2. 在聚合层导出
-3. 在 `agents.py` 注册到 Worker 或 Steward
-4. 补 `func_description`
-5. 补文档和测试
-
-### 9.2 新增 legacy 工具
-
-如果只是为了保留历史兼容：
-
-- 不建议混入当前主链路说明
-- 最好明确标注为 legacy
+因此若文档仍只描述“研究、网页、文件”能力，已经低估了当前 Worker 的实际职责边界。
 
 ---
 
-## 8. 调试与排障
+## 9. 调试与排障
 
-- Mobi 无结果：检查 `mobiagent_server` 状态、认证和 mode
-- Web 无结果：检查搜索 Key 与网络访问
+- Mobi 无结果：检查 `MOBILE_PROVIDER`、device 配置、provider 参数与输出目录
+- Web 无结果：检查 Brave Key 与网络访问
 - Shell 被拒：检查 allowlist 与危险 token
+- Skill 脚本被拒：检查 `execution_dir`、`SKILL.md` 白名单与超时限制
+- 定时任务不可用：检查 `SENESCHAL_SCHEDULE_ENABLED` 与 scheduler store path
 - 文件未落盘：检查写入根目录限制
 - OCR 异常：检查依赖和图片路径
 

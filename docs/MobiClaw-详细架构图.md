@@ -16,9 +16,9 @@ flowchart TB
     end
 
     subgraph Workflow[工作流层]
-      WF[workflows.py\nmode dispatch]
-      CSM[ChatSessionManager\nsession restore/save]
-      PM[planner monitor events]
+      WF[mobiclaw.workflows]
+      CSM[ChatSessionManager]
+      PM[planner monitor]
       CLI --> WF
       GW --> WF
       WF --> CSM
@@ -26,7 +26,7 @@ flowchart TB
     end
 
     subgraph Orchestrator[编排层]
-      ORCH[orchestrator.py\nroute -> plan -> execute]
+      ORCH[mobiclaw.orchestrator.runner]
       ROUTER[Router Agent]
       PLAN[Planner Agent]
       SKILL[Skill Selector]
@@ -136,7 +136,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant Caller as Caller
-    participant Orch as orchestrator.py
+    participant Orch as orchestrator.runner
     participant Router as Router Agent
     participant Planner as Planner Agent
     participant Skill as Skill Selector

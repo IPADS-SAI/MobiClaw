@@ -108,12 +108,9 @@ def load_tasks(task_file: str) -> List:
 # Provider 默认配置
 PROVIDER_DEFAULTS = {
     'mobiagent': {
-        'api_base': 'http://localhost:8000/v1',
-        'model': 'MobiMind-1.5-4B',
-        'temperature': 0.1,
-    },
-    'mobiagent': {
-        'api_base': 'http://localhost:8000/v1',
+        # mobiagent 默认走 decider / grounder / planner 分离端口，
+        # 不应在未显式指定时自动注入统一 api_base。
+        'api_base': None,
         'model': 'MobiMind-1.5-4B',
         'temperature': 0.1,
     },
@@ -236,7 +233,9 @@ def parse_args():
     # 获取 provider 默认值
     defaults = PROVIDER_DEFAULTS.get(args.provider, {})
     
-    # 合并向后兼容参数到统一参数
+    # 合并向后兼容参数到统一参数。
+    # 对 mobiagent 而言，只有显式传入统一 endpoint 时才设置 api_base；
+    # 否则保持 None，让 provider 内部使用 service_ip + ports 组装分离端点。
     # api-base 优先级: --api-base > --model-url > --qwen-api-base > provider默认值
     if args.api_base is None:
         args.api_base = args.model_url or args.qwen_api_base or defaults.get('api_base')
