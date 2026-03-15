@@ -17,13 +17,8 @@ Verify the essential tools are available.
 
 Run:
 - `git --version`
-- `python3 --version`
 - `uv --version`
 - `curl --version`
-
-**If python3 is missing or < 3.12:** AskUserQuestion: "Python 3.12+ is required but not found. Would you like me to install it?"
-- Yes (recommended) — install via system package manager or pyenv
-- No — abort setup, tell user to install Python 3.12+ manually
 
 **If uv is missing:** Install it automatically:
 ```bash
@@ -59,8 +54,8 @@ uv sync
 **Optional: Tesseract OCR (for Chinese document OCR)**
 
 AskUserQuestion: "Install Tesseract OCR with Chinese language support? (Needed only if you plan to use OCR features)"
-- Yes — run `sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-chi-sim`
-- Skip — continue without OCR support
+- Yes — run `sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-chi-sim` (find alternatives for other package managers like `dnf`)
+- Skip — continue without Chinese OCR support
 
 ## 3. Configure Environment
 
@@ -89,9 +84,9 @@ This is the only **required** configuration. AskUserQuestion: "Which LLM provide
   - google/gemini-3-flash-preview
   - Other — let user type a model ID
 - Write `OPENROUTER_MODEL` to `.env`
-- AskUserQuestion: "Use a different (stronger) model for Router/Planner orchestration?"
-  - Yes — ask for model ID, write `OPENROUTER_MODEL_FOR_ORCHESTRATOR`
+- AskUserQuestion: "Use a different model for Router/Planner orchestration?"
   - No — leave empty, will fall back to the default model
+  - User types model via "Other" → write `OPENROUTER_MODEL_FOR_ORCHESTRATOR` to `.env`
 
 **OpenAI-compatible path:**
 - Tell user to add `export OPENAI_API_KEY=<key>` and `export OPENAI_BASE_URL=<url>` to `.env`. Do NOT collect the key in chat.
@@ -122,9 +117,12 @@ AskUserQuestion: "Which mobile execution provider?"
 Write `MOBILE_PROVIDER` to `.env`.
 
 AskUserQuestion: "What device type are you connecting to?"
-- Android — set `MOBILE_DEVICE_TYPE=Android`, ask for `MOBILE_DEVICE_ID` (e.g. `127.0.0.1:5555`)
-- HarmonyOS — set `MOBILE_DEVICE_TYPE=Harmony`, ask for `MOBILE_DEVICE_ID`
-- Mock (no real device) — set `MOBILE_DEVICE_TYPE=mock`
+- Android — set `MOBILE_DEVICE_TYPE=Android`
+- HarmonyOS — set `MOBILE_DEVICE_TYPE=Harmony`
+
+AskUserQuestion: "Do you want to manually set device ID (e.g., serial number or IP:port) to specify the device to control"
+- Skip — leave `MOBILE_DEVICE_ID` empty, will use the first controllable device.
+- User types ID via "Other" → write `MOBILE_DEVICE_ID` to `.env`
 
 For MobiAgent provider, configure the server endpoints:
 - Ask for MobiAgent server IP/port or accept defaults (`166.111.53.96:7003`)
@@ -150,8 +148,6 @@ AskUserQuestion: "Which Feishu event transport mode?"
 - Both (enable both modes)
 
 Write `FEISHU_EVENT_TRANSPORT` to `.env`.
-
-Optionally tell user to add `export FEISHU_VERIFICATION_TOKEN=<verification-token>` and `export FEISHU_ENCRYPT_KEY=<encrypt-key>` to `.env`.
 
 ### 3e. Advanced Options (Optional)
 
@@ -245,11 +241,6 @@ curl -sf http://127.0.0.1:<port>/docs | head -c 100
 To stop the gateway server later:
 ```bash
 kill $(cat tmp/gateway-server.pid 2>/dev/null) 2>/dev/null; rm -f tmp/gateway-server.pid
-```
-
-Or use the project's stop script:
-```bash
-bash scripts/stop_all.sh
 ```
 
 ## Troubleshooting
