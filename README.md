@@ -5,7 +5,7 @@
 </div>
 
 <h3 align="center">
-MobiClaw: A Lightweight OpenClaw Alternative for Seamless Mobile Manipulation
+MobiClaw: A Lightweight OpenClaw Alternative with Seamless Mobile Manipulation
 </h3>
 
 ---
@@ -413,15 +413,6 @@ python -m pytest tests
 
 ### 7) 致谢
 
-本项目的设计与实现受益于以下开源项目，特此致谢：
-
-- **openClaw**
-  - 为端侧任务编排、网关化接入与多智能体协作提供了重要参考思路。
-- **AgentScope**
-  - 为本项目提供了稳定的 Agent 抽象、工具调用范式与会话/编排能力基础。
-
-感谢两者的维护者与社区贡献者。我们在使用与改造相关能力时，始终遵循其开源许可证与社区规范。
-
-> 注：本项目与上述项目为独立工程，致谢不代表官方背书或从属关系。
-
+本项目的设计与实现受益于以下开源项目，特此致谢：[openClaw](https://github.com/openclaw/openclaw) 和 [AgentScope](https://github.com/agentscope-ai/agentscope)
+为本项目提供了工具调用范式与会话/编排能力的参考，感谢两者的维护者与社区贡献者。
 
