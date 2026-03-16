@@ -26,7 +26,12 @@ from .skill_runner import run_skill_script
 from .ocr import extract_image_text_ocr
 from .shell import run_shell_command
 from .web import brave_search, fetch_url_links, fetch_url_readable_text, fetch_url_text
-from .feishu import fetch_feishu_chat_history, get_feishu_message
+from .feishu import (
+    fetch_feishu_chat_history,
+    get_feishu_message,
+    schedule_feishu_meeting,
+    send_feishu_meeting_card,
+)
 from .memory import (
     read_memory,
     update_long_term_memory,
@@ -64,4 +69,6 @@ __all__ = [
     "search_steward_knowledge",
     "fetch_feishu_chat_history",
     "get_feishu_message",
+    "schedule_feishu_meeting",
+    "send_feishu_meeting_card",
 ]

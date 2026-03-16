@@ -17,6 +17,7 @@ web = importlib.import_module("mobiclaw.tools.web")
 papers = importlib.import_module("mobiclaw.tools.papers")
 office = importlib.import_module("mobiclaw.tools.office")
 ocr = importlib.import_module("mobiclaw.tools.ocr")
+feishu = importlib.import_module("mobiclaw.tools.feishu")
 
 call_mobi_action = mobi.call_mobi_action
 call_mobi_collect_verified = mobi.call_mobi_collect_verified
@@ -38,6 +39,10 @@ read_xlsx_summary = office.read_xlsx_summary
 write_xlsx_from_records = office.write_xlsx_from_records
 write_xlsx_from_rows = office.write_xlsx_from_rows
 extract_image_text_ocr = ocr.extract_image_text_ocr
+fetch_feishu_chat_history = feishu.fetch_feishu_chat_history
+get_feishu_message = feishu.get_feishu_message
+schedule_feishu_meeting = feishu.schedule_feishu_meeting
+send_feishu_meeting_card = feishu.send_feishu_meeting_card
 
 __all__ = [
     "call_mobi_action",
@@ -60,4 +65,8 @@ __all__ = [
     "write_xlsx_from_records",
     "write_xlsx_from_rows",
     "extract_image_text_ocr",
+    "fetch_feishu_chat_history",
+    "get_feishu_message",
+    "schedule_feishu_meeting",
+    "send_feishu_meeting_card",
 ]
