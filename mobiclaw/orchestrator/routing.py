@@ -144,7 +144,7 @@ async def _llm_route(task: str, strategy: str) -> RouteDecision:
         '{"target_agents":["agent_name"],"reason":"...","confidence":0.0,"plan_required":true|false}\n\n'
         "要求:\n"
         f"1) target_agents 里的每个值必须来自: {available_agents}。\n"
-        "2) 可选一个或多个 agent。\n"
+        "2) 如果任务明显涉及多个Agent能力，可以选择多个Agent；如果单个Agent能够完成任务，则优先选择单个Agent\n"
         "3) 任务明显复合时 plan_required=true。\n"
         f"4) 不确定时优先 {route_default_agent}。\n\n"
         f"用户任务(精简): {task_for_prompt}"
