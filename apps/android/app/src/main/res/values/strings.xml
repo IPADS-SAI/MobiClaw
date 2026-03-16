@@ -1,0 +1,28 @@
+<resources>
+    <string name="app_name">MobiClaw</string>
+    <string name="gateway_host_hint">Gateway Host (e.g. 192.168.1.100)</string>
+    <string name="gateway_port_hint">Gateway Port (e.g. 8090)</string>
+    <string name="api_key_hint">API Key</string>
+    <string name="tailscale_domain_hint">Tailscale Domain (e.g. pixel8.xxx.ts.net)</string>
+    <string name="section_gateway">Gateway Server</string>
+    <string name="section_tailscale">Tailscale</string>
+    <string name="section_device_status">Device Status</string>
+    <string name="section_heartbeat_status">Heartbeat Status</string>
+    <string name="label_adb_port">ADB Port:</string>
+    <string name="label_tailscale_ip">Tailscale IP:</string>
+    <string name="label_last_heartbeat">Last Heartbeat:</string>
+    <string name="label_status">Status:</string>
+    <string name="status_stopped">Stopped</string>
+    <string name="status_running">Running</string>
+    <string name="status_error">Error</string>
+    <string name="btn_connect">Connect</string>
+    <string name="btn_disconnect">Disconnect</string>
+    <string name="not_detected">Not detected</string>
+    <string name="manual_adb_port_hint">Enter ADB port</string>
+    <string name="no_wireless_debug">Not detected - enable wireless debugging</string>
+    <string name="btn_set_adb_port">Set</string>
+    <string name="btn_clear_adb_port">Clear</string>
+    <string name="notification_channel_name">Heartbeat Service</string>
+    <string name="notification_title">Seneschal Heartbeat</string>
+    <string name="notification_text">Heartbeat service is running</string>
+</resources>

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import mimetypes
 import shutil
 import uuid
@@ -16,6 +17,9 @@ from fastapi import File, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from .api_env import register_env_routes
+from .models import DeviceHeartbeat
+
+logger = logging.getLogger(__name__)
 
 
 def _gateway_override(name: str, default: Any) -> Any:
@@ -447,5 +451,121 @@ def register_routes(app) -> None:
     exported["feishu_events"] = feishu_events
 
     register_env_routes(app, exported)
+
+    # ── Device management ──────────────────────────────────────────────
+
+    @app.post("/api/v1/devices/heartbeat")
+    async def device_heartbeat(
+        heartbeat: DeviceHeartbeat,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        utc_now_iso = _gateway_override("_utc_now_iso", None)
+        device_store = _gateway_override("_DEVICE_STORE", {})
+        device_lock = _gateway_override("_DEVICE_LOCK", None)
+        save_device_store = _gateway_override("_save_device_store", None)
+        ensure_adb_connected = _gateway_override("_ensure_adb_connected", None)
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        now = utc_now_iso()
+        record: dict[str, Any] = {
+            "device_id": heartbeat.device_id,
+            "tailscale_ip": heartbeat.tailscale_ip,
+            "adb_port": heartbeat.adb_port,
+            "device_name": heartbeat.device_name,
+            "last_heartbeat": now,
+        }
+
+        async with device_lock:
+            existing = device_store.get(heartbeat.device_id)
+            if existing:
+                record["first_seen"] = existing.get("first_seen", now)
+            else:
+                record["first_seen"] = now
+            device_store[heartbeat.device_id] = record
+            save_device_store()
+
+        logger.info("Device heartbeat: %s (adb_port=%s)", heartbeat.device_id, heartbeat.adb_port)
+
+        if heartbeat.tailscale_ip and heartbeat.adb_port:
+            try:
+                await ensure_adb_connected(heartbeat.tailscale_ip, heartbeat.adb_port)
+            except Exception:
+                logger.exception("Failed to ensure ADB connection for %s:%s", heartbeat.tailscale_ip, heartbeat.adb_port)
+
+        return {"status": "ok", "device_id": heartbeat.device_id, "timestamp": now}
+    exported["device_heartbeat"] = device_heartbeat
+
+    @app.get("/api/v1/devices")
+    async def list_devices(
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        device_store = _gateway_override("_DEVICE_STORE", {})
+        device_lock = _gateway_override("_DEVICE_LOCK", None)
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        async with device_lock:
+            devices = list(device_store.values())
+        return {"devices": devices, "count": len(devices)}
+    exported["list_devices"] = list_devices
+
+    @app.get("/api/v1/devices/{device_id}")
+    async def get_device(
+        device_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        device_store = _gateway_override("_DEVICE_STORE", {})
+        device_lock = _gateway_override("_DEVICE_LOCK", None)
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        async with device_lock:
+            device = device_store.get(device_id)
+        if not device:
+            raise HTTPException(status_code=404, detail="Device not found")
+        return device
+    exported["get_device"] = get_device
+
+    @app.delete("/api/v1/devices/{device_id}")
+    async def delete_device(
+        device_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        device_store = _gateway_override("_DEVICE_STORE", {})
+        device_lock = _gateway_override("_DEVICE_LOCK", None)
+        save_device_store = _gateway_override("_save_device_store", None)
+        adb_run = _gateway_override("_adb_run", None)
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        async with device_lock:
+            device = device_store.pop(device_id, None)
+            if device:
+                save_device_store()
+        if not device:
+            raise HTTPException(status_code=404, detail="Device not found")
+
+        ip = device.get("tailscale_ip")
+        port = device.get("adb_port")
+        if ip and port:
+            target = f"{ip}:{port}"
+            try:
+                logger.info("ADB disconnecting %s on device unregister", target)
+                await adb_run("disconnect", target)
+            except Exception:
+                logger.warning("Failed to disconnect %s on device unregister", target)
+
+        logger.info("Device unregistered: %s", device_id)
+        return {"status": "ok", "device_id": device_id}
+    exported["delete_device"] = delete_device
 
     return exported
