@@ -118,9 +118,9 @@ def _builtin_agent_capabilities() -> list[AgentCapability]:
     return [
         AgentCapability(
             name="steward",
-            role="负责手机端数据收集-存储-分析这一类特殊任务（Collect/Store/Analyze/Execute）",
-            strengths=["手机端数据采集与执行动作"],
-            typical_tasks=["整理今日待办并决定是否执行手机操作", "采集微信信息后入库并生成建议"],
+            role="完成手机端APP任务，负责手机端APP控制，手机端数据收集-存储-分析等任务（Collect/Store/Analyze/Execute）",
+            strengths=["手机端数据采集与执行动作，手机端APP控制，手机端APP任务执行"],
+            typical_tasks=["整理今日待办并决定是否执行手机操作", "采集微信信息后入库并生成建议", "帮我用淘宝购买某个商品", "帮我饿了么点一杯蜜雪冰城的奶茶"],
             boundaries=["不擅长大规模网页/论文检索,不擅长直接生成总结内容", "通用检索类子任务建议委派给 worker"],
         ),
         AgentCapability(
