@@ -36,8 +36,10 @@ from ..tools import (
     read_xlsx_summary,
     run_shell_command,
     run_skill_script,
+    schedule_feishu_meeting,
     search_steward_knowledge,
     search_task_history,
+    send_feishu_meeting_card,
     set_pptx_text_style,
     update_long_term_memory,
     write_text_file,
@@ -174,6 +176,22 @@ def create_worker_agent(
     )
 
     toolkit.register_tool_function(
+        schedule_feishu_meeting,
+        func_description=(
+            "按显式参数预约飞书会议，返回会议链接、会议号、密码等结构化信息。"
+            "start_time 必须为 YYYY-MM-DD HH:MM。"
+        ),
+    )
+
+    toolkit.register_tool_function(
+        send_feishu_meeting_card,
+        func_description=(
+            "将已创建的会议信息以 interactive 卡片发送到飞书会话。"
+            "群聊请传 receive_id_type=chat_id 且 receive_id=chat_id。"
+        ),
+    )
+
+    toolkit.register_tool_function(
         read_pptx_summary,
         func_description="读取 PPTX/PPT 文件，返回每张幻灯片的标题、正文文本、备注、形状数量和图片数量的结构化摘要。",
     )
@@ -233,7 +251,9 @@ def create_worker_agent(
 - 需要输出文件时，可用 "write_text_file" 落盘。
 - 如果用户询问之前智能管家从手机中提取并存储的知识，使用 "search_steward_knowledge" 检索。
 - 如果用户要求总结飞书群聊历史或按消息 ID 查询，请使用飞书历史消息工具。
+- 如果用户要求“预约飞书会议/创建会议链接并发群”，先调用 "schedule_feishu_meeting" 创建会议，再调用 "send_feishu_meeting_card" 发送卡片。
 - 如果消息中包含 [Feishu Context]，调用飞书历史工具时必须优先使用其中的 chat_id/open_id/message_id，不得猜测或改写。
+- 如果消息中包含 [Feishu Context] 且要发会议卡片，必须优先使用其中 chat_id 作为 receive_id。
 - 若 [Feishu Context] 缺少必需 ID，应先明确指出缺失项并向用户索取，不要编造参数。
 - 输出格式遵循用户要求；未指定时默认使用 Markdown。
 - 必须输出最终文本结论或可执行结果；不要输出空的工具调用。

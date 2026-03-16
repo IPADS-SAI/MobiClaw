@@ -664,3 +664,354 @@ def get_feishu_message(message_id: str) -> ToolResponse:
             content=[TextBlock(type="text", text=f"[Feishu] 读取消息异常: {exc}")],
             metadata={"error": str(exc)},
         )
+
+
+def _format_local_time(dt: datetime) -> str:
+    """格式化本地时间为可读文本。"""
+    return dt.astimezone().strftime("%Y-%m-%d %H:%M")
+
+
+def _build_feishu_meeting_card_payload(
+    *,
+    topic: str,
+    start_at: datetime,
+    end_at: datetime,
+    join_url: str,
+    meeting_no: str,
+    password: str,
+) -> dict[str, Any]:
+    """构造飞书简版会议卡片。"""
+    fields = [
+        {
+            "is_short": False,
+            "text": {"tag": "lark_md", "content": f"**开始时间**\n{_format_local_time(start_at)}"},
+        },
+        {
+            "is_short": False,
+            "text": {"tag": "lark_md", "content": f"**结束时间**\n{_format_local_time(end_at)}"},
+        },
+    ]
+    if meeting_no:
+        fields.append(
+            {
+                "is_short": True,
+                "text": {"tag": "lark_md", "content": f"**会议号**\n{meeting_no}"},
+            }
+        )
+    if password:
+        fields.append(
+            {
+                "is_short": True,
+                "text": {"tag": "lark_md", "content": f"**密码**\n{password}"},
+            }
+        )
+
+    return {
+        "config": {"wide_screen_mode": True, "enable_forward": True},
+        "header": {
+            "template": "blue",
+            "title": {"tag": "plain_text", "content": f"已预约会议：{topic}"},
+        },
+        "elements": [
+            {"tag": "div", "fields": fields},
+            {
+                "tag": "action",
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "加入会议"},
+                        "type": "primary",
+                        "url": join_url,
+                    }
+                ],
+            },
+        ],
+    }
+
+
+def _send_feishu_message_by_receive_id(
+    *,
+    token: str,
+    receive_id: str,
+    receive_id_type: str,
+    msg_type: str,
+    content_payload: dict[str, Any],
+) -> requests.Response:
+    """按 receive_id 发送飞书消息。"""
+    content = json.dumps(content_payload, ensure_ascii=False)
+    return requests.post(
+        f"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type={receive_id_type}",
+        headers=_headers(token),
+        json={"receive_id": receive_id, "msg_type": msg_type, "content": content},
+        timeout=_timeout_s(),
+    )
+
+
+def _is_supported_receive_id_type(receive_id_type: str) -> bool:
+    return (receive_id_type or "").strip().lower() in {"chat_id", "open_id", "union_id", "user_id"}
+
+
+def _parse_local_datetime(start_time: str) -> datetime | None:
+    """Parse local datetime string in YYYY-MM-DD HH:MM format."""
+    try:
+        return datetime.strptime((start_time or "").strip(), "%Y-%m-%d %H:%M").astimezone()
+    except ValueError:
+        return None
+
+
+def schedule_feishu_meeting(
+    topic: str,
+    start_time: str,
+    duration_minutes: int = 60,
+    owner_open_id: str = "",
+    user_id_type: str = "open_id",
+) -> ToolResponse:
+    """按显式时间参数预约飞书会议。
+
+    Args:
+        topic: 会议主题。
+        start_time: 开始时间（格式 YYYY-MM-DD HH:MM）。
+        duration_minutes: 会议时长（分钟），默认 60。
+        owner_open_id: 可选，指定会议 owner 的 open_id。
+        user_id_type: user_id 类型，默认 open_id。
+    """
+    normalized_topic = (topic or "").strip() or "飞书会议"
+    normalized_user_id_type = (user_id_type or "open_id").strip() or "open_id"
+
+    try:
+        duration = int(duration_minutes)
+    except (TypeError, ValueError):
+        duration = 60
+    duration = max(15, min(duration, 480))
+
+    start_at = _parse_local_datetime(start_time)
+    if start_at is None:
+        return ToolResponse(
+            content=[TextBlock(type="text", text="[Feishu] 预约会议失败: start_time 格式需为 YYYY-MM-DD HH:MM")],
+            metadata={"error": "invalid_start_time", "start_time": start_time, "topic": normalized_topic},
+        )
+    end_at = start_at + timedelta(minutes=duration)
+
+    body: dict[str, Any] = {
+        "end_time": str(int(end_at.timestamp())),
+        "meeting_settings": {"topic": normalized_topic},
+    }
+    owner = (owner_open_id or "").strip()
+    if owner:
+        body["owner_id"] = owner
+
+    try:
+        token = _get_tenant_token()
+        resp = requests.post(
+            f"https://open.feishu.cn/open-apis/vc/v1/reserves/apply?user_id_type={normalized_user_id_type}",
+            headers=_headers(token),
+            json=body,
+            timeout=_timeout_s(),
+        )
+        payload = _parse_response_payload(resp)
+        http_status = int(resp.status_code)
+
+        if http_status >= 400:
+            return ToolResponse(
+                content=[
+                    TextBlock(
+                        type="text",
+                        text=f"[Feishu] 预约会议失败: http_status={http_status}, payload={json.dumps(payload, ensure_ascii=False)}",
+                    )
+                ],
+                metadata={
+                    "error": "http_error",
+                    "http_status": http_status,
+                    "payload": payload,
+                    "topic": normalized_topic,
+                    "start_time": start_time,
+                },
+            )
+
+        if payload.get("code") != 0:
+            return ToolResponse(
+                content=[
+                    TextBlock(
+                        type="text",
+                        text=f"[Feishu] 预约会议失败: http_status={http_status}, payload={json.dumps(payload, ensure_ascii=False)}",
+                    )
+                ],
+                metadata={
+                    "error": "api_error",
+                    "http_status": http_status,
+                    "payload": payload,
+                    "topic": normalized_topic,
+                    "start_time": start_time,
+                },
+            )
+
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        reserve = data.get("reserve") if isinstance(data.get("reserve"), dict) else {}
+        result = {
+            "reserve_id": str(reserve.get("id") or "").strip(),
+            "meeting_url": str(reserve.get("url") or "").strip(),
+            "meeting_no": str(reserve.get("meeting_no") or "").strip(),
+            "password": str(reserve.get("password") or "").strip(),
+            "app_link": str(reserve.get("app_link") or "").strip(),
+            "topic": normalized_topic,
+            "start_time": _format_local_time(start_at),
+            "end_time": _format_local_time(end_at),
+            "start_time_epoch_s": int(start_at.timestamp()),
+            "end_time_epoch_s": int(end_at.timestamp()),
+            "duration_minutes": duration,
+        }
+        return ToolResponse(
+            content=[
+                TextBlock(
+                    type="text",
+                    text=(
+                        f"[Feishu] 会议预约成功：{normalized_topic}"
+                        f"\n时间：{result['start_time']} - {result['end_time']}"
+                        f"\n入会链接：{result['meeting_url'] or '(empty)'}"
+                    ),
+                )
+            ],
+            metadata={"meeting": result, "http_status": http_status, "payload": payload},
+        )
+    except requests.RequestException as exc:
+        resp = getattr(exc, "response", None)
+        payload = _parse_response_payload(resp) if isinstance(resp, requests.Response) else {}
+        http_status = int(resp.status_code) if isinstance(resp, requests.Response) else None
+        return ToolResponse(
+            content=[
+                TextBlock(
+                    type="text",
+                    text=f"[Feishu] 预约会议异常: http_status={http_status}, error={exc}, payload={json.dumps(payload, ensure_ascii=False)}",
+                )
+            ],
+            metadata={"error": str(exc), "http_status": http_status, "payload": payload},
+        )
+    except Exception as exc:
+        return ToolResponse(
+            content=[TextBlock(type="text", text=f"[Feishu] 预约会议异常: {exc}")],
+            metadata={"error": str(exc)},
+        )
+
+
+def send_feishu_meeting_card(
+    receive_id: str,
+    topic: str,
+    start_time: str,
+    end_time: str,
+    meeting_url: str,
+    meeting_no: str = "",
+    password: str = "",
+    receive_id_type: str = "chat_id",
+) -> ToolResponse:
+    """发送飞书会议卡片消息。
+
+    Args:
+        receive_id: 飞书接收方 ID（群聊常用 chat_id）。
+        topic: 会议主题。
+        start_time: 开始时间（格式 YYYY-MM-DD HH:MM）。
+        end_time: 结束时间（格式 YYYY-MM-DD HH:MM）。
+        meeting_url: 入会链接。
+        meeting_no: 可选，会议号。
+        password: 可选，会议密码。
+        receive_id_type: 接收方类型，默认 chat_id。
+    """
+    rid = (receive_id or "").strip()
+    if not rid:
+        return ToolResponse(
+            content=[TextBlock(type="text", text="[Feishu] 发送会议卡片失败: receive_id 不能为空")],
+            metadata={"error": "receive_id_empty"},
+        )
+    if not _is_supported_receive_id_type(receive_id_type):
+        return ToolResponse(
+            content=[TextBlock(type="text", text="[Feishu] 发送会议卡片失败: receive_id_type 无效")],
+            metadata={"error": "invalid_receive_id_type", "receive_id_type": receive_id_type},
+        )
+    if not (meeting_url or "").strip():
+        return ToolResponse(
+            content=[TextBlock(type="text", text="[Feishu] 发送会议卡片失败: meeting_url 不能为空")],
+            metadata={"error": "meeting_url_empty"},
+        )
+
+    start_dt = _parse_local_datetime(start_time)
+    end_dt = _parse_local_datetime(end_time)
+    if start_dt is None or end_dt is None:
+        return ToolResponse(
+            content=[TextBlock(type="text", text="[Feishu] 发送会议卡片失败: start_time/end_time 格式需为 YYYY-MM-DD HH:MM")],
+            metadata={"error": "invalid_time_format", "start_time": start_time, "end_time": end_time},
+        )
+    if end_dt <= start_dt:
+        return ToolResponse(
+            content=[TextBlock(type="text", text="[Feishu] 发送会议卡片失败: end_time 必须晚于 start_time")],
+            metadata={"error": "invalid_time_range", "start_time": start_time, "end_time": end_time},
+        )
+
+    try:
+        token = _get_tenant_token()
+        card_payload = _build_feishu_meeting_card_payload(
+            topic=(topic or "飞书会议").strip() or "飞书会议",
+            start_at=start_dt,
+            end_at=end_dt,
+            join_url=(meeting_url or "").strip(),
+            meeting_no=(meeting_no or "").strip(),
+            password=(password or "").strip(),
+        )
+        resp = _send_feishu_message_by_receive_id(
+            token=token,
+            receive_id=rid,
+            receive_id_type=(receive_id_type or "chat_id").strip(),
+            msg_type="interactive",
+            content_payload=card_payload,
+        )
+        payload = _parse_response_payload(resp)
+        http_status = int(resp.status_code)
+
+        if http_status >= 400:
+            return ToolResponse(
+                content=[
+                    TextBlock(
+                        type="text",
+                        text=f"[Feishu] 发送会议卡片失败: http_status={http_status}, payload={json.dumps(payload, ensure_ascii=False)}",
+                    )
+                ],
+                metadata={"error": "http_error", "http_status": http_status, "payload": payload},
+            )
+
+        if payload.get("code") != 0:
+            return ToolResponse(
+                content=[
+                    TextBlock(
+                        type="text",
+                        text=f"[Feishu] 发送会议卡片失败: http_status={http_status}, payload={json.dumps(payload, ensure_ascii=False)}",
+                    )
+                ],
+                metadata={"error": "api_error", "http_status": http_status, "payload": payload},
+            )
+
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        return ToolResponse(
+            content=[TextBlock(type="text", text="[Feishu] 会议卡片发送成功")],
+            metadata={
+                "ok": True,
+                "http_status": http_status,
+                "payload": payload,
+                "message_id": data.get("message_id"),
+            },
+        )
+    except requests.RequestException as exc:
+        resp = getattr(exc, "response", None)
+        payload = _parse_response_payload(resp) if isinstance(resp, requests.Response) else {}
+        http_status = int(resp.status_code) if isinstance(resp, requests.Response) else None
+        return ToolResponse(
+            content=[
+                TextBlock(
+                    type="text",
+                    text=f"[Feishu] 发送会议卡片异常: http_status={http_status}, error={exc}, payload={json.dumps(payload, ensure_ascii=False)}",
+                )
+            ],
+            metadata={"error": str(exc), "http_status": http_status, "payload": payload},
+        )
+    except Exception as exc:
+        return ToolResponse(
+            content=[TextBlock(type="text", text=f"[Feishu] 发送会议卡片异常: {exc}")],
+            metadata={"error": str(exc)},
+        )

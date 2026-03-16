@@ -29,8 +29,10 @@ from ..tools import (
     read_xlsx_summary,
     run_shell_command,
     run_skill_script,
+    schedule_feishu_meeting,
     search_steward_knowledge,
     search_task_history,
+    send_feishu_meeting_card,
     set_pptx_text_style,
     store_steward_knowledge,
     update_long_term_memory,
@@ -68,6 +70,8 @@ def _tool_catalog() -> dict[str, tuple[Any, str]]:
         "store_steward_knowledge": (store_steward_knowledge, "将收集到的信息存入本地知识库。"),
         "fetch_feishu_chat_history": (fetch_feishu_chat_history, "读取飞书会话历史消息列表。"),
         "get_feishu_message": (get_feishu_message, "按消息 ID 获取飞书消息详情。"),
+        "schedule_feishu_meeting": (schedule_feishu_meeting, "按显式时间参数预约飞书会议并返回会议链接信息。"),
+        "send_feishu_meeting_card": (send_feishu_meeting_card, "将会议信息以卡片形式发送到飞书会话。"),
         "update_long_term_memory": (update_long_term_memory, "更新长期记忆文件（MEMORY.md）。"),
         "read_pptx_summary": (read_pptx_summary, "读取 PPTX/PPT 文件并返回结构化摘要。"),
         "create_pptx_from_outline": (create_pptx_from_outline, "从幻灯片大纲列表创建新 PPTX 文件。"),
@@ -86,7 +90,7 @@ def _builtin_agent_capabilities() -> list[AgentCapability]:
         worker_role += "、长期记忆管理"
     if SCHEDULE_CONFIG["enabled"]:
         worker_role += "、定时任务管理"
-    worker_role += "，飞书相关的聊天历史检索（使用飞书连接时）"
+    worker_role += "，飞书相关的聊天历史检索与会议预约卡片发送（使用飞书连接时）"
 
     worker_strengths = [
         "Brave/网页/arXiv/DBLP 检索",
