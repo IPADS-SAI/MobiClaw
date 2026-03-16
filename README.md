@@ -406,7 +406,7 @@ python -m mobiclaw.gateway_server
 推荐优先运行根项目自身测试：
 
 ```bash
-python -m pytest tests
+pytest tests -s -q
 ```
 
 ### 7) 致谢
