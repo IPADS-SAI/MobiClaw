@@ -162,6 +162,8 @@ def create_worker_agent(
         fetch_feishu_chat_history,
         func_description=(
             "读取飞书会话历史消息列表。"
+            "output_file_dir 必须传本次任务临时目录（例如 outputs/job_xxx/tmp），用于下载历史附件；"
+            "download_files/download_images 控制是否下载历史文件或图片，默认 false；"
             "chat_id 必须传真实会话/用户 ID（如 oc_... 或 ou_...），不能传 auto；"
             "container_id_type 可选 auto/chat/user，默认 auto；"
             "history_range 可选 today/yesterday/7d/all，默认 today；"
@@ -253,6 +255,7 @@ def create_worker_agent(
 - 如果用户要求总结飞书群聊历史或按消息 ID 查询，请使用飞书历史消息工具。
 - 如果用户要求“预约飞书会议/创建会议链接并发群”，先调用 "schedule_feishu_meeting" 创建会议，再调用 "send_feishu_meeting_card" 发送卡片。
 - 如果消息中包含 [Feishu Context]，调用飞书历史工具时必须优先使用其中的 chat_id/open_id/message_id，不得猜测或改写。
+- 调用 "fetch_feishu_chat_history" 时，必须显式传入 output_file_dir（本次任务临时目录）。
 - 如果消息中包含 [Feishu Context] 且要发会议卡片，必须优先使用其中 chat_id 作为 receive_id。
 - 若 [Feishu Context] 缺少必需 ID，应先明确指出缺失项并向用户索取，不要编造参数。
 - 输出格式遵循用户要求；未指定时默认使用 Markdown。
