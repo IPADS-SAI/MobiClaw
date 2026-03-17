@@ -41,6 +41,7 @@ write_xlsx_from_rows = office.write_xlsx_from_rows
 extract_image_text_ocr = ocr.extract_image_text_ocr
 fetch_feishu_chat_history = feishu.fetch_feishu_chat_history
 get_feishu_message = feishu.get_feishu_message
+read_feishu_docx_link = feishu.read_feishu_docx_link
 schedule_feishu_meeting = feishu.schedule_feishu_meeting
 send_feishu_meeting_card = feishu.send_feishu_meeting_card
 
@@ -67,6 +68,7 @@ __all__ = [
     "extract_image_text_ocr",
     "fetch_feishu_chat_history",
     "get_feishu_message",
+    "read_feishu_docx_link",
     "schedule_feishu_meeting",
     "send_feishu_meeting_card",
 ]
