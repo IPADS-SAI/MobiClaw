@@ -54,6 +54,7 @@ _WORKER_CORE_TOOLS = {
     "search_steward_knowledge",
     "fetch_feishu_chat_history",
     "get_feishu_message",
+    "read_feishu_docx_link",
     "schedule_feishu_meeting",
     "send_feishu_meeting_card",
     "read_pptx_summary",
