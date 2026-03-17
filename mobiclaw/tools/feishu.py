@@ -903,14 +903,60 @@ def _extract_docx_token_from_url(doc_url: str) -> str:
     return str(matched.group(1) or "").strip()
 
 
+def _extract_wiki_token_from_url(doc_url: str) -> str:
+    """从飞书 Wiki 链接中提取 token。"""
+    raw = (doc_url or "").strip()
+    matched = re.search(r"https://[^\s]+/wiki/([A-Za-z0-9_-]+)", raw)
+    if not matched:
+        return ""
+    return str(matched.group(1) or "").strip()
+
+
 def _is_supported_docx_url(doc_url: str) -> bool:
-    """校验是否为支持的飞书 Docx 链接。"""
+    """校验是否为支持的飞书云文档链接（Docx/Wiki）。"""
     raw = (doc_url or "").strip()
     if not raw.startswith("https://"):
         return False
-    if ".feishu.cn/docx/" not in raw and ".larksuite.com/docx/" not in raw:
+    if ".feishu.cn/" not in raw and ".larksuite.com/" not in raw:
         return False
-    return bool(_extract_docx_token_from_url(raw))
+    if _extract_docx_token_from_url(raw):
+        return True
+    return bool(_extract_wiki_token_from_url(raw))
+
+
+def _resolve_docx_token_from_wiki_url(doc_url: str, token: str) -> tuple[str, str, dict[str, Any], int, str]:
+    """将 wiki 链接解析为 docx token。"""
+    wiki_token = _extract_wiki_token_from_url(doc_url)
+    if not wiki_token:
+        return "", "", {}, 400, "invalid_wiki_url"
+
+    resp = requests.get(
+        "https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node",
+        headers=_headers(token),
+        params={"token": wiki_token},
+        timeout=_timeout_s(),
+    )
+    payload = _parse_response_payload(resp)
+    http_status = int(resp.status_code)
+
+    if http_status >= 400:
+        error = "forbidden" if http_status == 403 else "not_found" if http_status == 404 else "http_error"
+        return "", "", payload, http_status, error
+
+    if payload.get("code") != 0:
+        return "", "", payload, http_status, "api_error"
+
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    node = data.get("node") if isinstance(data.get("node"), dict) else {}
+    obj_type = str(node.get("obj_type") or data.get("obj_type") or "").strip().lower()
+    obj_token = str(node.get("obj_token") or data.get("obj_token") or "").strip()
+    title = str(node.get("title") or data.get("title") or "").strip()
+
+    if obj_type and obj_type != "docx":
+        return "", title, payload, http_status, "unsupported_wiki_obj_type"
+    if not obj_token:
+        return "", title, payload, http_status, "invalid_wiki_node"
+    return obj_token, title, payload, http_status, ""
 
 
 def _collect_text_fragments(value: Any) -> list[str]:
@@ -1006,10 +1052,10 @@ def read_feishu_docx_link(
     max_length: int = 120000,
     include_links: bool = True,
 ) -> ToolResponse:
-    """读取飞书 Docx 云文档并返回纯文本内容。
+    """读取飞书云文档链接（Docx/Wiki）并返回纯文本内容。
 
     Args:
-        doc_url: 飞书 Docx 链接（例如 https://xxx.feishu.cn/docx/xxxxxxxxx）。
+        doc_url: 飞书 Docx/Wiki 链接。
         max_length: 返回文本最大长度，超出会截断并标记 truncated。
         include_links: 是否在 metadata 中提取正文内 URL 列表。
     """
@@ -1024,23 +1070,53 @@ def read_feishu_docx_link(
             content=[
                 TextBlock(
                     type="text",
-                    text="[Feishu] 参数校验失败: 仅支持 https://*.feishu.cn/docx/... 或 https://*.larksuite.com/docx/... 链接",
+                    text="[Feishu] 参数校验失败: 仅支持 https://*.feishu.cn/docx|wiki/... 或 https://*.larksuite.com/docx|wiki/... 链接",
                 )
             ],
             metadata={"error": "unsupported_doc_url", "doc_url": raw_url},
-        )
-
-    doc_token = _extract_docx_token_from_url(raw_url)
-    if not doc_token:
-        return ToolResponse(
-            content=[TextBlock(type="text", text="[Feishu] 参数校验失败: 无法从 doc_url 提取 doc_token")],
-            metadata={"error": "invalid_doc_url", "doc_url": raw_url},
         )
 
     max_text_len = max(1000, min(int(max_length or 120000), 300000))
 
     try:
         token = _get_tenant_token()
+        wiki_token = _extract_wiki_token_from_url(raw_url)
+        source_type = "wiki" if wiki_token else "docx"
+        source_title = ""
+        source_payload: dict[str, Any] = {}
+        doc_token = _extract_docx_token_from_url(raw_url)
+
+        if wiki_token and not doc_token:
+            (
+                doc_token,
+                source_title,
+                source_payload,
+                source_http_status,
+                source_error,
+            ) = _resolve_docx_token_from_wiki_url(raw_url, token)
+            if source_error:
+                text = (
+                    f"[Feishu] 解析 Wiki 失败: http_status={source_http_status}, "
+                    f"error={source_error}, payload={json.dumps(source_payload, ensure_ascii=False)}"
+                )
+                return ToolResponse(
+                    content=[TextBlock(type="text", text=text)],
+                    metadata={
+                        "error": source_error,
+                        "http_status": source_http_status,
+                        "payload": source_payload,
+                        "doc_url": raw_url,
+                        "wiki_token": wiki_token,
+                        "source_type": source_type,
+                    },
+                )
+
+        if not doc_token:
+            return ToolResponse(
+                content=[TextBlock(type="text", text="[Feishu] 参数校验失败: 无法从 doc_url 提取 doc_token")],
+                metadata={"error": "invalid_doc_url", "doc_url": raw_url, "source_type": source_type},
+            )
+
         encoded_token = quote(doc_token, safe="")
         resp = requests.get(
             f"https://open.feishu.cn/open-apis/docx/v1/documents/{encoded_token}/raw_content",
@@ -1065,6 +1141,8 @@ def read_feishu_docx_link(
                     "payload": payload,
                     "doc_url": raw_url,
                     "doc_token": doc_token,
+                    "wiki_token": wiki_token,
+                    "source_type": source_type,
                 },
             )
 
@@ -1082,10 +1160,14 @@ def read_feishu_docx_link(
                     "payload": payload,
                     "doc_url": raw_url,
                     "doc_token": doc_token,
+                    "wiki_token": wiki_token,
+                    "source_type": source_type,
                 },
             )
 
         text, title = _normalize_docx_text(payload)
+        if not title and source_title:
+            title = source_title
         trimmed_text, truncated = _trim_text(text, max_text_len)
         links = _extract_links_from_text(trimmed_text) if include_links else []
 
@@ -1098,9 +1180,11 @@ def read_feishu_docx_link(
                     "payload": payload,
                     "doc_url": raw_url,
                     "doc_token": doc_token,
+                    "wiki_token": wiki_token,
                     "title": title,
                     "truncated": False,
                     "links": links,
+                    "source_type": source_type,
                 },
             )
 
@@ -1114,6 +1198,7 @@ def read_feishu_docx_link(
             metadata={
                 "doc_url": raw_url,
                 "doc_token": doc_token,
+                "wiki_token": wiki_token,
                 "title": title,
                 "text": trimmed_text,
                 "text_length": len(trimmed_text),
@@ -1121,6 +1206,8 @@ def read_feishu_docx_link(
                 "links": links,
                 "http_status": http_status,
                 "payload": payload,
+                "source_type": source_type,
+                "source_payload": source_payload,
             },
         )
     except requests.RequestException as exc:
@@ -1141,6 +1228,7 @@ def read_feishu_docx_link(
                 "payload": payload,
                 "doc_url": raw_url,
                 "doc_token": doc_token,
+                "wiki_token": wiki_token,
             },
         )
     except Exception as exc:

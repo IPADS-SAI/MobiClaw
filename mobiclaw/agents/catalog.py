@@ -71,7 +71,7 @@ def _tool_catalog() -> dict[str, tuple[Any, str]]:
         "store_steward_knowledge": (store_steward_knowledge, "将收集到的信息存入本地知识库。"),
         "fetch_feishu_chat_history": (fetch_feishu_chat_history, "读取飞书会话历史消息列表。"),
         "get_feishu_message": (get_feishu_message, "按消息 ID 获取飞书消息详情。"),
-        "read_feishu_docx_link": (read_feishu_docx_link, "读取飞书 Docx 云文档链接并返回正文文本。"),
+        "read_feishu_docx_link": (read_feishu_docx_link, "读取飞书 Docx/Wiki 云文档链接并返回正文文本。"),
         "schedule_feishu_meeting": (schedule_feishu_meeting, "按显式时间参数预约飞书会议并返回会议链接信息。"),
         "send_feishu_meeting_card": (send_feishu_meeting_card, "将会议信息以卡片形式发送到飞书会话。"),
         "update_long_term_memory": (update_long_term_memory, "更新长期记忆文件（MEMORY.md）。"),

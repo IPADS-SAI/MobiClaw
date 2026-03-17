@@ -150,3 +150,77 @@ def test_read_feishu_docx_link_request_exception(monkeypatch) -> None:
 
     result = read_feishu_docx_link("https://ncnq5si21nqm.feishu.cn/docx/NqbjdxRz4o147qxm1WycRmDCnze")
     assert result.metadata.get("error") == "request_exception"
+
+
+def test_read_feishu_docx_link_wiki_success(monkeypatch) -> None:
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_xxx")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret_xxx")
+
+    def _fake_post(url: str, **kwargs):  # noqa: ANN003, ANN201
+        if "tenant_access_token" in url:
+            return _DummyResp(200, {"code": 0, "tenant_access_token": "t-1"})
+        raise AssertionError(f"unexpected url: {url}")
+
+    def _fake_get(url: str, **kwargs):  # noqa: ANN003, ANN201
+        if "wiki/v2/spaces/get_node" in url:
+            return _DummyResp(
+                200,
+                {
+                    "code": 0,
+                    "data": {
+                        "node": {
+                            "obj_type": "docx",
+                            "obj_token": "NqbjdxRz4o147qxm1WycRmDCnze",
+                            "title": "Wiki 页面标题",
+                        }
+                    },
+                },
+            )
+        if "docx/v1/documents" in url:
+            return _DummyResp(200, {"code": 0, "data": {"content": "wiki正文"}})
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr("mobiclaw.tools.feishu.requests.post", _fake_post)
+    monkeypatch.setattr("mobiclaw.tools.feishu.requests.get", _fake_get)
+
+    result = read_feishu_docx_link(
+        "https://ncnq5si21nqm.feishu.cn/wiki/Tv9uwcLeiimOZDkTRmVcp06cnGS?fromScene=spaceOverview"
+    )
+
+    assert result.metadata.get("source_type") == "wiki"
+    assert result.metadata.get("wiki_token") == "Tv9uwcLeiimOZDkTRmVcp06cnGS"
+    assert result.metadata.get("doc_token") == "NqbjdxRz4o147qxm1WycRmDCnze"
+    assert "wiki正文" in str(result.metadata.get("text") or "")
+
+
+def test_read_feishu_docx_link_wiki_non_docx_unsupported(monkeypatch) -> None:
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_xxx")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret_xxx")
+
+    def _fake_post(url: str, **kwargs):  # noqa: ANN003, ANN201
+        if "tenant_access_token" in url:
+            return _DummyResp(200, {"code": 0, "tenant_access_token": "t-1"})
+        raise AssertionError(f"unexpected url: {url}")
+
+    def _fake_get(url: str, **kwargs):  # noqa: ANN003, ANN201
+        if "wiki/v2/spaces/get_node" in url:
+            return _DummyResp(
+                200,
+                {
+                    "code": 0,
+                    "data": {
+                        "node": {
+                            "obj_type": "sheet",
+                            "obj_token": "shtcn_xxx",
+                            "title": "Wiki 指向表格",
+                        }
+                    },
+                },
+            )
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr("mobiclaw.tools.feishu.requests.post", _fake_post)
+    monkeypatch.setattr("mobiclaw.tools.feishu.requests.get", _fake_get)
+
+    result = read_feishu_docx_link("https://ncnq5si21nqm.feishu.cn/wiki/Tv9uwcLeiimOZDkTRmVcp06cnGS")
+    assert result.metadata.get("error") == "unsupported_wiki_obj_type"
