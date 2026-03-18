@@ -1,7 +1,23 @@
 """MobiClaw CLI root."""
+import asyncio
+
 import click
 
-from .config import register_config_commands
+from .config import load_cli_config, register_config_commands
+from .http_client import GatewayClient
+from .output import render
+
+
+def resolve_config(ctx: click.Context) -> dict:
+    """Merge ctx.obj overrides with load_cli_config(). Priority: ctx.obj > config file > defaults."""
+    ctx.ensure_object(dict)
+    file_cfg = load_cli_config()
+    return {
+        "server_url": ctx.obj.get("server_url") or file_cfg.get("server_url") or "http://localhost:8090",
+        "api_key": ctx.obj.get("api_key") or file_cfg.get("api_key") or "",
+        "output_fmt": ctx.obj.get("output_fmt") or file_cfg.get("default_output") or "table",
+        "verbose": ctx.obj.get("verbose", False),
+    }
 
 
 @click.group()
@@ -22,6 +38,10 @@ register_config_commands(cli)
 
 
 @cli.command()
-def health():
+@click.pass_context
+def health(ctx):
     """Health check."""
-    click.echo("health (placeholder)")
+    cfg = resolve_config(ctx)
+    client = GatewayClient(cfg["server_url"], cfg["api_key"])
+    result = asyncio.run(client.health())
+    render(result, cfg.get("output_fmt", "table"))
