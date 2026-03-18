@@ -9,6 +9,11 @@ from typing import Any
 import click
 import httpx
 
+try:
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+except ImportError:
+    Progress = None
+
 
 class GatewayClient:
     def __init__(
@@ -214,6 +219,48 @@ class GatewayClient:
                     "Cannot connect to gateway server, check server_url"
                 )
 
+    async def download_file(
+        self, job_id: str, file_name: str, output_path: Path
+    ) -> None:
+        """Stream GET /api/v1/files/{job_id}/{file_name} to output_path with progress bar."""
+        url = f"{self.base_url}/api/v1/files/{job_id}/{file_name}"
+        async with self._client() as client:
+            try:
+                async with client.stream(
+                    "GET", url, headers=self._headers()
+                ) as response:
+                    response.raise_for_status()
+                    total = response.headers.get("content-length")
+                    total_int = int(total) if total else None
+
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(output_path, "wb") as f:
+                        if Progress is not None and total_int is not None:
+                            with Progress(
+                                SpinnerColumn(),
+                                TextColumn("[progress.description]{task.description}"),
+                                *Progress.get_default_columns(),
+                                transient=True,
+                            ) as progress:
+                                task = progress.add_task(
+                                    f"Downloading {file_name}",
+                                    total=total_int,
+                                )
+                                async for chunk in response.aiter_bytes():
+                                    f.write(chunk)
+                                    progress.update(task, advance=len(chunk))
+                        else:
+                            async for chunk in response.aiter_bytes():
+                                f.write(chunk)
+            except httpx.HTTPStatusError as e:
+                raise click.ClickException(
+                    f"HTTP {e.response.status_code}: {e.response.text}"
+                )
+            except httpx.ConnectError:
+                raise click.ClickException(
+                    "Cannot connect to gateway server, check server_url"
+                )
+
     async def list_sessions(self) -> dict[str, Any]:
         """GET /api/v1/chat/sessions. Returns {sessions: [...]}."""
         async with self._client() as client:
@@ -259,6 +306,205 @@ class GatewayClient:
             try:
                 r = await client.delete(
                     f"{self.base_url}/api/v1/chat/sessions/{context_id}",
+                    headers=self._headers(),
+                )
+                r.raise_for_status()
+                return r.json()
+            except httpx.HTTPStatusError as e:
+                raise click.ClickException(
+                    f"HTTP {e.response.status_code}: {e.response.text}"
+                )
+            except httpx.ConnectError:
+                raise click.ClickException(
+                    "Cannot connect to gateway server, check server_url"
+                )
+
+    async def list_devices(self) -> dict[str, Any]:
+        """GET /api/v1/devices. Returns {devices: [...], count: N}."""
+        async with self._client() as client:
+            try:
+                r = await client.get(
+                    f"{self.base_url}/api/v1/devices",
+                    headers=self._headers(),
+                )
+                r.raise_for_status()
+                return r.json()
+            except httpx.HTTPStatusError as e:
+                raise click.ClickException(
+                    f"HTTP {e.response.status_code}: {e.response.text}"
+                )
+            except httpx.ConnectError:
+                raise click.ClickException(
+                    "Cannot connect to gateway server, check server_url"
+                )
+
+    async def get_device(self, device_id: str) -> dict[str, Any]:
+        """GET /api/v1/devices/{id}. Returns device record."""
+        async with self._client() as client:
+            try:
+                r = await client.get(
+                    f"{self.base_url}/api/v1/devices/{device_id}",
+                    headers=self._headers(),
+                )
+                r.raise_for_status()
+                return r.json()
+            except httpx.HTTPStatusError as e:
+                raise click.ClickException(
+                    f"HTTP {e.response.status_code}: {e.response.text}"
+                )
+            except httpx.ConnectError:
+                raise click.ClickException(
+                    "Cannot connect to gateway server, check server_url"
+                )
+
+    async def device_heartbeat(
+        self,
+        device_id: str,
+        tailscale_ip: str | None = None,
+        adb_port: int | None = None,
+        device_name: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /api/v1/devices/heartbeat. Returns {status, device_id, timestamp}."""
+        body: dict[str, Any] = {"device_id": device_id}
+        if tailscale_ip is not None:
+            body["tailscale_ip"] = tailscale_ip
+        if adb_port is not None:
+            body["adb_port"] = adb_port
+        if device_name is not None:
+            body["device_name"] = device_name
+        async with self._client() as client:
+            try:
+                r = await client.post(
+                    f"{self.base_url}/api/v1/devices/heartbeat",
+                    json=body,
+                    headers=self._headers(),
+                )
+                r.raise_for_status()
+                return r.json()
+            except httpx.HTTPStatusError as e:
+                raise click.ClickException(
+                    f"HTTP {e.response.status_code}: {e.response.text}"
+                )
+            except httpx.ConnectError:
+                raise click.ClickException(
+                    "Cannot connect to gateway server, check server_url"
+                )
+
+    async def remove_device(self, device_id: str) -> dict[str, Any]:
+        """DELETE /api/v1/devices/{id}. Returns JSON."""
+        async with self._client() as client:
+            try:
+                r = await client.delete(
+                    f"{self.base_url}/api/v1/devices/{device_id}",
+                    headers=self._headers(),
+                )
+                r.raise_for_status()
+                return r.json()
+            except httpx.HTTPStatusError as e:
+                raise click.ClickException(
+                    f"HTTP {e.response.status_code}: {e.response.text}"
+                )
+            except httpx.ConnectError:
+                raise click.ClickException(
+                    "Cannot connect to gateway server, check server_url"
+                )
+
+    async def get_env(self) -> dict[str, Any]:
+        """GET /api/v1/env. Returns {path, content, variables}."""
+        async with self._client() as client:
+            try:
+                r = await client.get(
+                    f"{self.base_url}/api/v1/env",
+                    headers=self._headers(),
+                )
+                r.raise_for_status()
+                return r.json()
+            except httpx.HTTPStatusError as e:
+                raise click.ClickException(
+                    f"HTTP {e.response.status_code}: {e.response.text}"
+                )
+            except httpx.ConnectError:
+                raise click.ClickException(
+                    "Cannot connect to gateway server, check server_url"
+                )
+
+    async def get_env_schema(self) -> dict[str, Any]:
+        """GET /api/v1/env/schema. Returns {path, schema, values, unmanaged, variables, content}."""
+        async with self._client() as client:
+            try:
+                r = await client.get(
+                    f"{self.base_url}/api/v1/env/schema",
+                    headers=self._headers(),
+                )
+                r.raise_for_status()
+                return r.json()
+            except httpx.HTTPStatusError as e:
+                raise click.ClickException(
+                    f"HTTP {e.response.status_code}: {e.response.text}"
+                )
+            except httpx.ConnectError:
+                raise click.ClickException(
+                    "Cannot connect to gateway server, check server_url"
+                )
+
+    async def set_env_content(self, content: str) -> dict[str, Any]:
+        """PUT /api/v1/env with body {content}."""
+        async with self._client() as client:
+            try:
+                r = await client.put(
+                    f"{self.base_url}/api/v1/env",
+                    json={"content": content},
+                    headers=self._headers(),
+                )
+                r.raise_for_status()
+                return r.json()
+            except httpx.HTTPStatusError as e:
+                raise click.ClickException(
+                    f"HTTP {e.response.status_code}: {e.response.text}"
+                )
+            except httpx.ConnectError:
+                raise click.ClickException(
+                    "Cannot connect to gateway server, check server_url"
+                )
+
+    async def set_env_structured(
+        self,
+        values: dict[str, str],
+        unmanaged: dict[str, str] | None = None,
+        preserve_unmanaged: bool = True,
+    ) -> dict[str, Any]:
+        """PUT /api/v1/env/schema with body {values, unmanaged, preserve_unmanaged}."""
+        body: dict[str, Any] = {
+            "values": values,
+            "preserve_unmanaged": preserve_unmanaged,
+        }
+        if unmanaged is not None:
+            body["unmanaged"] = unmanaged
+        async with self._client() as client:
+            try:
+                r = await client.put(
+                    f"{self.base_url}/api/v1/env/schema",
+                    json=body,
+                    headers=self._headers(),
+                )
+                r.raise_for_status()
+                return r.json()
+            except httpx.HTTPStatusError as e:
+                raise click.ClickException(
+                    f"HTTP {e.response.status_code}: {e.response.text}"
+                )
+            except httpx.ConnectError:
+                raise click.ClickException(
+                    "Cannot connect to gateway server, check server_url"
+                )
+
+    async def send_feishu_event(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST /api/v1/feishu/events with JSON body."""
+        async with self._client() as client:
+            try:
+                r = await client.post(
+                    f"{self.base_url}/api/v1/feishu/events",
+                    json=payload,
                     headers=self._headers(),
                 )
                 r.raise_for_status()

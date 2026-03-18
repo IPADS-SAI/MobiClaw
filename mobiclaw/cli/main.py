@@ -4,6 +4,10 @@ import asyncio
 import click
 
 from .config import load_cli_config, register_config_commands, resolve_config
+from .device import register_device_commands
+from .env import register_env_commands
+from .feishu import register_feishu_commands
+from .file import register_file_commands
 from .http_client import GatewayClient
 from .mcp import register_mcp_commands
 from .output import render
@@ -31,6 +35,10 @@ register_task_commands(cli)
 register_mcp_commands(cli)
 register_schedule_commands(cli)
 register_session_commands(cli)
+register_env_commands(cli)
+register_device_commands(cli)
+register_file_commands(cli)
+register_feishu_commands(cli)
 
 
 @cli.command()
