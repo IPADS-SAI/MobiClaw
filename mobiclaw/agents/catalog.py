@@ -46,7 +46,7 @@ from .types import AgentCapability
 
 def _tool_catalog() -> dict[str, tuple[Any, str]]:
     """返回可供自定义 Agent 复用的工具目录。"""
-    return {
+    catalog = {
         "run_shell_command": (run_shell_command, "运行受限的本地命令行工具（白名单约束）。"),
         "run_skill_script": (run_skill_script, "在指定 execution_dir 中执行 skill 脚本。"),
         "brave_search": (brave_search, "通过 Brave Search API 联网检索新闻与网页来源链接。"),
@@ -82,6 +82,15 @@ def _tool_catalog() -> dict[str, tuple[Any, str]]:
         "set_pptx_text_style": (set_pptx_text_style, "对匹配文本应用 PPTX 字体样式。"),
     }
 
+    from ..mcp import get_mcp_manager
+
+    manager = get_mcp_manager()
+    if manager is not None:
+        for tool_func, description in manager.get_tool_functions():
+            catalog[tool_func.name] = (tool_func, description)
+
+    return catalog
+
 
 def _builtin_agent_capabilities() -> list[AgentCapability]:
     """返回路由可用的 Agent 能力描述字典。"""
@@ -107,6 +116,14 @@ def _builtin_agent_capabilities() -> list[AgentCapability]:
         worker_strengths.append("长期记忆读写（记录用户偏好、事实信息等跨会话信息）")
     if SCHEDULE_CONFIG["enabled"]:
         worker_strengths.append("定时任务管理（创建、查看、取消）")
+
+    from ..mcp import get_mcp_manager
+
+    manager = get_mcp_manager()
+    if manager is not None:
+        mcp_tool_names = manager.get_tool_names()
+        if mcp_tool_names:
+            worker_strengths.append(f"MCP 外部工具（{', '.join(mcp_tool_names[:5])}{'…' if len(mcp_tool_names) > 5 else ''}）")
 
     worker_typical_tasks = [
         "检索最新论文并总结",

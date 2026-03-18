@@ -116,7 +116,6 @@ export BRAVE_API_KEY='...'
 ```bash
 export OPENROUTER_MODEL='google/gemini-3-flash-preview'
 export OPENROUTER_BASE_URL='https://openrouter.ai/api/v1'
-export MOBI_AGENT_BASE_URL='http://localhost:8081'
 ```
 
 `app.py` 与 `mobiclaw/gateway_server/` 启动时都会自动读取根目录 `.env`，仅在环境变量尚未存在时补齐。
@@ -363,7 +362,7 @@ python -m mobiclaw.gateway_server
 - `MOBICLAW_ROUTING_MAX_DEPTH`：委派/路由最大深度（默认 `2`）
 - `MOBICLAW_ROUTER_TIMEOUT_S`：Router 决策超时秒数（默认 `60`，超时默认回退到 `worker`）
 - `MOBICLAW_PLANNER_TIMEOUT_S`：Planner 拆分超时秒数（默认 `60`，超时默认回退到 `worker`）
-- `MOBICLAW_SUBTASK_TIMEOUT_S`：单子任务执行超时秒数（默认 `300`）
+- `MOBICLAW_TOOL_TIMEOUT_S`：工具调用超时秒数（默认 `120`，超时返回 `[Tool Timeout]` 响应，由 Agent 自行决定重试或终止）
 - `MOBICLAW_SKILL_ENABLED`：是否启用 skill 自动选择（默认 `1`）
 - `MOBICLAW_SKILL_ROOT_DIR`：skill 根目录（默认 `mobiclaw/skills`）
 - `MOBICLAW_SKILL_MAX_PER_SUBTASK`：每个子任务最多挂载的 skill 数（默认 `2`）

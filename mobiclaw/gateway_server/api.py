@@ -17,6 +17,7 @@ from fastapi import File, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from .api_env import register_env_routes
+from ..mcp import get_mcp_manager
 from .models import DeviceHeartbeat
 
 logger = logging.getLogger(__name__)
@@ -452,7 +453,81 @@ def register_routes(app) -> None:
 
     register_env_routes(app, exported)
 
-    # ── Device management ──────────────────────────────────────────────
+    # -- MCP server management endpoints ------------------------------------
+
+    @app.get("/api/v1/mcp/servers")
+    async def list_mcp_servers(
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        manager = get_mcp_manager()
+        if manager is None:
+            return {"servers": [], "enabled": False}
+        return {"servers": manager.list_servers(), "enabled": True}
+
+    exported["list_mcp_servers"] = list_mcp_servers
+
+    @app.post("/api/v1/mcp/servers")
+    async def add_mcp_server(
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+        manager = get_mcp_manager()
+        if manager is None:
+            raise HTTPException(
+                status_code=503,
+                detail="MCP support unavailable (mcp package not installed)",
+            )
+
+        try:
+            result = await manager.add_server(body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        return {"ok": True, **result}
+
+    exported["add_mcp_server"] = add_mcp_server
+
+    @app.delete("/api/v1/mcp/servers/{name}")
+    async def remove_mcp_server(
+        name: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        manager = get_mcp_manager()
+        if manager is None:
+            raise HTTPException(
+                status_code=503,
+                detail="MCP support unavailable (mcp package not installed)",
+            )
+
+        removed = await manager.remove_server(name)
+        if not removed:
+            raise HTTPException(status_code=404, detail=f"MCP server '{name}' not found")
+
+        return {"ok": True, "name": name, "status": "removed"}
+
+    exported["remove_mcp_server"] = remove_mcp_server
+
+    # -- Device management endpoints ----------------------------------------
 
     @app.post("/api/v1/devices/heartbeat")
     async def device_heartbeat(
