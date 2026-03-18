@@ -38,6 +38,18 @@ dependencies = [
     "hmdriver2>=1.4.4",
 ]
 
+[project.optional-dependencies]
+cli = [
+    "click>=8.1",
+    "httpx>=0.27",
+    "rich>=13.0",
+    "prompt-toolkit>=3.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+mobiclaw = "mobiclaw.cli.main:cli"
+
 [tool.uv.workspace]
 members = [
     "agentscope",
@@ -45,3 +57,7 @@ members = [
 
 [tool.uv.sources]
 agentscope = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
