@@ -7,7 +7,9 @@ import json
 import os
 import re
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
@@ -312,6 +314,9 @@ def _validate_fetch_feishu_history_args(
 
 def fetch_feishu_chat_history(
     chat_id: str,
+    output_file_dir: str,
+    download_files: bool = False,
+    download_images: bool = False,
     page_size: int = 40,
     container_id_type: str = "auto",
     history_range: str = "today",
@@ -321,6 +326,9 @@ def fetch_feishu_chat_history(
 
     Args:
         chat_id: 会话 ID（chat_id/open_chat_id/oc_xxx）。
+        output_file_dir: 附件下载目录（建议传本次任务的 outputs/job_xxx/tmp）。
+        download_files: 是否下载历史文件消息附件，默认 False。
+        download_images: 是否下载历史图片消息附件，默认 False。
         page_size: 单次请求条数，内部会约束到允许范围。
         container_id_type: 容器类型，支持 auto/chat/open_chat/user/open_id/union_id。
         history_range: 历史时间范围，仅支持 today/yesterday/7d/all。
@@ -354,12 +362,117 @@ def fetch_feishu_chat_history(
     fetch_item_budget = _read_int_env("FEISHU_HISTORY_FETCH_ITEM_BUDGET", 500, 50, 10000)
     requested_page_token = (page_token or "").strip()
     desired_return_count = max(size, minimum_today_messages) if normalized_range == "today" else size
+    should_download_files = bool(download_files)
+    should_download_images = bool(download_images)
 
     resolved_container_id_type = _resolve_container_id_type(cid, container_id_type)
     app_hint = _app_id_hint()
+    download_limit_env = os.environ.get("MOBICLAW_DOWNLOAD_MAX_BYTES", "50000000")
+    try:
+        download_max_bytes = max(1, int(download_limit_env))
+    except ValueError:
+        download_max_bytes = 50_000_000
+
+    output_dir_raw = (output_file_dir or "").strip()
+    if not output_dir_raw:
+        return ToolResponse(
+            content=[TextBlock(type="text", text="[Feishu] 参数校验失败: output_file_dir 不能为空")],
+            metadata={
+                "error": "invalid_arguments",
+                "errors": [
+                    {
+                        "field": "output_file_dir",
+                        "code": "empty",
+                        "message": "output_file_dir 不能为空",
+                    }
+                ],
+                "chat_id": cid,
+            },
+        )
+
+    download_root_error = ""
+    try:
+        requested_output_dir = Path(output_dir_raw).expanduser()
+        transformed_parts = list(requested_output_dir.parts)
+        for idx in range(len(transformed_parts) - 1, -1, -1):
+            if transformed_parts[idx] == "tmp":
+                transformed_parts[idx] = "feishu_media"
+                break
+        transformed_output_dir = Path(*transformed_parts)
+        download_tmp_dir = transformed_output_dir.resolve()
+        download_tmp_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        download_tmp_dir = None
+        download_root_error = str(exc)
 
     try:
         token = _get_tenant_token()
+
+        def _safe_file_name(name: str, fallback: str) -> str:
+            cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", (name or "").strip()).strip("._")
+            if not cleaned:
+                cleaned = fallback
+            return cleaned[:160]
+
+        def _download_resource(
+            *,
+            message_id: str,
+            resource_key: str,
+            resource_type: str,
+            display_name: str,
+        ) -> tuple[str, str]:
+            if download_tmp_dir is None:
+                return "", f"download_dir_unavailable: {download_root_error or 'unknown'}"
+
+            safe_mid = _safe_file_name(message_id, "om_unknown")
+            fallback_name = f"{safe_mid}_{resource_type}"
+            safe_name = _safe_file_name(display_name, fallback_name)
+            if "." not in safe_name:
+                safe_name = f"{safe_name}.{ 'bin' if resource_type == 'file' else 'img' }"
+
+            local_path = download_tmp_dir / safe_name
+            dedupe_index = 1
+            while local_path.exists():
+                stem = local_path.stem
+                suffix = local_path.suffix
+                local_path = download_tmp_dir / f"{stem}_{dedupe_index}{suffix}"
+                dedupe_index += 1
+
+            encoded_key = quote(resource_key, safe="")
+            url = (
+                "https://open.feishu.cn/open-apis/im/v1/messages/"
+                f"{message_id}/resources/{encoded_key}?type={resource_type}"
+            )
+
+            try:
+                resp = requests.get(url, headers=_headers(token), timeout=_timeout_s(), stream=True)
+                payload = _parse_response_payload(resp)
+                if resp.status_code >= 400:
+                    return "", f"http_status={resp.status_code}, payload={json.dumps(payload, ensure_ascii=False)}"
+
+                bytes_written = 0
+                with local_path.open("wb") as handle:
+                    for chunk in resp.iter_content(chunk_size=8192):
+                        if not chunk:
+                            continue
+                        bytes_written += len(chunk)
+                        if bytes_written > download_max_bytes:
+                            handle.close()
+                            try:
+                                local_path.unlink()
+                            except FileNotFoundError:
+                                pass
+                            return "", f"size_limit_exceeded: {download_max_bytes}"
+                        handle.write(chunk)
+                return str(local_path), ""
+            except Exception as exc:  # noqa: BLE001
+                try:
+                    if local_path.exists():
+                        local_path.unlink()
+                except Exception:  # noqa: BLE001
+                    pass
+                return "", str(exc)
+
         def _fetch_segment(
             *,
             start_time_s: int | None,
@@ -437,16 +550,82 @@ def fetch_feishu_chat_history(
                         continue
                     body = item.get("body") if isinstance(item.get("body"), dict) else {}
                     create_time = item.get("create_time")
+                    message_id = item.get("message_id")
                     create_time_ms = _parse_message_create_time_ms(create_time)
                     if create_time_ms is None:
                         unparseable_count += 1
+
+                    raw_content = body.get("content") or item.get("content")
+                    if isinstance(raw_content, str):
+                        raw_content_text = raw_content
+                    elif raw_content is None:
+                        raw_content_text = ""
+                    else:
+                        raw_content_text = json.dumps(raw_content, ensure_ascii=False)
+
+                    content_type = "empty"
+                    parsed_fields: dict[str, Any] = {}
+                    if raw_content_text:
+                        try:
+                            parsed_content = json.loads(raw_content_text)
+                        except json.JSONDecodeError:
+                            parsed_content = None
+
+                        if isinstance(parsed_content, dict):
+                            text_content = str(parsed_content.get("text") or "").strip()
+                            image_key = str(parsed_content.get("image_key") or "").strip()
+                            file_key = str(parsed_content.get("file_key") or "").strip()
+                            file_name = str(parsed_content.get("file_name") or parsed_content.get("name") or "").strip()
+
+                            if text_content:
+                                content_type = "text"
+                                parsed_fields["text"] = text_content
+                            elif image_key:
+                                content_type = "image"
+                                parsed_fields["image_key"] = image_key
+                                if should_download_images and message_id:
+                                    local_path, download_error = _download_resource(
+                                        message_id=str(message_id),
+                                        resource_key=image_key,
+                                        resource_type="image",
+                                        display_name=f"{message_id}_image",
+                                    )
+                                    if local_path:
+                                        parsed_fields["local_path"] = local_path
+                                    elif download_error:
+                                        parsed_fields["download_error"] = download_error
+                            elif file_key:
+                                content_type = "file"
+                                parsed_fields["file_key"] = file_key
+                                if file_name:
+                                    parsed_fields["file_name"] = file_name
+                                if should_download_files and message_id:
+                                    local_path, download_error = _download_resource(
+                                        message_id=str(message_id),
+                                        resource_key=file_key,
+                                        resource_type="file",
+                                        display_name=file_name or f"{message_id}_file",
+                                    )
+                                    if local_path:
+                                        parsed_fields["local_path"] = local_path
+                                    elif download_error:
+                                        parsed_fields["download_error"] = download_error
+                            else:
+                                content_type = "json"
+                                parsed_fields["content_json"] = parsed_content
+                        else:
+                            content_type = "plain"
+                            parsed_fields["text"] = raw_content_text
+
                     messages.append(
                         {
-                            "message_id": item.get("message_id"),
+                            "message_id": message_id,
                             "create_time": create_time,
                             "sender": item.get("sender"),
                             "message_type": item.get("msg_type") or item.get("message_type"),
-                            "content": body.get("content") or item.get("content"),
+                            "content": raw_content_text,
+                            "content_type": content_type,
+                            **parsed_fields,
                         }
                     )
 
@@ -531,6 +710,44 @@ def fetch_feishu_chat_history(
                 payload = backfill.get("payload") if isinstance(backfill.get("payload"), dict) else payload
 
         simplified = messages[:desired_return_count]
+        attachments: list[dict[str, Any]] = []
+        files: list[dict[str, Any]] = []
+        images: list[dict[str, Any]] = []
+        for msg in simplified:
+            if not isinstance(msg, dict):
+                continue
+            message_id = str(msg.get("message_id") or "").strip()
+            create_time = msg.get("create_time")
+            sender = msg.get("sender")
+
+            image_key = str(msg.get("image_key") or "").strip()
+            if image_key:
+                image_item = {
+                    "type": "image",
+                    "message_id": message_id,
+                    "create_time": create_time,
+                    "sender": sender,
+                    "image_key": image_key,
+                    "local_path": str(msg.get("local_path") or "").strip(),
+                    "download_error": str(msg.get("download_error") or "").strip(),
+                }
+                attachments.append(image_item)
+                images.append(image_item)
+
+            file_key = str(msg.get("file_key") or "").strip()
+            if file_key:
+                file_item = {
+                    "type": "file",
+                    "message_id": message_id,
+                    "create_time": create_time,
+                    "sender": sender,
+                    "file_key": file_key,
+                    "file_name": str(msg.get("file_name") or "").strip(),
+                    "local_path": str(msg.get("local_path") or "").strip(),
+                    "download_error": str(msg.get("download_error") or "").strip(),
+                }
+                attachments.append(file_item)
+                files.append(file_item)
 
         preview = json.dumps(simplified[:5], ensure_ascii=False)
         return ToolResponse(
@@ -540,6 +757,8 @@ def fetch_feishu_chat_history(
                     text=(
                         f"[Feishu] 已获取 {len(simplified)} 条历史消息"
                         f"(range={normalized_range}, pages={pages_consumed}, sort=ByCreateTimeDesc)"
+                        f"，附件 {len(attachments)} 个（文件 {len(files)}，图片 {len(images)}）"
+                        f"，下载目录: {str(download_tmp_dir) if download_tmp_dir else '(unavailable)'}"
                         f"，预览: {preview}"
                     ),
                 )
@@ -550,6 +769,15 @@ def fetch_feishu_chat_history(
                 "app_id_hint": app_hint,
                 "count": len(simplified),
                 "messages": simplified,
+                "attachments": attachments,
+                "files": files,
+                "images": images,
+                "download_dir": str(download_tmp_dir) if download_tmp_dir else "",
+                "download_root_error": download_root_error,
+                "download_max_bytes": download_max_bytes,
+                "output_file_dir": output_dir_raw,
+                "download_files": should_download_files,
+                "download_images": should_download_images,
                 "http_status": http_status,
                 "payload": payload,
                 "history_range_requested": history_range,
@@ -663,6 +891,350 @@ def get_feishu_message(message_id: str) -> ToolResponse:
         return ToolResponse(
             content=[TextBlock(type="text", text=f"[Feishu] 读取消息异常: {exc}")],
             metadata={"error": str(exc)},
+        )
+
+
+def _extract_docx_token_from_url(doc_url: str) -> str:
+    """从飞书 Docx 链接中提取 token。"""
+    raw = (doc_url or "").strip()
+    matched = re.search(r"https://[^\s]+/docx/([A-Za-z0-9_-]+)", raw)
+    if not matched:
+        return ""
+    return str(matched.group(1) or "").strip()
+
+
+def _extract_wiki_token_from_url(doc_url: str) -> str:
+    """从飞书 Wiki 链接中提取 token。"""
+    raw = (doc_url or "").strip()
+    matched = re.search(r"https://[^\s]+/wiki/([A-Za-z0-9_-]+)", raw)
+    if not matched:
+        return ""
+    return str(matched.group(1) or "").strip()
+
+
+def _is_supported_docx_url(doc_url: str) -> bool:
+    """校验是否为支持的飞书云文档链接（Docx/Wiki）。"""
+    raw = (doc_url or "").strip()
+    if not raw.startswith("https://"):
+        return False
+    if ".feishu.cn/" not in raw and ".larksuite.com/" not in raw:
+        return False
+    if _extract_docx_token_from_url(raw):
+        return True
+    return bool(_extract_wiki_token_from_url(raw))
+
+
+def _resolve_docx_token_from_wiki_url(doc_url: str, token: str) -> tuple[str, str, dict[str, Any], int, str]:
+    """将 wiki 链接解析为 docx token。"""
+    wiki_token = _extract_wiki_token_from_url(doc_url)
+    if not wiki_token:
+        return "", "", {}, 400, "invalid_wiki_url"
+
+    resp = requests.get(
+        "https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node",
+        headers=_headers(token),
+        params={"token": wiki_token},
+        timeout=_timeout_s(),
+    )
+    payload = _parse_response_payload(resp)
+    http_status = int(resp.status_code)
+
+    if http_status >= 400:
+        error = "forbidden" if http_status == 403 else "not_found" if http_status == 404 else "http_error"
+        return "", "", payload, http_status, error
+
+    if payload.get("code") != 0:
+        return "", "", payload, http_status, "api_error"
+
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    node = data.get("node") if isinstance(data.get("node"), dict) else {}
+    obj_type = str(node.get("obj_type") or data.get("obj_type") or "").strip().lower()
+    obj_token = str(node.get("obj_token") or data.get("obj_token") or "").strip()
+    title = str(node.get("title") or data.get("title") or "").strip()
+
+    if obj_type and obj_type != "docx":
+        return "", title, payload, http_status, "unsupported_wiki_obj_type"
+    if not obj_token:
+        return "", title, payload, http_status, "invalid_wiki_node"
+    return obj_token, title, payload, http_status, ""
+
+
+def _collect_text_fragments(value: Any) -> list[str]:
+    """递归收集常见文本字段，兜底处理未知结构。"""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, list):
+        result: list[str] = []
+        for item in value:
+            result.extend(_collect_text_fragments(item))
+        return result
+    if isinstance(value, dict):
+        result: list[str] = []
+        preferred_keys = ("text", "content", "plain_text", "title", "name")
+        for key in preferred_keys:
+            if key in value:
+                result.extend(_collect_text_fragments(value.get(key)))
+        for key, item in value.items():
+            if key in preferred_keys:
+                continue
+            result.extend(_collect_text_fragments(item))
+        return result
+    return []
+
+
+def _normalize_docx_text(payload: dict[str, Any]) -> tuple[str, str]:
+    """将 docx API 响应转换为纯文本与标题。"""
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    document = data.get("document") if isinstance(data.get("document"), dict) else {}
+    title = str(
+        document.get("title")
+        or data.get("title")
+        or (data.get("meta") if isinstance(data.get("meta"), dict) else {}).get("title")
+        or ""
+    ).strip()
+
+    candidates: list[Any] = [
+        data.get("content"),
+        data.get("raw_content"),
+        data.get("markdown"),
+        document.get("content"),
+        document.get("raw_content"),
+        document.get("body"),
+        data.get("blocks"),
+    ]
+
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        if isinstance(candidate, str):
+            text = candidate.strip()
+            if text:
+                return text, title
+            continue
+        fragments = _collect_text_fragments(candidate)
+        if fragments:
+            return "\n".join(fragments), title
+
+    fragments = _collect_text_fragments(data)
+    if fragments:
+        return "\n".join(fragments), title
+    return "", title
+
+
+def _trim_text(value: str, max_length: int) -> tuple[str, bool]:
+    """按指定长度截断文本。"""
+    text = (value or "").strip()
+    if max_length <= 0 or len(text) <= max_length:
+        return text, False
+    safe_len = max(0, max_length - 3)
+    return text[:safe_len].rstrip() + "...", True
+
+
+def _extract_links_from_text(text: str) -> list[str]:
+    """从纯文本中提取 URL。"""
+    found = re.findall(r"https?://[^\s\]>)\"']+", text or "")
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in found:
+        candidate = item.strip().rstrip(".,;:!?)")
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        result.append(candidate)
+    return result
+
+
+def read_feishu_docx_link(
+    doc_url: str,
+    max_length: int = 120000,
+    include_links: bool = True,
+) -> ToolResponse:
+    """读取飞书云文档链接（Docx/Wiki）并返回纯文本内容。
+
+    Args:
+        doc_url: 飞书 Docx/Wiki 链接。
+        max_length: 返回文本最大长度，超出会截断并标记 truncated。
+        include_links: 是否在 metadata 中提取正文内 URL 列表。
+    """
+    raw_url = (doc_url or "").strip()
+    if not raw_url:
+        return ToolResponse(
+            content=[TextBlock(type="text", text="[Feishu] 参数校验失败: doc_url 不能为空")],
+            metadata={"error": "invalid_arguments", "doc_url": raw_url},
+        )
+    if not _is_supported_docx_url(raw_url):
+        return ToolResponse(
+            content=[
+                TextBlock(
+                    type="text",
+                    text="[Feishu] 参数校验失败: 仅支持 https://*.feishu.cn/docx|wiki/... 或 https://*.larksuite.com/docx|wiki/... 链接",
+                )
+            ],
+            metadata={"error": "unsupported_doc_url", "doc_url": raw_url},
+        )
+
+    max_text_len = max(1000, min(int(max_length or 120000), 300000))
+
+    try:
+        token = _get_tenant_token()
+        wiki_token = _extract_wiki_token_from_url(raw_url)
+        source_type = "wiki" if wiki_token else "docx"
+        source_title = ""
+        source_payload: dict[str, Any] = {}
+        doc_token = _extract_docx_token_from_url(raw_url)
+
+        if wiki_token and not doc_token:
+            (
+                doc_token,
+                source_title,
+                source_payload,
+                source_http_status,
+                source_error,
+            ) = _resolve_docx_token_from_wiki_url(raw_url, token)
+            if source_error:
+                text = (
+                    f"[Feishu] 解析 Wiki 失败: http_status={source_http_status}, "
+                    f"error={source_error}, payload={json.dumps(source_payload, ensure_ascii=False)}"
+                )
+                return ToolResponse(
+                    content=[TextBlock(type="text", text=text)],
+                    metadata={
+                        "error": source_error,
+                        "http_status": source_http_status,
+                        "payload": source_payload,
+                        "doc_url": raw_url,
+                        "wiki_token": wiki_token,
+                        "source_type": source_type,
+                    },
+                )
+
+        if not doc_token:
+            return ToolResponse(
+                content=[TextBlock(type="text", text="[Feishu] 参数校验失败: 无法从 doc_url 提取 doc_token")],
+                metadata={"error": "invalid_doc_url", "doc_url": raw_url, "source_type": source_type},
+            )
+
+        encoded_token = quote(doc_token, safe="")
+        resp = requests.get(
+            f"https://open.feishu.cn/open-apis/docx/v1/documents/{encoded_token}/raw_content",
+            headers=_headers(token),
+            timeout=_timeout_s(),
+        )
+        payload = _parse_response_payload(resp)
+        http_status = int(resp.status_code)
+
+        if http_status >= 400:
+            error = "forbidden" if http_status == 403 else "not_found" if http_status == 404 else "http_error"
+            return ToolResponse(
+                content=[
+                    TextBlock(
+                        type="text",
+                        text=f"[Feishu] 读取 Docx 失败: http_status={http_status}, payload={json.dumps(payload, ensure_ascii=False)}",
+                    )
+                ],
+                metadata={
+                    "error": error,
+                    "http_status": http_status,
+                    "payload": payload,
+                    "doc_url": raw_url,
+                    "doc_token": doc_token,
+                    "wiki_token": wiki_token,
+                    "source_type": source_type,
+                },
+            )
+
+        if payload.get("code") != 0:
+            return ToolResponse(
+                content=[
+                    TextBlock(
+                        type="text",
+                        text=f"[Feishu] 读取 Docx 失败: http_status={http_status}, payload={json.dumps(payload, ensure_ascii=False)}",
+                    )
+                ],
+                metadata={
+                    "error": "api_error",
+                    "http_status": http_status,
+                    "payload": payload,
+                    "doc_url": raw_url,
+                    "doc_token": doc_token,
+                    "wiki_token": wiki_token,
+                    "source_type": source_type,
+                },
+            )
+
+        text, title = _normalize_docx_text(payload)
+        if not title and source_title:
+            title = source_title
+        trimmed_text, truncated = _trim_text(text, max_text_len)
+        links = _extract_links_from_text(trimmed_text) if include_links else []
+
+        if not trimmed_text:
+            return ToolResponse(
+                content=[TextBlock(type="text", text="[Feishu] Docx 读取成功，但未提取到可读正文")],
+                metadata={
+                    "error": "empty_content",
+                    "http_status": http_status,
+                    "payload": payload,
+                    "doc_url": raw_url,
+                    "doc_token": doc_token,
+                    "wiki_token": wiki_token,
+                    "title": title,
+                    "truncated": False,
+                    "links": links,
+                    "source_type": source_type,
+                },
+            )
+
+        message = "[Feishu] Docx 读取成功"
+        if title:
+            message += f"\n标题: {title}"
+        message += f"\n正文:\n{trimmed_text}"
+
+        return ToolResponse(
+            content=[TextBlock(type="text", text=message)],
+            metadata={
+                "doc_url": raw_url,
+                "doc_token": doc_token,
+                "wiki_token": wiki_token,
+                "title": title,
+                "text": trimmed_text,
+                "text_length": len(trimmed_text),
+                "truncated": truncated,
+                "links": links,
+                "http_status": http_status,
+                "payload": payload,
+                "source_type": source_type,
+                "source_payload": source_payload,
+            },
+        )
+    except requests.RequestException as exc:
+        resp = getattr(exc, "response", None)
+        payload = _parse_response_payload(resp) if isinstance(resp, requests.Response) else {}
+        http_status = int(resp.status_code) if isinstance(resp, requests.Response) else None
+        return ToolResponse(
+            content=[
+                TextBlock(
+                    type="text",
+                    text=f"[Feishu] 读取 Docx 异常: http_status={http_status}, error={exc}, payload={json.dumps(payload, ensure_ascii=False)}",
+                )
+            ],
+            metadata={
+                "error": "request_exception",
+                "exception": str(exc),
+                "http_status": http_status,
+                "payload": payload,
+                "doc_url": raw_url,
+                "doc_token": doc_token,
+                "wiki_token": wiki_token,
+            },
+        )
+    except Exception as exc:
+        return ToolResponse(
+            content=[TextBlock(type="text", text=f"[Feishu] 读取 Docx 异常: {exc}")],
+            metadata={"error": str(exc), "doc_url": raw_url, "doc_token": doc_token},
         )
 
 

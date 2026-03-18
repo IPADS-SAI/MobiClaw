@@ -29,6 +29,7 @@ from .web import brave_search, fetch_url_links, fetch_url_readable_text, fetch_u
 from .feishu import (
     fetch_feishu_chat_history,
     get_feishu_message,
+    read_feishu_docx_link,
     schedule_feishu_meeting,
     send_feishu_meeting_card,
 )
@@ -69,6 +70,7 @@ __all__ = [
     "search_steward_knowledge",
     "fetch_feishu_chat_history",
     "get_feishu_message",
+    "read_feishu_docx_link",
     "schedule_feishu_meeting",
     "send_feishu_meeting_card",
 ]

@@ -32,6 +32,7 @@ from ..tools import (
     fetch_url_text,
     get_feishu_message,
     insert_pptx_image,
+    read_feishu_docx_link,
     read_docx_text,
     read_pptx_summary,
     read_xlsx_summary,
@@ -91,6 +92,8 @@ def create_worker_agent(
         fetch_feishu_chat_history,
         func_description=(
             "读取飞书会话历史消息列表。"
+            "output_file_dir 必须传本次任务临时目录（例如 outputs/job_xxx/tmp），用于下载历史附件；"
+            "download_files/download_images 控制是否下载历史文件或图片，默认 false；"
             "chat_id 必须传真实会话/用户 ID（如 oc_... 或 ou_...），不能传 auto；"
             "container_id_type 可选 auto/chat/user，默认 auto；"
             "history_range 可选 today/yesterday/7d/all，默认 today；"
@@ -100,6 +103,17 @@ def create_worker_agent(
     )
 
     _reg(get_feishu_message, func_description="按消息 ID 获取飞书消息详情，用于排查和精确分析。")
+
+    _reg(
+        read_feishu_docx_link,
+        func_description=(
+            "读取飞书 Docx/Wiki 云文档链接并返回纯文本正文。"
+            "支持 https://*.feishu.cn/docx|wiki/... 或 https://*.larksuite.com/docx|wiki/...；"
+            "wiki 链接会先解析为实际文档对象，当前仅支持解析到 docx 的场景；"
+            "使用 FEISHU_APP_ID/FEISHU_APP_SECRET 对应的应用租户权限读取文档；"
+            "若返回 403，通常是应用未被授予该文档访问权限。"
+        ),
+    )
 
     _reg(
         schedule_feishu_meeting,
@@ -177,8 +191,10 @@ def create_worker_agent(
 - 需要输出文件时，可用 "write_text_file" 落盘。
 - 如果用户询问之前智能管家从手机中提取并存储的知识，使用 "search_steward_knowledge" 检索。
 - 如果用户要求总结飞书群聊历史或按消息 ID 查询，请使用飞书历史消息工具。
+- 对于飞书 Docx/Wiki 文档链接，请优先使用 "read_feishu_docx_link" 读取正文后再分析。
 - 如果用户要求“预约飞书会议/创建会议链接并发群”，先调用 "schedule_feishu_meeting" 创建会议，再调用 "send_feishu_meeting_card" 发送卡片。
 - 如果消息中包含 [Feishu Context]，调用飞书历史工具时必须优先使用其中的 chat_id/open_id/message_id，不得猜测或改写。
+- 调用 "fetch_feishu_chat_history" 时，必须显式传入 output_file_dir（本次任务临时目录）。
 - 如果消息中包含 [Feishu Context] 且要发会议卡片，必须优先使用其中 chat_id 作为 receive_id。
 - 若 [Feishu Context] 缺少必需 ID，应先明确指出缺失项并向用户索取，不要编造参数。
 - 输出格式遵循用户要求；未指定时默认使用 Markdown。

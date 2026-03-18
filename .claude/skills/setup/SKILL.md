@@ -82,17 +82,14 @@ This is the only **required** configuration. AskUserQuestion: "Which LLM provide
 - AskUserQuestion: "Which model to use as default?" with options:
   - moonshotai/kimi-k2.5 (recommended, default in template)
   - google/gemini-3-flash-preview
-  - Other — let user type a model ID
 - Write `OPENROUTER_MODEL` to `.env`
 - AskUserQuestion: "Use a different model for Router/Planner orchestration?"
   - No — leave empty, will fall back to the default model
-  - User types model via "Other" → write `OPENROUTER_MODEL_FOR_ORCHESTRATOR` to `.env`
 
 **OpenAI-compatible path:**
 - Tell user to add `export OPENAI_API_KEY=<key>` and `export OPENAI_BASE_URL=<url>` to `.env`. Do NOT collect the key in chat.
 - AskUserQuestion: "Enter the model name:" with options:
   - "gpt-4o" — default
-  - User types model via "Other" → write `OPENAI_MODEL` to `.env`
 
 ### 3b. Web Search (Optional)
 
@@ -104,7 +101,7 @@ AskUserQuestion: "Configure Brave Search for web search capabilities?"
 
 AskUserQuestion: "Configure mobile device executor?"
 - Yes — proceed to mobile configuration
-- Skip — mobile features will use mock mode (default)
+- Skip — mobile features will use mock mode
 
 **If yes:**
 
@@ -120,13 +117,13 @@ AskUserQuestion: "What device type are you connecting to?"
 - Android — set `MOBILE_DEVICE_TYPE=Android`
 - HarmonyOS — set `MOBILE_DEVICE_TYPE=Harmony`
 
-AskUserQuestion: "Do you want to manually set device ID (e.g., serial number or IP:port) to specify the device to control"
+AskUserQuestion: "Do you want to manually set device ID (e.g., serial number or IP:port) to specify the device to control?"
 - Skip — leave `MOBILE_DEVICE_ID` empty, will use the first controllable device.
-- User types ID via "Other" → write `MOBILE_DEVICE_ID` to `.env`
 
-For MobiAgent provider, configure the server endpoints:
-- Ask for MobiAgent server IP/port or accept defaults (`166.111.53.96:7003`)
-- Write `MOBILE_MOBIAGENT_SERVER_IP`, `MOBILE_MOBIAGENT_DECIDER_PORT`, etc. to `.env`
+For MobiAgent provider, AskUserQuestion: "Use the default MobiAgent service, or configure it manually?"
+- Use default — use the default endpoint `166.111.53.96:7003`
+
+Write `MOBILE_MOBIAGENT_SERVER_IP`, `MOBILE_MOBIAGENT_DECIDER_PORT`, etc. to `.env`
 
 For other providers, tell user to add `export MOBILE_<PROVIDER>_API_BASE=<api-base>` and `export MOBILE_<PROVIDER>_MODEL=<model>` in `.env`.
 

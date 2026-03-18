@@ -88,7 +88,7 @@ MOBILE_EXECUTOR_CONFIG = {
 # RAG 配置 (本地向量知识库)
 RAG_CONFIG = {
     "store_path": os.environ.get("MOBICLAW_RAG_STORE_PATH", "~/.mobiclaw/rag_store"),
-    "collection_name": os.environ.get("MOBICLAW_RAG_COLLECTION", "seneschal_tasks"),
+    "collection_name": os.environ.get("MOBICLAW_RAG_COLLECTION", "mobiclaw_tasks"),
     "embedding_model": os.environ.get("MOBICLAW_RAG_EMBEDDING_MODEL", "openai/text-embedding-3-small"),
     "embedding_dimensions": int(os.environ.get("MOBICLAW_RAG_EMBEDDING_DIMENSIONS", "1536")),
     "chunk_size": int(os.environ.get("MOBICLAW_RAG_CHUNK_SIZE", "512")),

@@ -121,6 +121,15 @@ class EnvStructuredRequest(BaseModel):
     preserve_unmanaged: bool = Field(default=True)
 
 
+class DeviceHeartbeat(BaseModel):
+    """设备心跳上报请求体。"""
+
+    device_id: str
+    tailscale_ip: str | None = None
+    adb_port: int | None = None
+    device_name: str | None = None
+
+
 @dataclass
 class JobContext:
     """异步任务上下文（回调地址与飞书投递信息）。"""

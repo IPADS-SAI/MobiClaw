@@ -50,7 +50,7 @@ async def _init_task_history() -> SimpleKnowledge:
         if _task_history_kb is not None:
             return _task_history_kb
 
-        store_path = Path(RAG_CONFIG["store_path"]).expanduser().resolve()
+        store_path = Path(RAG_CONFIG["store_path"]).expanduser().resolve() / "history"
         store_path.mkdir(parents=True, exist_ok=True)
 
         store = QdrantStore(
@@ -75,7 +75,7 @@ async def _init_knowledge() -> SimpleKnowledge:
         if _knowledge_kb is not None:
             return _knowledge_kb
 
-        store_path = Path(RAG_CONFIG["store_path"]).expanduser().resolve()
+        store_path = Path(RAG_CONFIG["store_path"]).expanduser().resolve() / "knowledge"
         store_path.mkdir(parents=True, exist_ok=True)
 
         store = QdrantStore(

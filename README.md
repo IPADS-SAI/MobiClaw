@@ -70,7 +70,7 @@ MobiClaw 是轻量化的openClaw替代，能够支持网页搜索，文档生成
 - 交互式完成选项配置（如选择模型，接入飞书，配置可选项等）
 - 在后台启动gateway server
 
-在此过程中，随时与Claude Code聊天来进行任何你想要的个性化定制。
+在此过程中，你可以随时通过自然语言告诉Claude Code你希望它做什么，或让Claude Code解答你的问题。
 
 若你不想使用Claude Code，或者希望自主控制项目的安装过程，你也可以按照下面的步骤手动安装项目：
 
@@ -408,7 +408,13 @@ python -m mobiclaw.gateway_server
 pytest tests -s -q
 ```
 
-### 7) 致谢
+### 7) 安卓客户端
+
+MobiClaw提供了一个安卓客户端，可以快速连接 MobiClaw Gateway Server 和需要由 MobiClaw Agent 操控的安卓手机，不需要二者在同一个局域网内。详见[Android App README](apps/android/README.md)。
+
+---
+
+## 致谢
 
 本项目的设计与实现受益于以下开源项目，特此致谢：[openClaw](https://github.com/openclaw/openclaw) 和 [AgentScope](https://github.com/agentscope-ai/agentscope)
 为本项目提供了工具调用范式与会话/编排能力的参考，感谢两者的维护者与社区贡献者。
