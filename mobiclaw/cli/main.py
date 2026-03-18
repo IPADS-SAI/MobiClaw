@@ -3,6 +3,7 @@ import asyncio
 
 import click
 
+from .chat import register_chat_command
 from .config import load_cli_config, register_config_commands, resolve_config
 from .device import register_device_commands
 from .env import register_env_commands
@@ -31,6 +32,7 @@ def cli(ctx, server_url, api_key, output_fmt, verbose):
 
 
 register_config_commands(cli)
+register_chat_command(cli)
 register_task_commands(cli)
 register_mcp_commands(cli)
 register_schedule_commands(cli)
