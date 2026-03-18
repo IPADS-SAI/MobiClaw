@@ -1,6 +1,7 @@
 """CLI configuration loading and saving."""
 from pathlib import Path
 
+import click
 import yaml
 
 _DEFAULTS = {
@@ -43,3 +44,35 @@ def reset_config() -> None:
     path = get_config_path()
     if path.exists():
         path.unlink()
+
+
+def register_config_commands(cli_group):
+    """Register config subcommand group on the root CLI."""
+
+    @cli_group.group("config")
+    def config_cmd():
+        """Manage CLI configuration."""
+
+    @config_cmd.command("show")
+    def config_show():
+        """Load config, print path and all key-value pairs."""
+        cfg = load_cli_config()
+        click.echo(f"Config file: {get_config_path()}")
+        for k, v in cfg.items():
+            click.echo(f"  {k}: {v}")
+
+    @config_cmd.command("set")
+    @click.argument("key", type=click.Choice(["server_url", "api_key", "default_output", "default_mode"]))
+    @click.argument("value")
+    def config_set(key, value):
+        """Set config key to value."""
+        cfg = load_cli_config()
+        cfg[key] = value
+        save_cli_config(cfg)
+        click.echo(f"Set {key} = {value}")
+
+    @config_cmd.command("reset")
+    def config_reset():
+        """Reset config to defaults."""
+        reset_config()
+        click.echo("Config reset to defaults")

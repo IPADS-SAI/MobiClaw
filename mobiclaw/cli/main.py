@@ -1,6 +1,8 @@
 """MobiClaw CLI root."""
 import click
 
+from .config import register_config_commands
+
 
 @click.group()
 @click.option("--server-url", envvar="MOBICLAW_SERVER_URL", help="Gateway server URL")
@@ -14,6 +16,9 @@ def cli(ctx, server_url, api_key, output_fmt, verbose):
     ctx.obj["api_key"] = api_key
     ctx.obj["output_fmt"] = output_fmt
     ctx.obj["verbose"] = verbose
+
+
+register_config_commands(cli)
 
 
 @cli.command()
