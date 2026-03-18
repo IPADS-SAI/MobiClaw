@@ -17,7 +17,7 @@ from agentscope.message import Msg, TextBlock, ImageBlock
 from agentscope.plan import PlanNotebook
 from agentscope.tool import Toolkit, ToolResponse
 
-from ..config import ROUTING_CONFIG
+from ..config import ROUTING_CONFIG, TOOL_CONFIG
 from .common import (
     _build_memory_prompt,
     _build_skill_prompt_suffix,
@@ -365,7 +365,8 @@ def create_user_agent() -> UserAgent:
 def create_chat_agent(*, web_search_enabled: bool = True) -> ReActAgent:
     """创建网关 chat 模式使用的基础对话 Agent。"""
     toolkit = Toolkit()
-    _chat_reg = functools.partial(register_tool_with_timeout, toolkit)
+    tool_timeout_s = TOOL_CONFIG["timeout_s"]
+    _chat_reg = functools.partial(register_tool_with_timeout, toolkit, tool_timeout_s)
 
     toolkit.create_tool_group(
         group_name="web_search",
