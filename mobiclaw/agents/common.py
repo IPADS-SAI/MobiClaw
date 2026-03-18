@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
+import inspect
 import json
 import logging
 import os
@@ -13,8 +15,11 @@ from typing import Any
 
 from agentscope.model import OpenAIChatModel
 
-from ..config import MEMORY_CONFIG, MODEL_CONFIG
+from agentscope.tool import Toolkit
+
+from ..config import MEMORY_CONFIG, MODEL_CONFIG, TOOL_CONFIG
 from ..tools import read_memory
+from ..tools.decorators import tool_timeout
 
 logger = logging.getLogger("mobiclaw.agents")
 
@@ -375,6 +380,52 @@ async def _summarize_execution_with_vlm(
         "extracted_text": extracted_text or summary["extracted_text"],
     }
     return result
+
+
+def register_tool_with_timeout(
+    toolkit: Toolkit,
+    timeout_s: float,
+    func,
+    *,
+    func_description: str,
+    group_name: str | None = None,
+) -> None:
+    """Register a tool function with automatic timeout wrapping.
+
+    The function is wrapped by :func:`tool_timeout` so that execution
+    exceeding *timeout_s* returns a ``[Tool Timeout]`` ToolResponse
+    instead of blocking indefinitely.
+
+    Special handling for ``functools.partial``: after wrapping, the result
+    is no longer a ``partial`` instance, so agentscope would not remove
+    bound kwargs from the schema.  We extract them manually and pass as
+    ``preset_kwargs`` to keep the schema clean.
+
+    Args:
+        toolkit: The Toolkit instance to register the tool on.
+        timeout_s: Timeout in seconds for this tool call.
+        func: The tool function (sync or async).
+        func_description: Description passed to ``register_tool_function``.
+        group_name: Optional tool group name.
+    """
+    wrapped = tool_timeout(timeout_s)(func)
+    reg_kwargs: dict[str, Any] = {"func_description": func_description}
+    if group_name is not None:
+        reg_kwargs["group_name"] = group_name
+
+    # If the original func is a functools.partial, extract its bound kwargs
+    # so they don't leak into the parameter schema.
+    if isinstance(func, functools.partial):
+        preset: dict[str, Any] = dict(func.keywords)
+        if func.args:
+            param_names = list(inspect.signature(func.func).parameters.keys())
+            for i, arg in enumerate(func.args):
+                if i < len(param_names):
+                    preset[param_names[i]] = arg
+        if preset:
+            reg_kwargs["preset_kwargs"] = preset
+
+    toolkit.register_tool_function(wrapped, **reg_kwargs)
 
 
 def _build_skill_prompt_suffix(skill_context: str | None) -> str:

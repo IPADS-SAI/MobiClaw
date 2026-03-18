@@ -126,8 +126,17 @@ async def _lifespan(_: FastAPI):
     else:
         logger.info("Feishu long connection disabled by FEISHU_EVENT_TRANSPORT")
 
+    # Load saved MCP servers (non-blocking: failures are logged and skipped)
+    from ..mcp import get_mcp_manager
+
+    mcp_mgr = get_mcp_manager()
+    if mcp_mgr is not None:
+        await mcp_mgr.load_saved_servers()
+
     yield
 
+    if mcp_mgr is not None:
+        await mcp_mgr.shutdown()
     await shutdown_scheduler()
 
 
@@ -148,11 +157,3 @@ def _ensure_auth(authorization: str | None, cfg: GatewayConfig) -> None:
 
 
 globals().update(register_routes(app))
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    host = os.environ.get("MOBICLAW_GATEWAY_HOST", "0.0.0.0")
-    port = int(os.environ.get("MOBICLAW_GATEWAY_PORT", "8090"))
-    uvicorn.run("mobiclaw.gateway_server:app", host=host, port=port, reload=False)

@@ -14,7 +14,7 @@ from agentscope.tool import Toolkit
 
 from ..config import CUSTOM_AGENT_CONFIG, MEMORY_CONFIG, RAG_CONFIG
 from .catalog import _builtin_agent_capabilities, _tool_catalog
-from .common import _build_memory_prompt, _build_skill_prompt_suffix, create_openai_model
+from .common import _build_memory_prompt, _build_skill_prompt_suffix, create_openai_model, register_tool_with_timeout
 from .types import AgentCapability, CustomAgentDefinition, _as_str_list, _normalize_agent_name
 
 logger = logging.getLogger("mobiclaw.agents")
@@ -137,7 +137,7 @@ def create_configured_agent_by_name(agent_name: str, *, skill_context: str | Non
             continue
         if tool_name == "update_long_term_memory" and not MEMORY_CONFIG["enabled"]:
             continue
-        toolkit.register_tool_function(func, func_description=desc)
+        register_tool_with_timeout(toolkit, func, func_description=desc)
 
     sys_prompt = target.system_prompt
     sys_prompt += _build_memory_prompt()

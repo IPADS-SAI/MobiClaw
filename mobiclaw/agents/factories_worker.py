@@ -11,8 +11,9 @@ from agentscope.formatter import OpenAIChatFormatter
 from agentscope.memory import InMemoryMemory
 from agentscope.tool import Toolkit
 
-from ..config import MEMORY_CONFIG, RAG_CONFIG, SCHEDULE_CONFIG
-from .common import _build_memory_prompt, _build_skill_prompt_suffix, create_openai_model
+from ..config import MEMORY_CONFIG, RAG_CONFIG, SCHEDULE_CONFIG, TOOL_CONFIG
+from ..mcp import get_mcp_manager
+from .common import _build_memory_prompt, _build_skill_prompt_suffix, create_openai_model, register_tool_with_timeout
 from ..tools import (
     arxiv_search,
     brave_search,
@@ -54,13 +55,12 @@ def create_worker_agent(
 ) -> ReActAgent:
     """创建 Worker Agent，用于子任务委派。"""
     toolkit = Toolkit()
+    tool_timeout_s = TOOL_CONFIG["timeout_s"]
+    _reg = functools.partial(register_tool_with_timeout, toolkit, tool_timeout_s)
 
-    toolkit.register_tool_function(
-        run_shell_command,
-        func_description="运行受限的本地命令行工具（白名单约束）。",
-    )
+    _reg(run_shell_command, func_description="运行受限的本地命令行工具（白名单约束）。")
 
-    toolkit.register_tool_function(
+    _reg(
         run_skill_script,
         func_description=(
             "在指定 execution_dir 中执行skill中定义的命令。"
@@ -68,97 +68,26 @@ def create_worker_agent(
         ),
     )
 
-    toolkit.register_tool_function(
-        brave_search,
-        func_description="通过 Brave Search API 联网检索新闻与网页来源链接。",
-    )
+    _reg(brave_search, func_description="通过 Brave Search API 联网检索新闻与网页来源链接。")
+    _reg(arxiv_search, func_description="查询 arXiv API 获取论文元数据、摘要与 PDF 链接。")
+    _reg(dblp_conference_search, func_description="检索会议论文清单与链接（DBLP），用于按年份与关键词筛选。")
+    _reg(fetch_url_text, func_description="抓取指定 URL 的文本内容用于快速检索。")
+    _reg(fetch_url_readable_text, func_description="抓取并提取网页可读文本，用于快速理解页面内容。")
+    _reg(fetch_url_links, func_description="抓取网页并提取链接，用于发现相关来源并继续检索。")
+    _reg(download_file, func_description="下载 URL 文件到本地路径（支持二进制，例如 PDF）。")
+    _reg(extract_pdf_text, func_description="从本地 PDF 文件中提取文本内容。")
+    _reg(extract_image_text_ocr, func_description="从本地图片文件中执行 OCR 识别，提取文字内容。")
+    _reg(read_docx_text, func_description="读取 DOCX 文档文本内容。")
+    _reg(create_docx_from_text, func_description="从纯文本生成 DOCX 文档。")
+    _reg(edit_docx, func_description="对 DOCX 文档进行查找替换、追加段落或插入表格。")
+    _reg(create_pdf_from_text, func_description="从纯文本生成 PDF 文档。")
+    _reg(read_xlsx_summary, func_description="读取 XLSX 工作簿摘要与预览。")
+    _reg(write_xlsx_from_records, func_description="从记录列表生成 XLSX 文件。")
+    _reg(write_xlsx_from_rows, func_description="从行数据生成 XLSX 文件。")
+    _reg(write_text_file, func_description="写入本地文本文件，用于保存结果或日志。")
+    _reg(search_steward_knowledge, func_description="检索本地知识库中已存储的信息（由智能管家从手机中提取并存储）。")
 
-    toolkit.register_tool_function(
-        arxiv_search,
-        func_description="查询 arXiv API 获取论文元数据、摘要与 PDF 链接。",
-    )
-
-    toolkit.register_tool_function(
-        dblp_conference_search,
-        func_description="检索会议论文清单与链接（DBLP），用于按年份与关键词筛选。",
-    )
-
-    toolkit.register_tool_function(
-        fetch_url_text,
-        func_description="抓取指定 URL 的文本内容用于快速检索。",
-    )
-
-    toolkit.register_tool_function(
-        fetch_url_readable_text,
-        func_description="抓取并提取网页可读文本，用于快速理解页面内容。",
-    )
-
-    toolkit.register_tool_function(
-        fetch_url_links,
-        func_description="抓取网页并提取链接，用于发现相关来源并继续检索。",
-    )
-
-    toolkit.register_tool_function(
-        download_file,
-        func_description="下载 URL 文件到本地路径（支持二进制，例如 PDF）。",
-    )
-
-    toolkit.register_tool_function(
-        extract_pdf_text,
-        func_description="从本地 PDF 文件中提取文本内容。",
-    )
-
-    toolkit.register_tool_function(
-        extract_image_text_ocr,
-        func_description="从本地图片文件中执行 OCR 识别，提取文字内容。",
-    )
-
-    toolkit.register_tool_function(
-        read_docx_text,
-        func_description="读取 DOCX 文档文本内容。",
-    )
-
-    toolkit.register_tool_function(
-        create_docx_from_text,
-        func_description="从纯文本生成 DOCX 文档。",
-    )
-
-    toolkit.register_tool_function(
-        edit_docx,
-        func_description="对 DOCX 文档进行查找替换、追加段落或插入表格。",
-    )
-
-    toolkit.register_tool_function(
-        create_pdf_from_text,
-        func_description="从纯文本生成 PDF 文档。",
-    )
-
-    toolkit.register_tool_function(
-        read_xlsx_summary,
-        func_description="读取 XLSX 工作簿摘要与预览。",
-    )
-
-    toolkit.register_tool_function(
-        write_xlsx_from_records,
-        func_description="从记录列表生成 XLSX 文件。",
-    )
-
-    toolkit.register_tool_function(
-        write_xlsx_from_rows,
-        func_description="从行数据生成 XLSX 文件。",
-    )
-
-    toolkit.register_tool_function(
-        write_text_file,
-        func_description="写入本地文本文件，用于保存结果或日志。",
-    )
-
-    toolkit.register_tool_function(
-        search_steward_knowledge,
-        func_description="检索本地知识库中已存储的信息（由智能管家从手机中提取并存储）。",
-    )
-
-    toolkit.register_tool_function(
+    _reg(
         fetch_feishu_chat_history,
         func_description=(
             "读取飞书会话历史消息列表。"
@@ -170,12 +99,9 @@ def create_worker_agent(
         ),
     )
 
-    toolkit.register_tool_function(
-        get_feishu_message,
-        func_description="按消息 ID 获取飞书消息详情，用于排查和精确分析。",
-    )
+    _reg(get_feishu_message, func_description="按消息 ID 获取飞书消息详情，用于排查和精确分析。")
 
-    toolkit.register_tool_function(
+    _reg(
         schedule_feishu_meeting,
         func_description=(
             "按显式参数预约飞书会议，返回会议链接、会议号、密码等结构化信息。"
@@ -183,7 +109,7 @@ def create_worker_agent(
         ),
     )
 
-    toolkit.register_tool_function(
+    _reg(
         send_feishu_meeting_card,
         func_description=(
             "将已创建的会议信息以 interactive 卡片发送到飞书会话。"
@@ -191,12 +117,12 @@ def create_worker_agent(
         ),
     )
 
-    toolkit.register_tool_function(
+    _reg(
         read_pptx_summary,
         func_description="读取 PPTX/PPT 文件，返回每张幻灯片的标题、正文文本、备注、形状数量和图片数量的结构化摘要。",
     )
 
-    toolkit.register_tool_function(
+    _reg(
         create_pptx_from_outline,
         func_description=(
             "从幻灯片大纲列表创建新 PPTX 文件。"
@@ -206,7 +132,7 @@ def create_worker_agent(
         ),
     )
 
-    toolkit.register_tool_function(
+    _reg(
         edit_pptx,
         func_description=(
             "综合编辑已有 PPTX：跨所有幻灯片全局文本替换、追加新幻灯片、"
@@ -214,7 +140,7 @@ def create_worker_agent(
         ),
     )
 
-    toolkit.register_tool_function(
+    _reg(
         insert_pptx_image,
         func_description=(
             "向指定幻灯片（1-based 索引）插入本地图片。"
@@ -222,7 +148,7 @@ def create_worker_agent(
         ),
     )
 
-    toolkit.register_tool_function(
+    _reg(
         set_pptx_text_style,
         func_description=(
             "在指定幻灯片中搜索文本子串，对所有匹配的 run 应用字体样式："
@@ -259,16 +185,16 @@ def create_worker_agent(
 - 必须输出最终文本结论或可执行结果；不要输出空的工具调用。
 - 即使已经把结果写入文件，也必须在当前回复中给出完整结论（至少包含关键结论与主要依据）；禁止只回复“已落盘+文件路径”。
 - 不做多步长对话，输出最终结论或可执行结果。
+- 如果工具调用返回 "[Tool Timeout]" 或 "[Tool Error]"，说明该工具执行超时或出错。此时你可以：
+  (1) 尝试换一个替代方案或工具重试；
+  (2) 如果没有替代方案或多次失败，应立即结束任务，向用户清楚说明失败原因（哪个工具、什么错误、影响了什么），不要无限重试。
 """
     if RAG_CONFIG["task_history_enabled"]:
-        toolkit.register_tool_function(
-            search_task_history,
-            func_description="检索历史任务执行记录和相关文件，用于回答关于之前做过的任务的问题。",
-        )
+        _reg(search_task_history, func_description="检索历史任务执行记录和相关文件，用于回答关于之前做过的任务的问题。")
         sys_prompt += "- 如果用户询问之前做过的任务，使用 \"search_task_history\" 检索历史记录。\n"
 
     if MEMORY_CONFIG["enabled"]:
-        toolkit.register_tool_function(
+        _reg(
             update_long_term_memory,
             func_description=(
                 "更新长期记忆文件（MEMORY.md）。传入完整新内容，覆盖写入。"
@@ -286,22 +212,25 @@ def create_worker_agent(
         bound_create = functools.partial(create_scheduled_task, bound_job_context=job_context or {})
         bound_create.__name__ = "create_scheduled_task"
         bound_create.__doc__ = create_scheduled_task.__doc__
-        toolkit.register_tool_function(
+        _reg(
             bound_create,
             func_description='创建定时任务。传入 task（核心任务描述，去除时间信息）和 time_description（自然语言时间描述，如"每天早上8点"（周期任务）、"下午2点10分"（单次任务））。系统会自动解析时间并创建定时调度。',
         )
-        toolkit.register_tool_function(
-            list_scheduled_tasks,
-            func_description="列出所有定时任务及其状态信息（schedule_id、任务内容、状态、调度类型、描述、cron 表达式等）。",
-        )
-        toolkit.register_tool_function(
-            cancel_scheduled_task,
-            func_description="取消指定的定时任务。需要提供 schedule_id，可先通过 list_scheduled_tasks 查询。",
-        )
+        _reg(list_scheduled_tasks, func_description="列出所有定时任务及其状态信息（schedule_id、任务内容、状态、调度类型、描述、cron 表达式等）。")
+        _reg(cancel_scheduled_task, func_description="取消指定的定时任务。需要提供 schedule_id，可先通过 list_scheduled_tasks 查询。")
         sys_prompt += (
             '- 如果用户想创建定时任务（如"每天帮我搜新闻"），使用 "create_scheduled_task" 创建，传入核心任务和时间描述。\n'
             "- 如果用户想查看或取消定时任务，使用 \"list_scheduled_tasks\" 查看列表，使用 \"cancel_scheduled_task\" 取消指定任务。\n"
         )
+
+    manager = get_mcp_manager()
+    if manager is not None:
+        manager.register_tools_with_timeout(toolkit, tool_timeout_s)
+        mcp_tool_names = manager.get_tool_names()
+        if mcp_tool_names:
+            sys_prompt += (
+                "- 你还拥有以下通过 MCP 服务器注册的外部工具，可按需调用：" + ", ".join(mcp_tool_names) + "\n"
+            )
 
     sys_prompt += _build_memory_prompt()
     sys_prompt += _build_skill_prompt_suffix(skill_context)

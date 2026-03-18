@@ -89,7 +89,7 @@ _ENV_SETTINGS_SCHEMA: list[dict[str, Any]] = [
             {"key": "MOBICLAW_ROUTING_MAX_DEPTH", "label": "最大深度", "type": "number"},
             {"key": "MOBICLAW_ROUTER_TIMEOUT_S", "label": "Router 超时(s)", "type": "number"},
             {"key": "MOBICLAW_PLANNER_TIMEOUT_S", "label": "Planner 超时(s)", "type": "number"},
-            {"key": "MOBICLAW_SUBTASK_TIMEOUT_S", "label": "子任务超时(s)", "type": "number"},
+            {"key": "MOBICLAW_TOOL_TIMEOUT_S", "label": "工具调用超时(s)", "type": "number"},
             {"key": "MOBICLAW_SKILL_SELECTOR_TIMEOUT_S", "label": "Skill Selector 超时(s)", "type": "number"},
         ],
     },

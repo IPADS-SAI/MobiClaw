@@ -26,6 +26,7 @@ from .common import (
     _summarize_execution_with_vlm,
     _trim_for_log,
     create_openai_model,
+    register_tool_with_timeout,
 )
 from .factories_worker import create_worker_agent
 from ..tools import (
@@ -79,7 +80,9 @@ def create_steward_agent(
         collect_func = call_mobi_collect_verified
         action_func = call_mobi_action
 
-    toolkit.register_tool_function(
+    _reg = functools.partial(register_tool_with_timeout, toolkit)
+
+    _reg(
         action_func,
         func_description=(
             "指挥 MobiAgent 在手机端执行 GUI 操作，执行任务或设置事件状态。"
@@ -87,12 +90,9 @@ def create_steward_agent(
         ),
     )
 
-    toolkit.register_tool_function(
-        write_text_file,
-        func_description="写入本地文本文件，用于保存结果或日志。",
-    )
+    _reg(write_text_file, func_description="写入本地文本文件，用于保存结果或日志。")
 
-    toolkit.register_tool_function(
+    _reg(
         store_steward_knowledge,
         func_description=(
             "将收集到的信息存入本地知识库。"
@@ -102,7 +102,7 @@ def create_steward_agent(
         ),
     )
 
-    toolkit.register_tool_function(
+    _reg(
         search_steward_knowledge,
         func_description=(
             "检索本地知识库中已存储的信息。"
@@ -111,19 +111,9 @@ def create_steward_agent(
         ),
     )
 
-    toolkit.register_tool_function(
-        fetch_url_text,
-        func_description="抓取指定 URL 的文本内容用于快速检索。",
-    )
-
-    toolkit.register_tool_function(
-        run_shell_command,
-        func_description="运行受限的本地命令行工具（白名单约束）。",
-    )
-    toolkit.register_tool_function(
-        extract_image_text_ocr,
-        func_description="从指定图片中提取文字。",
-    )
+    _reg(fetch_url_text, func_description="抓取指定 URL 的文本内容用于快速检索。")
+    _reg(run_shell_command, func_description="运行受限的本地命令行工具（白名单约束）。")
+    _reg(extract_image_text_ocr, func_description="从指定图片中提取文字。")
 
     async def call_mobi_collect_with_report(task_desc: str) -> ToolResponse:
         """执行一次手机采集任务，返回 VLM 摘要/提取结果与最后截图。
@@ -262,7 +252,7 @@ def create_steward_agent(
 
         return ToolResponse(content=content, metadata=pack)
 
-    toolkit.register_tool_function(
+    _reg(
         call_mobi_collect_with_report,
         func_description=(
             "执行手机任务，并返回 VLM 摘要/提取结果与最后结束时的手机截图。"
@@ -292,10 +282,7 @@ def create_steward_agent(
             metadata={"task": task, "delegation_depth": delegation_depth + 1},
         )
 
-    toolkit.register_tool_function(
-        delegate_to_worker,
-        func_description="将子任务委派给 Worker Agen 并汇总返回结果。",
-    )
+    _reg(delegate_to_worker, func_description="将子任务委派给 Worker Agent 并汇总返回结果。")
 
     sys_prompt = """你是 MobiClaw 手机操控 Agent，负责帮助用户操控手机，管理个人数据和日常事务。
 
@@ -340,6 +327,9 @@ def create_steward_agent(
 - 即使过程产出了落盘文件，也必须在当前回复正文给出明确结论与关键内容；不能只回复文件路径。
 - 如果任务主要是通用网页/论文检索，优先委派给 Worker，避免重复调用端侧工具
 - 若路由层已明确指定本 Agent，仅处理职责范围内任务，不要无限自委派
+- 如果工具调用返回 "[Tool Timeout]" 或 "[Tool Error]"，说明该工具执行超时或出错。此时你可以：
+  (1) 尝试换一个替代方案或工具重试；
+  (2) 如果没有替代方案或多次失败，应立即结束任务，向用户清楚说明失败原因（哪个工具、什么错误、影响了什么），不要无限重试。
 
 ## 示例对话
 用户：开始今日的数据整理和分析
@@ -375,6 +365,7 @@ def create_user_agent() -> UserAgent:
 def create_chat_agent(*, web_search_enabled: bool = True) -> ReActAgent:
     """创建网关 chat 模式使用的基础对话 Agent。"""
     toolkit = Toolkit()
+    _chat_reg = functools.partial(register_tool_with_timeout, toolkit)
 
     toolkit.create_tool_group(
         group_name="web_search",
@@ -382,28 +373,15 @@ def create_chat_agent(*, web_search_enabled: bool = True) -> ReActAgent:
         active=web_search_enabled,
         notes="""优先使用 brave_search 直接获取结果，若获取结果失败，再使用 fetch_* 工具尝试获取。""",
     )
-    toolkit.register_tool_function(
+    _chat_reg(
         brave_search,
         group_name="web_search",
         func_description="通过 Brave Search API 联网检索新闻与网页来源链接。",
     )
 
-    toolkit.register_tool_function(
-        fetch_url_text,
-        group_name="web_search",
-        func_description="抓取指定 URL 的文本内容用于快速检索。",
-    )
-    toolkit.register_tool_function(
-        fetch_url_readable_text,
-        group_name="web_search",
-        func_description="抓取并提取网页可读文本，用于快速理解页面内容。",
-    )
-
-    toolkit.register_tool_function(
-        fetch_url_links,
-        group_name="web_search",
-        func_description="抓取网页并提取链接，用于发现相关来源并继续检索。",
-    )
+    _chat_reg(fetch_url_text, group_name="web_search", func_description="抓取指定 URL 的文本内容用于快速检索。")
+    _chat_reg(fetch_url_readable_text, group_name="web_search", func_description="抓取并提取网页可读文本，用于快速理解页面内容。")
+    _chat_reg(fetch_url_links, group_name="web_search", func_description="抓取网页并提取链接，用于发现相关来源并继续检索。")
 
     sys_prompt = """你是 MobiClaw 的基础对话助手,名字是 MobiChatBot。
 
