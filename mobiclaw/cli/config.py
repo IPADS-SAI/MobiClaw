@@ -46,6 +46,18 @@ def reset_config() -> None:
         path.unlink()
 
 
+def resolve_config(ctx: click.Context) -> dict:
+    """Merge ctx.obj overrides with load_cli_config(). Priority: ctx.obj > config file > defaults."""
+    ctx.ensure_object(dict)
+    file_cfg = load_cli_config()
+    return {
+        "server_url": ctx.obj.get("server_url") or file_cfg.get("server_url") or "http://localhost:8090",
+        "api_key": ctx.obj.get("api_key") or file_cfg.get("api_key") or "",
+        "output_fmt": ctx.obj.get("output_fmt") or file_cfg.get("default_output") or "table",
+        "verbose": ctx.obj.get("verbose", False),
+    }
+
+
 def register_config_commands(cli_group):
     """Register config subcommand group on the root CLI."""
 

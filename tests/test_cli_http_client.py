@@ -78,6 +78,30 @@ async def test_health_raises_click_exception_on_http_error():
 
 
 @pytest.mark.asyncio
+async def test_upload_files(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/api/v1/chat/files" in str(request.url) and request.method == "POST":
+            return httpx.Response(
+                200,
+                json={
+                    "files": [
+                        {"name": "a.txt", "path": "/uploads/a.txt", "size": 5},
+                    ]
+                },
+            )
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    client = GatewayClient("http://test", transport=transport)
+    with open(tmp_path / "a.txt", "wb") as f:
+        f.write(b"hello")
+    result = await client.upload_files([str(tmp_path / "a.txt")])
+    assert "files" in result
+    assert len(result["files"]) == 1
+    assert result["files"][0]["path"] == "/uploads/a.txt"
+
+
+@pytest.mark.asyncio
 async def test_health_raises_click_exception_on_connect_error():
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("Connection refused")

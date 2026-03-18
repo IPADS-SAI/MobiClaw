@@ -1,6 +1,9 @@
 """Gateway HTTP client."""
 from __future__ import annotations
 
+import mimetypes
+from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 import click
@@ -72,6 +75,37 @@ class GatewayClient:
                 r = await client.get(
                     f"{self.base_url}/api/v1/jobs/{job_id}",
                     headers=self._headers(),
+                )
+                r.raise_for_status()
+                return r.json()
+            except httpx.HTTPStatusError as e:
+                raise click.ClickException(
+                    f"HTTP {e.response.status_code}: {e.response.text}"
+                )
+            except httpx.ConnectError:
+                raise click.ClickException(
+                    "Cannot connect to gateway server, check server_url"
+                )
+
+    async def upload_files(self, file_paths: list[str]) -> dict[str, Any]:
+        """POST /api/v1/chat/files with multipart/form-data. Returns JSON with files list."""
+        if not file_paths:
+            return {"files": []}
+        files_to_send: list[tuple[str, tuple[str, BytesIO, str | None]]] = []
+        for path in file_paths:
+            p = Path(path)
+            if not p.exists():
+                raise click.ClickException(f"File not found: {path}")
+            content = p.read_bytes()
+            name = p.name
+            mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            files_to_send.append(("files", (name, BytesIO(content), mime)))
+        async with self._client() as client:
+            try:
+                r = await client.post(
+                    f"{self.base_url}/api/v1/chat/files",
+                    headers=self._headers(),
+                    files=files_to_send,
                 )
                 r.raise_for_status()
                 return r.json()
