@@ -111,3 +111,76 @@ async def test_health_raises_click_exception_on_connect_error():
     with pytest.raises(click.ClickException) as exc_info:
         await client.health()
     assert "Cannot connect to gateway server" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_get_env():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/api/v1/env" in str(request.url) and "schema" not in str(request.url):
+            return httpx.Response(
+                200,
+                json={"path": ".env", "content": "X=1", "variables": {"X": "1"}},
+            )
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    client = GatewayClient("http://test", transport=transport)
+    result = await client.get_env()
+    assert result["path"] == ".env"
+    assert result["content"] == "X=1"
+    assert result["variables"] == {"X": "1"}
+
+
+@pytest.mark.asyncio
+async def test_get_env_schema():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/api/v1/env/schema" in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "path": ".env",
+                    "schema": [],
+                    "values": {"X": "1"},
+                    "unmanaged": {"Y": "2"},
+                },
+            )
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    client = GatewayClient("http://test", transport=transport)
+    result = await client.get_env_schema()
+    assert result["values"] == {"X": "1"}
+    assert result["unmanaged"] == {"Y": "2"}
+
+
+@pytest.mark.asyncio
+async def test_set_env_content():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/api/v1/env" in str(request.url) and request.method == "PUT":
+            import json
+            body = json.loads(request.content)
+            assert body == {"content": "X=2"}
+            return httpx.Response(200, json={"ok": True, "path": ".env"})
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    client = GatewayClient("http://test", transport=transport)
+    result = await client.set_env_content("X=2")
+    assert result["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_set_env_structured():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/api/v1/env/schema" in str(request.url) and request.method == "PUT":
+            import json
+            body = json.loads(request.content)
+            assert body["values"] == {"X": "3"}
+            assert body["preserve_unmanaged"] is True
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    client = GatewayClient("http://test", transport=transport)
+    result = await client.set_env_structured(values={"X": "3"}, preserve_unmanaged=True)
+    assert result["ok"] is True
