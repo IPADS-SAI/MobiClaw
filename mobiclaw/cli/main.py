@@ -5,7 +5,10 @@ import click
 
 from .config import load_cli_config, register_config_commands, resolve_config
 from .http_client import GatewayClient
+from .mcp import register_mcp_commands
 from .output import render
+from .schedule import register_schedule_commands
+from .session import register_session_commands
 from .task import register_task_commands
 
 
@@ -25,6 +28,9 @@ def cli(ctx, server_url, api_key, output_fmt, verbose):
 
 register_config_commands(cli)
 register_task_commands(cli)
+register_mcp_commands(cli)
+register_schedule_commands(cli)
+register_session_commands(cli)
 
 
 @cli.command()
