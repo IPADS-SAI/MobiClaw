@@ -33,6 +33,7 @@ dependencies = [
     "markitdown",
     # --- Testing ---
     "pytest",
+    "pytest-asyncio>=0.24",
     "jsonschema",         # test_agents_tool_json_schemas.py
     "uiautomator2>=3.5.0",
     "hmdriver2>=1.4.4",
@@ -57,6 +58,9 @@ members = [
 
 [tool.uv.sources]
 agentscope = { workspace = true }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [build-system]
 requires = ["hatchling"]
