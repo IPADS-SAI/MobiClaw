@@ -12,7 +12,7 @@ from agentscope.formatter import OpenAIChatFormatter
 from agentscope.memory import InMemoryMemory
 from agentscope.tool import Toolkit
 
-from ..config import CUSTOM_AGENT_CONFIG, MEMORY_CONFIG, RAG_CONFIG
+from ..config import CUSTOM_AGENT_CONFIG, MEMORY_CONFIG, RAG_CONFIG, TOOL_CONFIG
 from .catalog import _builtin_agent_capabilities, _tool_catalog
 from .common import _build_memory_prompt, _build_skill_prompt_suffix, create_openai_model, register_tool_with_timeout
 from .types import AgentCapability, CustomAgentDefinition, _as_str_list, _normalize_agent_name
@@ -130,6 +130,7 @@ def create_configured_agent_by_name(agent_name: str, *, skill_context: str | Non
         return None
 
     toolkit = Toolkit()
+    tool_timeout_s = TOOL_CONFIG["timeout_s"]
     catalog = _tool_catalog()
     for tool_name in target.tools:
         func, desc = catalog[tool_name]
@@ -137,7 +138,7 @@ def create_configured_agent_by_name(agent_name: str, *, skill_context: str | Non
             continue
         if tool_name == "update_long_term_memory" and not MEMORY_CONFIG["enabled"]:
             continue
-        register_tool_with_timeout(toolkit, func, func_description=desc)
+        register_tool_with_timeout(toolkit, tool_timeout_s, func, func_description=desc)
 
     sys_prompt = target.system_prompt
     sys_prompt += _build_memory_prompt()
