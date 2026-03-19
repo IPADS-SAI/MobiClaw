@@ -80,7 +80,8 @@ def create_steward_agent(
         collect_func = call_mobi_collect_verified
         action_func = call_mobi_action
 
-    _reg = functools.partial(register_tool_with_timeout, toolkit)
+    tool_timeout_s = TOOL_CONFIG["timeout_s"]
+    _reg = functools.partial(register_tool_with_timeout, toolkit, tool_timeout_s)
 
     _reg(
         action_func,
