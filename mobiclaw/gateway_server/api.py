@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from .api_env import register_env_routes
 from ..mcp import get_mcp_manager
-from .models import DeviceHeartbeat
+from .models import DeviceHeartbeat, TaskRequest
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +112,7 @@ def register_routes(app) -> None:
 
     @app.post("/api/v1/task", response_model=_gateway_override("TaskResult", None))
     async def submit_task(
-        request: Any,
+        body: TaskRequest,
         raw_request: Request,
         authorization: str | None = Header(default=None),
     ):
@@ -133,31 +133,31 @@ def register_routes(app) -> None:
         cfg = load_config()
         ensure_auth(authorization, cfg)
 
-        if not request.task.strip():
+        if not body.task.strip():
             raise HTTPException(status_code=400, detail="Task must not be empty")
 
-        if request.schedule and get_active_manager() is not None:
+        if body.schedule and get_active_manager() is not None:
             detection = schedule_detection_cls(
                 is_scheduled=True,
-                core_task=request.task,
-                schedule_type=request.schedule.schedule_type,
-                cron_expr=request.schedule.cron_expr,
-                run_at=request.schedule.run_at,
-                human_description=request.schedule.description or "",
+                core_task=body.task,
+                schedule_type=body.schedule.schedule_type,
+                cron_expr=body.schedule.cron_expr,
+                run_at=body.schedule.run_at,
+                human_description=body.schedule.description or "",
             )
             scheduled_task = await get_active_manager().add_scheduled_task(
                 detection=detection,
-                original_task=request.task,
+                original_task=body.task,
                 source="api",
                 mode="router",
-                agent_hint=request.agent_hint,
-                skill_hint=request.skill_hint,
-                routing_strategy=request.routing_strategy,
-                web_search_enabled=request.web_search_enabled,
+                agent_hint=body.agent_hint,
+                skill_hint=body.skill_hint,
+                routing_strategy=body.routing_strategy,
+                web_search_enabled=body.web_search_enabled,
                 job_context={
-                    "webhook_url": request.webhook_url,
-                    "webhook_token": request.webhook_token,
-                    "callback_headers": request.callback_headers,
+                    "webhook_url": body.webhook_url,
+                    "webhook_token": body.webhook_token,
+                    "callback_headers": body.callback_headers,
                 },
             )
             return task_result_cls(
@@ -172,29 +172,29 @@ def register_routes(app) -> None:
                 },
             )
 
-        effective_task, normalized_input_files = inject_input_files_into_task(request.task, request.input_files)
+        effective_task, normalized_input_files = inject_input_files_into_task(body.task, body.input_files)
 
-        if request.async_mode:
+        if body.async_mode:
             job_id = uuid.uuid4().hex
             async with job_lock:
                 job_store[job_id] = task_result_cls(job_id=job_id, status="queued")
                 job_ctx_map[job_id] = job_context_cls(
-                    webhook_url=request.webhook_url,
-                    webhook_token=request.webhook_token,
-                    callback_headers=request.callback_headers,
+                    webhook_url=body.webhook_url,
+                    webhook_token=body.webhook_token,
+                    callback_headers=body.callback_headers,
                 )
             asyncio.create_task(
                 run_job(
                     job_id,
                     effective_task,
-                    request.output_path,
-                    request.mode,
-                    request.agent_hint,
-                    request.skill_hint,
-                    request.routing_strategy,
-                    request.context_id,
+                    body.output_path,
+                    body.mode,
+                    body.agent_hint,
+                    body.skill_hint,
+                    body.routing_strategy,
+                    body.context_id,
                     None,
-                    request.web_search_enabled,
+                    body.web_search_enabled,
                     normalized_input_files,
                 )
             )
@@ -203,15 +203,15 @@ def register_routes(app) -> None:
         job_id = uuid.uuid4().hex
         result = await run_gateway_task(
             task=effective_task,
-            output_path=request.output_path,
-            mode=request.mode,
-            agent_hint=request.agent_hint,
-            skill_hint=request.skill_hint,
-            routing_strategy=request.routing_strategy,
-            context_id=request.context_id,
-            web_search_enabled=request.web_search_enabled,
+            output_path=body.output_path,
+            mode=body.mode,
+            agent_hint=body.agent_hint,
+            skill_hint=body.skill_hint,
+            routing_strategy=body.routing_strategy,
+            context_id=body.context_id,
+            web_search_enabled=body.web_search_enabled,
         )
-        resolved_context_id = resolve_context_id(request.context_id, result)
+        resolved_context_id = resolve_context_id(body.context_id, result)
         if resolved_context_id:
             result = dict(result or {})
             result.setdefault("context_id", resolved_context_id)
@@ -220,7 +220,24 @@ def register_routes(app) -> None:
             result = dict(result or {})
             result["input_files"] = normalized_input_files
         result = decorate_result_with_files(job_id, result, request=raw_request, cfg=cfg)
-        return task_result_cls(job_id=job_id, status="completed", result=result)
+        try:
+            from ..config import RAG_CONFIG
+
+            if RAG_CONFIG["task_history_enabled"]:
+                from ..tools import store_task_result
+
+                await store_task_result(
+                    job_id=job_id,
+                    task=effective_task,
+                    reply=str((result or {}).get("reply", "")),
+                    files=(result or {}).get("files", []),
+                )
+        except Exception as exc:
+            logger.warning("Failed to store task result in RAG: %s", exc)
+        completed = task_result_cls(job_id=job_id, status="completed", result=result)
+        async with job_lock:
+            job_store[job_id] = completed
+        return completed
     exported["submit_task"] = submit_task
 
     @app.get("/api/v1/chat/sessions")

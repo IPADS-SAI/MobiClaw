@@ -43,6 +43,8 @@ from ..tools import (
 )
 from .types import AgentCapability
 
+from ..mcp import get_mcp_manager
+
 
 def _tool_catalog() -> dict[str, tuple[Any, str]]:
     """返回可供自定义 Agent 复用的工具目录。"""
@@ -82,8 +84,6 @@ def _tool_catalog() -> dict[str, tuple[Any, str]]:
         "set_pptx_text_style": (set_pptx_text_style, "对匹配文本应用 PPTX 字体样式。"),
     }
 
-    from ..mcp import get_mcp_manager
-
     manager = get_mcp_manager()
     if manager is not None:
         for tool_func, description in manager.get_tool_functions():
@@ -116,8 +116,6 @@ def _builtin_agent_capabilities() -> list[AgentCapability]:
         worker_strengths.append("长期记忆读写（记录用户偏好、事实信息等跨会话信息）")
     if SCHEDULE_CONFIG["enabled"]:
         worker_strengths.append("定时任务管理（创建、查看、取消）")
-
-    from ..mcp import get_mcp_manager
 
     manager = get_mcp_manager()
     if manager is not None:

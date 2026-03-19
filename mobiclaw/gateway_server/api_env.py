@@ -7,6 +7,8 @@ from typing import Any
 
 from fastapi import Header
 
+from .models import EnvContentRequest, EnvStructuredRequest
+
 
 def _gateway_override(name: str, default: Any) -> Any:
     from .. import gateway_server as gateway_module
@@ -30,7 +32,7 @@ def register_env_routes(app, exported: dict[str, Any]) -> None:
     exported["get_env"] = get_env
 
     @app.put("/api/v1/env")
-    async def put_env(request: Any, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    async def put_env(body: EnvContentRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
         load_config = _gateway_override("load_config", None)
         ensure_auth = _gateway_override("_ensure_auth", None)
         write_env_content = _gateway_override("_write_env_content", None)
@@ -39,7 +41,7 @@ def register_env_routes(app, exported: dict[str, Any]) -> None:
         parse_env_variables = _gateway_override("_parse_env_variables", None)
         cfg = load_config()
         ensure_auth(authorization, cfg)
-        write_env_content(request.content)
+        write_env_content(body.content)
         content = read_env_content()
         return {"ok": True, "path": str(env_file_path()), "content": content, "variables": parse_env_variables(content)}
 
@@ -71,7 +73,7 @@ def register_env_routes(app, exported: dict[str, Any]) -> None:
     exported["get_env_schema"] = get_env_schema
 
     @app.put("/api/v1/env/schema")
-    async def put_env_schema(request: Any, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    async def put_env_schema(body: EnvStructuredRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
         load_config = _gateway_override("load_config", None)
         ensure_auth = _gateway_override("_ensure_auth", None)
         sanitize_structured_values = _gateway_override("_sanitize_structured_values", None)
@@ -85,13 +87,13 @@ def register_env_routes(app, exported: dict[str, Any]) -> None:
         env_settings_schema = _gateway_override("_ENV_SETTINGS_SCHEMA", None)
         cfg = load_config()
         ensure_auth(authorization, cfg)
-        incoming_values = sanitize_structured_values(request.values)
+        incoming_values = sanitize_structured_values(body.values)
         merged_values: dict[str, str] = {}
         for key in managed_env_keys():
             merged_values[key] = incoming_values.get(key, "")
-        if request.unmanaged is not None:
-            unmanaged = sanitize_structured_values(request.unmanaged)
-        elif request.preserve_unmanaged:
+        if body.unmanaged is not None:
+            unmanaged = sanitize_structured_values(body.unmanaged)
+        elif body.preserve_unmanaged:
             current_variables = parse_env_variables(read_env_content())
             _, unmanaged = split_env_variables(current_variables)
         else:
