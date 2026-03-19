@@ -77,28 +77,6 @@ def test_device_show(runner):
     assert "100.1.2.3" in r.output
 
 
-def test_device_heartbeat(runner):
-    """Heartbeat sends POST with body."""
-    with patch("mobiclaw.cli.device.GatewayClient") as mock_cls:
-        mock_heartbeat = AsyncMock(
-            return_value={"status": "ok", "device_id": "dev1", "timestamp": "2026-03-18T10:00:00Z"}
-        )
-        mock_cls.return_value.device_heartbeat = mock_heartbeat
-        r = runner.invoke(
-            cli,
-            ["device", "heartbeat", "--device-id", "dev1", "--ip", "100.1.2.3", "--port", "5555", "--name", "Pixel"],
-        )
-    assert r.exit_code == 0
-    assert "Heartbeat ok" in r.output
-    assert "dev1" in r.output
-    mock_heartbeat.assert_called_once_with(
-        device_id="dev1",
-        tailscale_ip="100.1.2.3",
-        adb_port=5555,
-        device_name="Pixel",
-    )
-
-
 def test_device_remove_with_yes(runner):
     """Remove with --yes skips confirmation and removes."""
     with patch("mobiclaw.cli.device.GatewayClient") as mock_cls:
@@ -134,5 +112,4 @@ def test_device_help(runner):
     assert r.exit_code == 0
     assert "list" in r.output
     assert "show" in r.output
-    assert "heartbeat" in r.output
     assert "remove" in r.output

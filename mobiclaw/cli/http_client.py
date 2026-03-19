@@ -56,12 +56,15 @@ class GatewayClient:
                 )
 
     async def submit_task(self, **kwargs: Any) -> dict[str, Any]:
+        # Sync mode can take minutes (LLM, web search, etc.); use 30min read timeout
+        timeout = httpx.Timeout(1800.0)
         async with self._client() as client:
             try:
                 r = await client.post(
                     f"{self.base_url}/api/v1/task",
                     json=kwargs,
                     headers=self._headers(),
+                    timeout=timeout,
                 )
                 r.raise_for_status()
                 return r.json()
@@ -72,6 +75,10 @@ class GatewayClient:
             except httpx.ConnectError:
                 raise click.ClickException(
                     "Cannot connect to gateway server, check server_url"
+                )
+            except httpx.ReadTimeout:
+                raise click.ClickException(
+                    "Request timed out (30min). Try --async for long tasks."
                 )
 
     async def get_job(self, job_id: str) -> dict[str, Any]:

@@ -45,8 +45,8 @@ def register_mcp_commands(cli_group: click.Group) -> None:
 
     @mcp_group.command("add", help="Add MCP server (stdio or sse transport)")
     @click.argument("name")
-    @click.argument("command", required=False)
-    @click.option("--args", "args_list", multiple=True, help="Arguments for stdio command")
+    @click.argument("command", nargs=-1, required=False)
+    @click.option("--args", "args_list", multiple=True, help="Additional arguments for stdio command")
     @click.option("--env", "env_pairs", multiple=True, help="Env vars KEY=VALUE for stdio")
     @click.option("--url", help="URL for SSE transport")
     @click.option("--transport", type=click.Choice(["sse"]), default="sse", help="Transport when using --url (default: sse)")
@@ -56,6 +56,9 @@ def register_mcp_commands(cli_group: click.Group) -> None:
         if url:
             body = {"name": name, "transport": transport, "url": url}
         elif command:
+            cmd_parts = list(command) + list(args_list)
+            executable = cmd_parts[0] if cmd_parts else ""
+            cmd_args = cmd_parts[1:] if len(cmd_parts) > 1 else []
             env_dict = {}
             for pair in env_pairs:
                 if "=" in pair:
@@ -66,8 +69,8 @@ def register_mcp_commands(cli_group: click.Group) -> None:
             body = {
                 "name": name,
                 "transport": "stdio",
-                "command": command,
-                "args": list(args_list),
+                "command": executable,
+                "args": cmd_args,
                 "env": env_dict if env_dict else None,
             }
         else:

@@ -220,7 +220,24 @@ def register_routes(app) -> None:
             result = dict(result or {})
             result["input_files"] = normalized_input_files
         result = decorate_result_with_files(job_id, result, request=raw_request, cfg=cfg)
-        return task_result_cls(job_id=job_id, status="completed", result=result)
+        try:
+            from ..config import RAG_CONFIG
+
+            if RAG_CONFIG["task_history_enabled"]:
+                from ..tools import store_task_result
+
+                await store_task_result(
+                    job_id=job_id,
+                    task=effective_task,
+                    reply=str((result or {}).get("reply", "")),
+                    files=(result or {}).get("files", []),
+                )
+        except Exception as exc:
+            logger.warning("Failed to store task result in RAG: %s", exc)
+        completed = task_result_cls(job_id=job_id, status="completed", result=result)
+        async with job_lock:
+            job_store[job_id] = completed
+        return completed
     exported["submit_task"] = submit_task
 
     @app.get("/api/v1/chat/sessions")

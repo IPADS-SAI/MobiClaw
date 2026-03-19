@@ -1,4 +1,4 @@
-"""Device list, show, heartbeat, and remove commands."""
+"""Device list, show, and remove commands."""
 from __future__ import annotations
 
 import asyncio
@@ -10,11 +10,11 @@ from .output import print_table, print_text, render
 
 
 def register_device_commands(cli_group: click.Group) -> None:
-    """Register device list, show, heartbeat, remove subcommands."""
+    """Register device list, show, remove subcommands."""
 
     @cli_group.group("device")
     def device():
-        """List, show, heartbeat, or remove devices."""
+        """List, show, or remove devices."""
 
     @device.command("list")
     @click.pass_context
@@ -80,34 +80,6 @@ def register_device_commands(cli_group: click.Group) -> None:
             print_table(cols, rows, title=f"Device {device_id}")
         else:
             render(result, output_fmt)
-
-    @device.command("heartbeat")
-    @click.option("--device-id", required=True, help="Device ID")
-    @click.option("--ip", "tailscale_ip", help="Tailscale IP")
-    @click.option("--port", "adb_port", type=int, help="ADB port")
-    @click.option("--name", "device_name", help="Device name")
-    @click.pass_context
-    def heartbeat(ctx, device_id: str, tailscale_ip: str | None, adb_port: int | None, device_name: str | None):
-        """Send device heartbeat."""
-        from .config import resolve_config
-
-        cfg = resolve_config(ctx)
-        client = GatewayClient(cfg["server_url"], cfg["api_key"])
-        output_fmt = cfg.get("output_fmt", "table")
-
-        result = asyncio.run(
-            client.device_heartbeat(
-                device_id=device_id,
-                tailscale_ip=tailscale_ip,
-                adb_port=adb_port,
-                device_name=device_name,
-            )
-        )
-
-        if output_fmt == "json":
-            render(result, "json")
-        else:
-            print_text(f"Heartbeat ok: {result.get('device_id', device_id)} @ {result.get('timestamp', '')}")
 
     @device.command("remove")
     @click.argument("device_id", required=True)

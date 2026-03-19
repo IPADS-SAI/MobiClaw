@@ -20,7 +20,7 @@ def register_task_commands(cli_group: click.Group) -> None:
     @task.command("submit")
     @click.argument("task_text", required=True)
     @click.option("--async", "async_mode", is_flag=True, help="Submit asynchronously, return job_id")
-    @click.option("--mode", default="chat", help="Execution mode (chat, router, etc.)")
+    @click.option("--mode", default="router", help="Execution mode (chat, router, etc.)")
     @click.option("--agent-hint", "agent_hint", default=None, help="Agent selection hint")
     @click.option("--skill-hint", "skill_hint", default=None, help="Skill selection hint")
     @click.option("--context-id", "context_id", default=None, help="Session/context ID")
@@ -78,6 +78,9 @@ def register_task_commands(cli_group: click.Group) -> None:
                 "description": schedule_desc,
             }
             payload["schedule"] = {k: v for k, v in schedule.items() if v is not None}
+
+        if not async_mode and not schedule_type:
+            print_text("Sync mode: waiting for agent to complete...")
 
         result = asyncio.run(client.submit_task(**payload))
 

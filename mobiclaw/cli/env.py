@@ -99,6 +99,7 @@ def register_env_commands(cli_group: click.Group) -> None:
                 )
             )
         render({"ok": True, "key": key, "value": value}, cfg.get("output_fmt", "table"))
+        print_text("\nRestart gateway server for changes to take effect.")
 
     @env_group.command("edit", help="Edit .env content in $EDITOR")
     @click.pass_context
@@ -123,5 +124,6 @@ def register_env_commands(cli_group: click.Group) -> None:
                 {"ok": True, "path": result.get("path", ".env")},
                 cfg.get("output_fmt", "table"),
             )
+            print_text("\nRestart gateway server for changes to take effect.")
         finally:
             os.unlink(tmp_path)

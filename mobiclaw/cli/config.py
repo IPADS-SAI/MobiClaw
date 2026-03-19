@@ -8,7 +8,6 @@ _DEFAULTS = {
     "server_url": "http://localhost:8090",
     "api_key": "",
     "default_output": "table",
-    "default_mode": "chat",
 }
 
 
@@ -74,7 +73,7 @@ def register_config_commands(cli_group):
             click.echo(f"  {k}: {v}")
 
     @config_cmd.command("set")
-    @click.argument("key", type=click.Choice(["server_url", "api_key", "default_output", "default_mode"]))
+    @click.argument("key", type=click.Choice(["server_url", "api_key", "default_output"]))
     @click.argument("value")
     def config_set(key, value):
         """Set config key to value."""
