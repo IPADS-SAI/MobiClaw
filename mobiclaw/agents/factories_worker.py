@@ -223,8 +223,7 @@ def create_worker_agent(
 """
     if office_write_enabled:
         sys_prompt += (
-            '- 只有当skill中脚本反复尝试失败后，再调用 "create_docx_from_text"、"create_pdf_from_text"、'
-            '"create_pptx_from_outline"、"write_xlsx_from_records"、"write_xlsx_from_rows" 等生成/修改文档工具做兜底。\n'
+            '- 只有当skill中脚本反复尝试失败后，再调用 "create_docx_from_text"、"create_pdf_from_text"、"create_pptx_from_outline"、"write_xlsx_from_records"、"write_xlsx_from_rows" 等生成/修改文档工具做兜底。\n'
         )
     if RAG_CONFIG["task_history_enabled"]:
         _reg(search_task_history, func_description="检索历史任务执行记录和相关文件，用于回答关于之前做过的任务的问题。")
