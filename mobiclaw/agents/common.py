@@ -444,8 +444,7 @@ def _build_skill_prompt_suffix(skill_context: str | None) -> str:
     return (
         "\n\n[Activated Skills]\n"
         f"{text}\n"
-        "使用方式：仅在与当前任务直接相关时参考这些技能约束；"
-        "若不相关则忽略，不要为了使用技能而使用技能。"
+        "[End of Activated Skills]，可以参考Activated Skills中提供的指令和脚本，完成相应的任务\n"
     )
 
 

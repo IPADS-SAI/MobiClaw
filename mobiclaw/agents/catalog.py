@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..config import MEMORY_CONFIG, RAG_CONFIG, SCHEDULE_CONFIG
+from ..config import CREATE_OFFICE_FILE_CONFIG, MEMORY_CONFIG, RAG_CONFIG, SCHEDULE_CONFIG
 from ..tools import (
     arxiv_search,
     brave_search,
@@ -63,12 +63,7 @@ def _tool_catalog() -> dict[str, tuple[Any, str]]:
         "extract_image_text_ocr": (extract_image_text_ocr, "从本地图片文件中执行 OCR 识别。"),
         "read_docx_text": (read_docx_text, "读取 DOCX 文档文本内容。"),
         "read_markdown_file": (read_markdown_file, "读取本地 Markdown(.md) 文件内容。"),
-        "create_docx_from_text": (create_docx_from_text, "从纯文本生成 DOCX 文档。"),
-        "edit_docx": (edit_docx, "对 DOCX 文档进行查找替换、追加段落或插入表格。"),
-        "create_pdf_from_text": (create_pdf_from_text, "从纯文本生成 PDF 文档。"),
         "read_xlsx_summary": (read_xlsx_summary, "读取 XLSX 工作簿摘要与预览。"),
-        "write_xlsx_from_records": (write_xlsx_from_records, "从记录列表生成 XLSX 文件。"),
-        "write_xlsx_from_rows": (write_xlsx_from_rows, "从行数据生成 XLSX 文件。"),
         "write_text_file": (write_text_file, "写入本地文本文件。"),
         "search_task_history": (search_task_history, "检索历史任务执行记录和相关文档。"),
         "search_steward_knowledge": (search_steward_knowledge, "检索本地知识库中已存储的信息。"),
@@ -80,11 +75,22 @@ def _tool_catalog() -> dict[str, tuple[Any, str]]:
         "send_feishu_meeting_card": (send_feishu_meeting_card, "将会议信息以卡片形式发送到飞书会话。"),
         "update_long_term_memory": (update_long_term_memory, "更新长期记忆文件（MEMORY.md）。"),
         "read_pptx_summary": (read_pptx_summary, "读取 PPTX/PPT 文件并返回结构化摘要。"),
-        "create_pptx_from_outline": (create_pptx_from_outline, "从幻灯片大纲列表创建新 PPTX 文件。"),
-        "edit_pptx": (edit_pptx, "综合编辑已有 PPTX。"),
-        "insert_pptx_image": (insert_pptx_image, "向指定幻灯片插入本地图片。"),
-        "set_pptx_text_style": (set_pptx_text_style, "对匹配文本应用 PPTX 字体样式。"),
     }
+
+    if bool(CREATE_OFFICE_FILE_CONFIG.get("enabled", False)):
+        catalog.update(
+            {
+                "create_docx_from_text": (create_docx_from_text, "从纯文本生成 DOCX 文档。"),
+                "edit_docx": (edit_docx, "对 DOCX 文档进行查找替换、追加段落或插入表格。"),
+                "create_pdf_from_text": (create_pdf_from_text, "从纯文本生成 PDF 文档。"),
+                "write_xlsx_from_records": (write_xlsx_from_records, "从记录列表生成 XLSX 文件。"),
+                "write_xlsx_from_rows": (write_xlsx_from_rows, "从行数据生成 XLSX 文件。"),
+                "create_pptx_from_outline": (create_pptx_from_outline, "从幻灯片大纲列表创建新 PPTX 文件。"),
+                "edit_pptx": (edit_pptx, "综合编辑已有 PPTX。"),
+                "insert_pptx_image": (insert_pptx_image, "向指定幻灯片插入本地图片。"),
+                "set_pptx_text_style": (set_pptx_text_style, "对匹配文本应用 PPTX 字体样式。"),
+            }
+        )
 
     manager = get_mcp_manager()
     if manager is not None:

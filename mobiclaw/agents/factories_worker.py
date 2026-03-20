@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import functools
+import logging
 from typing import Any
 
 from agentscope.agent import ReActAgent
@@ -11,7 +12,7 @@ from agentscope.formatter import OpenAIChatFormatter
 from agentscope.memory import InMemoryMemory
 from agentscope.tool import Toolkit
 
-from ..config import MEMORY_CONFIG, RAG_CONFIG, SCHEDULE_CONFIG, TOOL_CONFIG
+from ..config import CREATE_OFFICE_FILE_CONFIG, MEMORY_CONFIG, RAG_CONFIG, SCHEDULE_CONFIG, TOOL_CONFIG
 from ..mcp import get_mcp_manager
 from .common import _build_memory_prompt, _build_skill_prompt_suffix, create_openai_model, register_tool_with_timeout
 from ..tools import (
@@ -50,6 +51,17 @@ from ..tools import (
     write_xlsx_from_rows,
 )
 
+logger = logging.getLogger("mobiclaw.agents")
+
+_ANSI_BOLD = "\033[1m"
+_ANSI_RESET = "\033[0m"
+_ANSI_CYAN = "\033[96m"
+_ANSI_YELLOW = "\033[93m"
+
+
+def _color_log(message: str, color: str) -> str:
+    return f"{_ANSI_BOLD}{color}{message}{_ANSI_RESET}"
+
 
 def create_worker_agent(
     skill_context: str | None = None,
@@ -81,14 +93,17 @@ def create_worker_agent(
     _reg(extract_image_text_ocr, func_description="从本地图片文件中执行 OCR 识别，提取文字内容。")
     _reg(read_docx_text, func_description="读取 DOCX 文档文本内容。")
     _reg(read_markdown_file, func_description="读取本地 Markdown(.md) 文件内容。")
-    _reg(create_docx_from_text, func_description="从纯文本生成 DOCX 文档。")
-    _reg(edit_docx, func_description="对 DOCX 文档进行查找替换、追加段落或插入表格。")
-    _reg(create_pdf_from_text, func_description="从纯文本生成 PDF 文档。")
     _reg(read_xlsx_summary, func_description="读取 XLSX 工作簿摘要与预览。")
-    _reg(write_xlsx_from_records, func_description="从记录列表生成 XLSX 文件。")
-    _reg(write_xlsx_from_rows, func_description="从行数据生成 XLSX 文件。")
-    _reg(write_text_file, func_description="写入本地文本文件，用于保存结果或日志。")
+    _reg(write_text_file, func_description="写入本地文本文件，用于保存结果或日志、不用于创建PPT、doc、xlsx、PDF等文件。")
     _reg(search_steward_knowledge, func_description="检索本地知识库中已存储的信息（由智能管家从手机中提取并存储）。")
+
+    office_write_enabled = bool(CREATE_OFFICE_FILE_CONFIG.get("enabled", False))
+    if office_write_enabled:
+        _reg(create_docx_from_text, func_description="从纯文本生成 DOCX 文档。")
+        _reg(edit_docx, func_description="对 DOCX 文档进行查找替换、追加段落或插入表格。")
+        _reg(create_pdf_from_text, func_description="从纯文本生成 PDF 文档。")
+        _reg(write_xlsx_from_records, func_description="从记录列表生成 XLSX 文件。")
+        _reg(write_xlsx_from_rows, func_description="从行数据生成 XLSX 文件。")
 
     _reg(
         fetch_feishu_chat_history,
@@ -137,48 +152,47 @@ def create_worker_agent(
         read_pptx_summary,
         func_description="读取 PPTX/PPT 文件，返回每张幻灯片的标题、正文文本、备注、形状数量和图片数量的结构化摘要。",
     )
+    if office_write_enabled:
+        _reg(
+            create_pptx_from_outline,
+            func_description=(
+                "从幻灯片大纲列表创建新 PPTX 文件。"
+                "每张幻灯片支持：标题、正文（字符串或列表）、演讲者备注、布局索引、"
+                "嵌入图片（路径+位置+尺寸）、字号、字体颜色（#RRGGBB）、粗体、斜体。"
+                "支持可选模板文件与全局默认字体大小/颜色。"
+            ),
+        )
 
-    _reg(
-        create_pptx_from_outline,
-        func_description=(
-            "从幻灯片大纲列表创建新 PPTX 文件。"
-            "每张幻灯片支持：标题、正文（字符串或列表）、演讲者备注、布局索引、"
-            "嵌入图片（路径+位置+尺寸）、字号、字体颜色（#RRGGBB）、粗体、斜体。"
-            "支持可选模板文件与全局默认字体大小/颜色。"
-        ),
-    )
+        _reg(
+            edit_pptx,
+            func_description=(
+                "综合编辑已有 PPTX：跨所有幻灯片全局文本替换、追加新幻灯片、"
+                "按 1-based 索引删除幻灯片。三种操作可在一次调用中组合使用。"
+            ),
+        )
 
-    _reg(
-        edit_pptx,
-        func_description=(
-            "综合编辑已有 PPTX：跨所有幻灯片全局文本替换、追加新幻灯片、"
-            "按 1-based 索引删除幻灯片。三种操作可在一次调用中组合使用。"
-        ),
-    )
+        _reg(
+            insert_pptx_image,
+            func_description=(
+                "向指定幻灯片（1-based 索引）插入本地图片。"
+                "支持英寸单位的定位（left/top）和尺寸（width/height），省略宽高时保持原始比例。"
+            ),
+        )
 
-    _reg(
-        insert_pptx_image,
-        func_description=(
-            "向指定幻灯片（1-based 索引）插入本地图片。"
-            "支持英寸单位的定位（left/top）和尺寸（width/height），省略宽高时保持原始比例。"
-        ),
-    )
-
-    _reg(
-        set_pptx_text_style,
-        func_description=(
-            "在指定幻灯片中搜索文本子串，对所有匹配的 run 应用字体样式："
-            "字号（pt）、颜色（#RRGGBB）、粗体、斜体、下划线。省略的属性保持原样。"
-        ),
-    )
+        _reg(
+            set_pptx_text_style,
+            func_description=(
+                "在指定幻灯片中搜索文本子串，对所有匹配的 run 应用字体样式："
+                "字号（pt）、颜色（#RRGGBB）、粗体、斜体、下划线。省略的属性保持原样。"
+            ),
+        )
 
     sys_prompt = """你是 MobiClaw 的 Worker Agent，负责处理通用问题与单一子任务。
 
 工作准则：
 - 只聚焦当前任务（如果当前是一个子任务，只聚焦于子任务），给出简明直接的结果。
 - 必要时使用工具检索或执行本地命令。
-- 如果提供了相应的skill（例如PPT，docx，excel），请优先使用skill中定义的脚本或者方法来处理相关任务。
-- 只有当skill中脚本反复尝试失败后，再调用 "create_docx_from_text"、""create_pdf_from_text"、"create_pptx_from_outline"、"create_docx_from_text"、 "write_xlsx_from_records"等生成文档的工具，进行兜底处理。 
+- 如果提供了skill，请优先使用skill中定义的脚本或者方法来处理相关任务，例如生成PPT，docx，excel等等。
 - 如果需要运行skill中的脚本，请务必使用 "run_skill_script"，而非"run_shell_command"。使用 "run_skill_script" 时，必须提供 command 和 execution_dir；优先使用 Activated Skills 中给出的 execution_dir。
 - 如果需要联网搜索新闻或网页来源，优先使用 "brave_search" 获取新闻/web内容。
 - 如果检索学术论文，优先使用 "arxiv_search" 获取元数据与 PDF 链接。
@@ -207,6 +221,11 @@ def create_worker_agent(
   (1) 尝试换一个替代方案或工具重试；
   (2) 如果没有替代方案或多次失败，应立即结束任务，向用户清楚说明失败原因（哪个工具、什么错误、影响了什么），不要无限重试。
 """
+    if office_write_enabled:
+        sys_prompt += (
+            '- 只有当skill中脚本反复尝试失败后，再调用 "create_docx_from_text"、"create_pdf_from_text"、'
+            '"create_pptx_from_outline"、"write_xlsx_from_records"、"write_xlsx_from_rows" 等生成/修改文档工具做兜底。\n'
+        )
     if RAG_CONFIG["task_history_enabled"]:
         _reg(search_task_history, func_description="检索历史任务执行记录和相关文件，用于回答关于之前做过的任务的问题。")
         sys_prompt += "- 如果用户询问之前做过的任务，使用 \"search_task_history\" 检索历史记录。\n"
@@ -250,8 +269,14 @@ def create_worker_agent(
                 "- 你还拥有以下通过 MCP 服务器注册的外部工具，可按需调用：" + ", ".join(mcp_tool_names) + "\n"
             )
 
-    sys_prompt += _build_memory_prompt()
-    sys_prompt += _build_skill_prompt_suffix(skill_context)
+    memory_prompt = _build_memory_prompt()
+    skill_prompt = _build_skill_prompt_suffix(skill_context)
+
+    logger.info(_color_log("worker.prompt.memory_prompt:\n" + (memory_prompt or "[empty]"), _ANSI_CYAN))
+    logger.info(_color_log("worker.prompt.skill_prompt:\n" + (skill_prompt or "[empty]"), _ANSI_YELLOW))
+
+    sys_prompt += memory_prompt
+    sys_prompt += skill_prompt
 
     return ReActAgent(
         name="Worker",

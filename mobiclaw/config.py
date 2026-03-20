@@ -140,6 +140,11 @@ TOOL_CONFIG = {
     "timeout_s": max(5.0, float(os.environ.get("MOBICLAW_TOOL_TIMEOUT_S", "120"))),
 }
 
+# Office 文件生成/修改工具开关（默认关闭）
+CREATE_OFFICE_FILE_CONFIG = {
+    "enabled": os.environ.get("MOBICLAW_CREATE_OFFICE_FILE_ENABLED", "0").strip() not in {"0", "false", "False"},
+}
+
 # MCP 服务器动态工具注册
 MCP_SERVERS_CONFIG = {
     "config_path": os.environ.get("MOBICLAW_MCP_SERVERS_PATH", "~/.mobiclaw/mcp_servers.json"),
