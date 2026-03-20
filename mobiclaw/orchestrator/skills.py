@@ -144,6 +144,56 @@ def _load_skill_content_direct(name: str) -> tuple[str, str]:
     return raw, description
 
 
+def _collect_skill_markdown_pairs(skill_dir: str, primary_content: str) -> list[tuple[str, str]]:
+    """Collect markdown files under skill directory as (filename, content) pairs."""
+    base = (skill_dir or "").strip()
+    if not base:
+        fallback = (primary_content or "").strip()
+        return [("SKILL.md", fallback)] if fallback else []
+
+    root = Path(base)
+    if not root.exists() or not root.is_dir():
+        fallback = (primary_content or "").strip()
+        return [("SKILL.md", fallback)] if fallback else []
+
+    md_files = [p for p in root.rglob("*.md") if p.is_file()]
+
+    # Keep SKILL.md first, then sort the rest for deterministic prompts.
+    def _sort_key(path: Path) -> tuple[int, str]:
+        rel = str(path.relative_to(root)).replace("\\", "/")
+        return (0 if rel.lower() == "skill.md" else 1, rel.lower())
+
+    pairs: list[tuple[str, str]] = []
+    for path in sorted(md_files, key=_sort_key):
+        rel = str(path.relative_to(root)).replace("\\", "/")
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace").strip()
+        except Exception as exc:
+            logger.warning(
+                "orchestrator.skill.md_read_failed path=%s error=%s",
+                str(path),
+                str(exc),
+            )
+            continue
+        if text:
+            pairs.append((rel, text))
+
+    if not pairs:
+        fallback = (primary_content or "").strip()
+        if fallback:
+            pairs.append(("SKILL.md", fallback))
+    return pairs
+
+
+def _format_skill_markdown_pairs(pairs: list[tuple[str, str]]) -> str:
+    if not pairs:
+        return ""
+    blocks: list[str] = []
+    for filename, text in pairs:
+        blocks.append(f"[Skill File: {filename}]\n{text}")
+    return "\n\n".join(blocks)
+
+
 def _rule_select_skills(task: str, agent_name: str, max_candidates: int) -> list[dict[str, Any]]:
     """按规则从技能画像中筛选候选技能。"""
     task_tokens = _tokenize_query(task)
@@ -295,12 +345,15 @@ def _skill_prompt_context(selected_skills: list[str]) -> str:
                 selected_skills,
             )
             continue
+        markdown_pairs = _collect_skill_markdown_pairs(skill_dir, content)
+        merged_content = _format_skill_markdown_pairs(markdown_pairs) or content
+
         blocks.append(
             "\n".join(
                 [
                     f"[Skill: {skill_name}]",
                     f"execution_dir (just for skill scripts): {skill_dir}",
-                    content,
+                    merged_content,
                 ]
             )
         )

@@ -34,6 +34,7 @@ from ..tools import (
     insert_pptx_image,
     read_feishu_docx_link,
     read_docx_text,
+    read_markdown_file,
     read_pptx_summary,
     read_xlsx_summary,
     run_shell_command,
@@ -79,6 +80,7 @@ def create_worker_agent(
     _reg(extract_pdf_text, func_description="从本地 PDF 文件中提取文本内容。")
     _reg(extract_image_text_ocr, func_description="从本地图片文件中执行 OCR 识别，提取文字内容。")
     _reg(read_docx_text, func_description="读取 DOCX 文档文本内容。")
+    _reg(read_markdown_file, func_description="读取本地 Markdown(.md) 文件内容。")
     _reg(create_docx_from_text, func_description="从纯文本生成 DOCX 文档。")
     _reg(edit_docx, func_description="对 DOCX 文档进行查找替换、追加段落或插入表格。")
     _reg(create_pdf_from_text, func_description="从纯文本生成 PDF 文档。")

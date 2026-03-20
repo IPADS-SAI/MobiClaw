@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from .mobi import call_mobi_action, call_mobi_collect_verified
-from .file import write_text_file
+from .file import read_markdown_file, write_text_file
 from .papers import arxiv_search, dblp_conference_search, download_file, extract_pdf_text
 from .office import (
     create_docx_from_text,
@@ -51,6 +51,7 @@ __all__ = [
     "fetch_url_links",
     "brave_search",
     "write_text_file",
+    "read_markdown_file",
     "arxiv_search",
     "dblp_conference_search",
     "download_file",

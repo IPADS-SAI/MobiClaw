@@ -44,6 +44,7 @@ _WORKER_CORE_TOOLS = {
     "extract_pdf_text",
     "extract_image_text_ocr",
     "read_docx_text",
+    "read_markdown_file",
     "create_docx_from_text",
     "edit_docx",
     "create_pdf_from_text",
