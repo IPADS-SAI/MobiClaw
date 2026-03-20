@@ -10,8 +10,15 @@ import os
 from pathlib import Path
 from typing import Any
 
-import adbutils
-from adbutils import adb
+try:
+    import adbutils
+    from adbutils import adb
+except ModuleNotFoundError as exc:
+    adbutils = None
+    adb = None
+    _ADBUTILS_IMPORT_ERROR = exc
+else:
+    _ADBUTILS_IMPORT_ERROR = None
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +31,19 @@ _DEVICE_STORE_FILE: Path = Path(
 )
 
 
+def _adb_dependency_error_message() -> str:
+    return (
+        "adbutils is not installed. Install it to enable gateway device management, "
+        'for example: pip install adbutils'
+    )
+
+
+def _ensure_adb_available() -> str | None:
+    if adbutils is None or adb is None:
+        return _adb_dependency_error_message()
+    return None
+
+
 async def _adb_run(*args: str) -> tuple[int, str]:
     """执行 adb 命令并返回 (returncode, stdout)。
 
@@ -32,6 +52,10 @@ async def _adb_run(*args: str) -> tuple[int, str]:
     """
     if not args:
         return 1, "No command specified"
+
+    dependency_error = _ensure_adb_available()
+    if dependency_error:
+        return 1, dependency_error
 
     cmd = args[0]
 
@@ -61,6 +85,10 @@ async def _adb_run(*args: str) -> tuple[int, str]:
 
 async def _ensure_adb_connected(ip: str, port: int) -> None:
     """确保 adb 已连接到 ip:port，端口变化时自动重连。"""
+    dependency_error = _ensure_adb_available()
+    if dependency_error:
+        raise RuntimeError(dependency_error) from _ADBUTILS_IMPORT_ERROR
+
     target = f"{ip}:{port}"
 
     def _sync_ensure() -> None:
@@ -116,6 +144,12 @@ async def _load_device_store() -> None:
         except Exception:
             logger.exception("Failed to load device store from %s", _DEVICE_STORE_FILE)
 
+    dependency_error = _ensure_adb_available()
+    if dependency_error:
+        if _DEVICE_STORE:
+            logger.warning("Skipping ADB reconnect for %d stored devices: %s", len(_DEVICE_STORE), dependency_error)
+        return
+
     for device in _DEVICE_STORE.values():
         ip = device.get("tailscale_ip")
         port = device.get("adb_port")
@@ -140,6 +174,12 @@ def _save_device_store() -> None:
 
 async def _disconnect_all_devices() -> None:
     """应用退出时断开所有已注册设备的 ADB 连接。"""
+
+    dependency_error = _ensure_adb_available()
+    if dependency_error:
+        if _DEVICE_STORE:
+            logger.warning("Skipping ADB disconnect for %d stored devices: %s", len(_DEVICE_STORE), dependency_error)
+        return
 
     def _sync_disconnect_all() -> None:
         for device in _DEVICE_STORE.values():

@@ -175,11 +175,12 @@ def create_worker_agent(
 工作准则：
 - 只聚焦当前任务（如果当前是一个子任务，只聚焦于子任务），给出简明直接的结果。
 - 必要时使用工具检索或执行本地命令。
-- 如果提供了相应的skill，请优先使用skill中指定的工具和方法，运行skill中的脚本，请务必使用 "run_skill_script"，而非"run_shell_command"。
-- 使用 "run_skill_script" 时，必须提供 command 和 execution_dir；优先使用 Activated Skills 中给出的 execution_dir。
+- 如果提供了相应的skill（例如PPT，docx，excel），请优先使用skill中定义的脚本或者方法来处理相关任务。
+- 只有当skill中脚本反复尝试失败后，再调用 "create_docx_from_text"、""create_pdf_from_text"、"create_pptx_from_outline"、"create_docx_from_text"、 "write_xlsx_from_records"等生成文档的工具，进行兜底处理。 
+- 如果需要运行skill中的脚本，请务必使用 "run_skill_script"，而非"run_shell_command"。使用 "run_skill_script" 时，必须提供 command 和 execution_dir；优先使用 Activated Skills 中给出的 execution_dir。
 - 如果需要联网搜索新闻或网页来源，优先使用 "brave_search" 获取新闻/web内容。
 - 如果检索学术论文，优先使用 "arxiv_search" 获取元数据与 PDF 链接。
-- 如果检索会议论文，优先使用 "dblp_conference_search" 获取论文清单与链接，然后去arxiv上搜索对应的论文。
+- 如果检索的已经发表在会议上的论文，优先使用 "dblp_conference_search" 获取论文清单与链接，然后去arxiv上搜索对应的论文。
 - 如果已经下载过论文/文件了，优先通过临时文件目录，查找之前下载的文件，避免重复上网搜索和下载。
 - 如果已经搜索过论文/文件了，优先通过之前的历史对话获取信息，避免重复联网检索。
 - 如果任务中有今天，明天等相对日期的描述，你可以通过shell中的date命令，获取具体的日期。
@@ -187,7 +188,6 @@ def create_worker_agent(
 - 需要从网页中发现相关链接时使用 "fetch_url_links"，再逐条抓取与筛选。
 - 需要下载论文或附件时使用 "download_file"；阅读 PDF 用 "extract_pdf_text"。
 - 需要识别图片中的文字时使用 "extract_image_text_ocr"。
-- 处理 Word/Excel/PDF 文档时，使用 docx/xlsx/pdf 相关工具完成读取或生成。
 - 需要输出文件时，可用 "write_text_file" 落盘。
 - 如果用户询问之前智能管家从手机中提取并存储的知识，使用 "search_steward_knowledge" 检索。
 - 如果用户要求总结飞书群聊历史或按消息 ID 查询，请使用飞书历史消息工具。

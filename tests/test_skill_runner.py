@@ -60,6 +60,29 @@ def test_run_skill_script_invalid_execution_dir() -> None:
     assert metadata.get("error") == "execution_dir_not_found"
 
 
+def test_run_skill_script_reports_missing_whitelist(monkeypatch, tmp_path: Path) -> None:
+    skill_root = tmp_path / "skills"
+    skill_dir = skill_root / "empty-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# Empty skill\n\nThis file has no runnable command examples.\n", encoding="utf-8")
+
+    monkeypatch.setattr("mobiclaw.tools.skill_runner._SKILL_ROOT", skill_root)
+
+    response = asyncio.run(
+        run_skill_script(
+            command="python -m anything",
+            execution_dir=str(skill_dir),
+            timeout_s=15,
+        )
+    )
+
+    metadata = response.metadata or {}
+    text = str(response.content[0].get("text") or "")
+    assert metadata.get("error") == "skill_whitelist_not_found"
+    assert metadata.get("allowed_commands") == []
+    assert "there are currently no allowed commands for this skill" in text
+
+
 def test_skill_prompt_context_includes_execution_dir() -> None:
     context = orchestrator._skill_prompt_context(["pptx"])
     assert "[Skill: pptx]" in context
@@ -103,5 +126,9 @@ def test_run_skill_script_rejects_non_whitelisted_command() -> None:
     )
 
     metadata = response.metadata or {}
+    text = str(response.content[0].get("text") or "")
     assert metadata.get("error") == "script_not_allowed"
     assert metadata.get("skill_md")
+    assert metadata.get("allowed_commands")
+    assert metadata.get("allowed_command_hints")
+    assert "Allowed commands from SKILL.md:" in text

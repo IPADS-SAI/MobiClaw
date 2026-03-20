@@ -2946,6 +2946,7 @@ name = "mobiclaw"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "adbutils" },
     { name = "agentscope" },
     { name = "apscheduler" },
     { name = "click" },
@@ -2977,6 +2978,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "adbutils", specifier = ">=2.9.3" },
     { name = "agentscope", editable = "agentscope" },
     { name = "apscheduler" },
     { name = "click", specifier = ">=8.1" },

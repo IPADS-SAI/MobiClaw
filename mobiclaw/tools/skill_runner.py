@@ -14,7 +14,8 @@ from agentscope.tool import ToolResponse
 
 
 _SKILL_ROOT = Path(__file__).resolve().parents[1] / "skills"
-_RUNTIME_NAMES = {"python", "python3", "bash", "sh", "zsh", "node", "npm", "npx", "uv"}
+_RUNTIME_NAMES = {"python", "python3", "bash", "sh", "zsh", "node", "npm", "npx", "uv", "pip", "pip3"}
+_MAX_ALLOWED_COMMANDS_IN_TEXT = 20
 
 
 def _is_under_path(path: Path, root: Path) -> bool:
@@ -98,6 +99,17 @@ def _extract_commands_from_skill_md(skill_md_path: Path) -> list[str]:
             deduped.append(item)
             seen.add(item)
     return deduped
+
+
+def _format_allowed_commands_for_text(allowed_commands: list[str], limit: int = _MAX_ALLOWED_COMMANDS_IN_TEXT) -> str:
+    if not allowed_commands:
+        return "<none>"
+
+    visible = allowed_commands[:limit]
+    text = "; ".join(visible)
+    if len(allowed_commands) > limit:
+        text += f"; ... ({len(allowed_commands) - limit} more)"
+    return text
 
 
 def _build_command_signature(command: str) -> tuple[str, ...] | None:
@@ -206,13 +218,17 @@ async def run_skill_script(
             content=[
                 TextBlock(
                     type="text",
-                    text=f"[SkillRunner] No command whitelist found in: {skill_md_path}",
+                    text=(
+                        f"[SkillRunner] No command whitelist found in: {skill_md_path}. "
+                        "No command-like entries could be extracted from SKILL.md, so there are currently no allowed commands for this skill."
+                    ),
                 ),
             ],
             metadata={
                 "error": "skill_whitelist_not_found",
                 "execution_dir": str(cwd),
                 "skill_md": str(skill_md_path),
+                "allowed_commands": [],
             },
         )
 
@@ -236,13 +252,22 @@ async def run_skill_script(
 
     if not _is_command_allowed(command, allowed_commands):
         return ToolResponse(
-            content=[TextBlock(type="text", text="[SkillRunner] Command is not allowed by SKILL.md whitelist")],
+            content=[
+                TextBlock(
+                    type="text",
+                    text=(
+                        f"[SkillRunner] Command is not allowed by SKILL.md whitelist: {command}. "
+                        f"Allowed commands from SKILL.md: {_format_allowed_commands_for_text(allowed_commands)}"
+                    ),
+                )
+            ],
             metadata={
                 "error": "script_not_allowed",
                 "command": command,
                 "execution_dir": str(cwd),
                 "skill_md": str(skill_md_path),
-                "allowed_command_hints": allowed_commands[:20],
+                "allowed_commands": allowed_commands,
+                "allowed_command_hints": allowed_commands[:_MAX_ALLOWED_COMMANDS_IN_TEXT],
             },
         )
 
