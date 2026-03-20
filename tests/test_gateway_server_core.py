@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from fastapi import UploadFile
 
 from mobiclaw import gateway_server
+from mobiclaw.gateway_server import devices as devices_module
 from mobiclaw.gateway_server import feishu as feishu_module
 from mobiclaw.gateway_server import EnvStructuredRequest, GatewayConfig, JobContext, TaskRequest
 
@@ -52,6 +53,16 @@ def test_ensure_auth_all_paths() -> None:
     assert exc_invalid.value.status_code == 401
 
     gateway_server._ensure_auth("Bearer k1", _cfg(api_key="k1"))
+
+
+def test_adb_run_reports_missing_dependency(monkeypatch) -> None:
+    monkeypatch.setattr(devices_module, "adbutils", None)
+    monkeypatch.setattr(devices_module, "adb", None)
+
+    returncode, output = asyncio.run(gateway_server._adb_run("devices"))
+
+    assert returncode == 1
+    assert "adbutils is not installed" in output
 
 
 def test_resolve_context_id_priority_and_fallback() -> None:

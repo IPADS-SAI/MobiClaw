@@ -3,6 +3,7 @@ from __future__ import annotations
 from jsonschema import Draft202012Validator
 
 from mobiclaw.agents import create_steward_agent, create_worker_agent
+from mobiclaw.config import CREATE_OFFICE_FILE_CONFIG
 
 
 _FUNCTION_TOOL_SCHEMA = {
@@ -44,12 +45,8 @@ _WORKER_CORE_TOOLS = {
     "extract_pdf_text",
     "extract_image_text_ocr",
     "read_docx_text",
-    "create_docx_from_text",
-    "edit_docx",
-    "create_pdf_from_text",
+    "read_markdown_file",
     "read_xlsx_summary",
-    "write_xlsx_from_records",
-    "write_xlsx_from_rows",
     "write_text_file",
     "search_steward_knowledge",
     "fetch_feishu_chat_history",
@@ -58,11 +55,22 @@ _WORKER_CORE_TOOLS = {
     "schedule_feishu_meeting",
     "send_feishu_meeting_card",
     "read_pptx_summary",
+}
+
+_WORKER_OFFICE_MUTATION_TOOLS = {
+    "create_docx_from_text",
+    "edit_docx",
+    "create_pdf_from_text",
+    "write_xlsx_from_records",
+    "write_xlsx_from_rows",
     "create_pptx_from_outline",
     "edit_pptx",
     "insert_pptx_image",
     "set_pptx_text_style",
 }
+
+if bool(CREATE_OFFICE_FILE_CONFIG.get("enabled", False)):
+    _WORKER_CORE_TOOLS |= _WORKER_OFFICE_MUTATION_TOOLS
 
 _STEWARD_CORE_TOOLS = {
     "call_mobi_collect_with_report",
@@ -107,3 +115,13 @@ def test_worker_and_steward_tools_have_parameter_descriptions() -> None:
 
     _assert_param_descriptions(worker_schema_map, _WORKER_CORE_TOOLS)
     _assert_param_descriptions(steward_schema_map, _STEWARD_CORE_TOOLS)
+
+
+def test_worker_office_mutation_tools_follow_config_flag() -> None:
+    worker_schema_map = _schema_by_name(create_worker_agent())
+    worker_tool_names = set(worker_schema_map.keys())
+
+    if bool(CREATE_OFFICE_FILE_CONFIG.get("enabled", False)):
+        assert _WORKER_OFFICE_MUTATION_TOOLS.issubset(worker_tool_names)
+    else:
+        assert worker_tool_names.isdisjoint(_WORKER_OFFICE_MUTATION_TOOLS)
