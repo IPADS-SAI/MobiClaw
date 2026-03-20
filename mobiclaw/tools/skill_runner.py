@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import logging
 import re
 import shlex
 import subprocess
@@ -13,9 +14,28 @@ from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
 
+logger = logging.getLogger(__name__)
+
 _SKILL_ROOT = Path(__file__).resolve().parents[1] / "skills"
 _RUNTIME_NAMES = {"python", "python3", "bash", "sh", "zsh", "node", "npm", "npx", "uv", "pip", "pip3"}
 _MAX_ALLOWED_COMMANDS_IN_TEXT = 20
+_ANSI_BOLD = "\033[1m"
+_ANSI_YELLOW = "\033[93m"
+_ANSI_RESET = "\033[0m"
+_FENCE_LANG_TO_RUNTIMES = {
+    "python": ["python", "python3"],
+    "py": ["python", "python3"],
+    "bash": ["bash", "sh", "zsh"],
+    "shell": ["bash", "sh", "zsh"],
+    "sh": ["sh", "bash", "zsh"],
+    "zsh": ["zsh", "bash", "sh"],
+    "javascript": ["node", "npm", "npx"],
+    "js": ["node", "npm", "npx"],
+    "typescript": ["node", "npm", "npx"],
+    "ts": ["node", "npm", "npx"],
+    "node": ["node", "npm", "npx"],
+    "npm": ["npm", "npx", "node"],
+}
 
 
 def _is_under_path(path: Path, root: Path) -> bool:
@@ -59,6 +79,33 @@ def _looks_like_command_line(raw_line: str) -> bool:
     return _looks_like_script_or_path(tokens[0])
 
 
+def _runtimes_from_fence_lang(lang: str) -> list[str]:
+    """Infer runtime command names from fenced code block language tags."""
+    normalized = (lang or "").strip().lower()
+    if not normalized:
+        return []
+
+    runtimes = list(_FENCE_LANG_TO_RUNTIMES.get(normalized, []))
+    if not runtimes:
+        base = normalized.split(" ", 1)[0]
+        runtimes = list(_FENCE_LANG_TO_RUNTIMES.get(base, []))
+    # Treat explicit runtime names as directly executable candidates.
+    if not runtimes and normalized in _RUNTIME_NAMES:
+        runtimes = [normalized]
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for runtime in runtimes:
+        if runtime not in seen:
+            deduped.append(runtime)
+            seen.add(runtime)
+    return deduped
+
+
+def _color_warning(message: str) -> str:
+    return f"{_ANSI_BOLD}{_ANSI_YELLOW}{message}{_ANSI_RESET}"
+
+
 def _extract_commands_from_skill_md(skill_md_path: Path) -> list[str]:
     try:
         content = skill_md_path.read_text(encoding="utf-8")
@@ -66,24 +113,21 @@ def _extract_commands_from_skill_md(skill_md_path: Path) -> list[str]:
         return []
 
     candidates: list[str] = []
-    has_python_fence = False
+    fence_runtimes: list[str] = []
 
     # Extract command-like lines from fenced code blocks.
     fence_pattern = re.compile(r"```(?P<lang>[A-Za-z0-9_+-]*)\n(?P<body>.*?)```", flags=re.DOTALL | re.IGNORECASE)
     for match in fence_pattern.finditer(content):
         lang = (match.group("lang") or "").strip().lower()
         block = match.group("body")
-        if lang.startswith("python"):
-            has_python_fence = True
+        fence_runtimes.extend(_runtimes_from_fence_lang(lang))
         for line in block.splitlines():
             line = line.strip()
             if _looks_like_command_line(line):
                 candidates.append(line)
 
-    # If the skill includes python snippets, allow python/python3 runtime wrappers
-    # (e.g. here-doc style: `python3 << 'EOF' ... EOF`).
-    if has_python_fence:
-        candidates.extend(["python", "python3"])
+    # If a fenced block indicates executable language, allow corresponding runtime wrappers.
+    candidates.extend(fence_runtimes)
 
     # Extract inline code snippets that look like command lines.
     inline_pattern = re.compile(r"`([^`\n]+)`")
@@ -99,6 +143,34 @@ def _extract_commands_from_skill_md(skill_md_path: Path) -> list[str]:
             deduped.append(item)
             seen.add(item)
     return deduped
+
+
+def _skill_markdown_files(skill_dir: Path) -> list[Path]:
+    """Return markdown files under one skill directory with SKILL.md first."""
+    if not skill_dir.exists() or not skill_dir.is_dir():
+        return []
+
+    files = [p for p in skill_dir.iterdir() if p.is_file() and p.suffix.lower() == ".md"]
+    files.sort(key=lambda p: (0 if p.name.lower() == "skill.md" else 1, p.name.lower()))
+    return files
+
+
+def _extract_commands_from_skill_dir(skill_dir: Path) -> tuple[list[str], list[str]]:
+    """Extract allowed commands from all markdown files in a skill directory."""
+    commands: list[str] = []
+    docs: list[str] = []
+    seen_cmds: set[str] = set()
+
+    for md_path in _skill_markdown_files(skill_dir):
+        extracted = _extract_commands_from_skill_md(md_path)
+        if extracted:
+            docs.append(str(md_path))
+        for cmd in extracted:
+            if cmd not in seen_cmds:
+                commands.append(cmd)
+                seen_cmds.add(cmd)
+
+    return commands, docs
 
 
 def _format_allowed_commands_for_text(allowed_commands: list[str], limit: int = _MAX_ALLOWED_COMMANDS_IN_TEXT) -> str:
@@ -146,6 +218,16 @@ def _is_command_allowed(command: str, allowed_commands: list[str]) -> bool:
         if not allowed_sig:
             continue
         if command_sig == allowed_sig:
+            return True
+        # Runtime-only whitelist entries (e.g. "node") permit runtime+script variants.
+        if len(allowed_sig) == 1 and command_sig[0] == allowed_sig[0]:
+            logger.warning(
+                _color_warning(
+                    "skill_runner.runtime_only_whitelist_match "
+                    f"runtime={command_sig[0]} command={command} "
+                    f"allowed_runtime_entry={allowed}"
+                )
+            )
             return True
     return False
 
@@ -212,7 +294,7 @@ async def run_skill_script(
         )
 
     skill_md_path = cwd / "SKILL.md"
-    allowed_commands = _extract_commands_from_skill_md(skill_md_path) if skill_md_path.exists() else []
+    allowed_commands, allowed_docs = _extract_commands_from_skill_dir(cwd)
     if not allowed_commands:
         return ToolResponse(
             content=[
@@ -220,7 +302,8 @@ async def run_skill_script(
                     type="text",
                     text=(
                         f"[SkillRunner] No command whitelist found in: {skill_md_path}. "
-                        "No command-like entries could be extracted from SKILL.md, so there are currently no allowed commands for this skill."
+                        "No command-like entries could be extracted from SKILL.md or sibling .md files, "
+                        "so there are currently no allowed commands for this skill."
                     ),
                 ),
             ],
@@ -228,6 +311,7 @@ async def run_skill_script(
                 "error": "skill_whitelist_not_found",
                 "execution_dir": str(cwd),
                 "skill_md": str(skill_md_path),
+                "skill_docs": allowed_docs,
                 "allowed_commands": [],
             },
         )
@@ -257,7 +341,8 @@ async def run_skill_script(
                     type="text",
                     text=(
                         f"[SkillRunner] Command is not allowed by SKILL.md whitelist: {command}. "
-                        f"Allowed commands from SKILL.md: {_format_allowed_commands_for_text(allowed_commands)}"
+                        f"Allowed commands from SKILL.md: {_format_allowed_commands_for_text(allowed_commands)} "
+                        "(includes sibling .md files in this skill directory)."
                     ),
                 )
             ],
@@ -266,6 +351,7 @@ async def run_skill_script(
                 "command": command,
                 "execution_dir": str(cwd),
                 "skill_md": str(skill_md_path),
+                "skill_docs": allowed_docs,
                 "allowed_commands": allowed_commands,
                 "allowed_command_hints": allowed_commands[:_MAX_ALLOWED_COMMANDS_IN_TEXT],
             },

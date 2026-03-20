@@ -84,6 +84,70 @@ def test_run_skill_script_reports_missing_whitelist(monkeypatch, tmp_path: Path)
     assert "there are currently no allowed commands for this skill" in text
 
 
+def test_run_skill_script_allows_commands_from_sibling_markdown(monkeypatch, tmp_path: Path) -> None:
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout="ok",
+            stderr="",
+        )
+
+    monkeypatch.setattr("mobiclaw.tools.skill_runner.subprocess.run", fake_run)
+
+    skill_root = tmp_path / "skills"
+    skill_dir = skill_root / "demo-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# Demo\n\nNo commands here.\n", encoding="utf-8")
+    (skill_dir / "guide.md").write_text("```bash\npython scripts/demo.py input.txt\n```\n", encoding="utf-8")
+
+    monkeypatch.setattr("mobiclaw.tools.skill_runner._SKILL_ROOT", skill_root)
+
+    response = asyncio.run(
+        run_skill_script(
+            command="python scripts/demo.py input.txt",
+            execution_dir=str(skill_dir),
+            timeout_s=15,
+        )
+    )
+
+    metadata = response.metadata or {}
+    assert metadata.get("returncode") == 0
+
+
+def test_run_skill_script_allows_node_from_javascript_fence(monkeypatch, tmp_path: Path) -> None:
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout="ok",
+            stderr="",
+        )
+
+    monkeypatch.setattr("mobiclaw.tools.skill_runner.subprocess.run", fake_run)
+
+    skill_root = tmp_path / "skills"
+    skill_dir = skill_root / "js-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "```javascript\nconst x = 1;\nslide.addText([\n```\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("mobiclaw.tools.skill_runner._SKILL_ROOT", skill_root)
+
+    response = asyncio.run(
+        run_skill_script(
+            command="node scripts/build.js",
+            execution_dir=str(skill_dir),
+            timeout_s=15,
+        )
+    )
+
+    metadata = response.metadata or {}
+    assert metadata.get("returncode") == 0
+
+
 def test_skill_prompt_context_includes_execution_dir() -> None:
     context = orchestrator._skill_prompt_context(["pptx"])
     assert "[Skill: pptx]" in context
