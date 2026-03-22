@@ -71,10 +71,26 @@ def test_call_mobi_collect_verified_success(monkeypatch):
     assert resp.content[0]["type"] == "text"
 
 
-def test_call_mobi_action_fallback_mock(monkeypatch):
+def test_call_mobi_action_task_fallback_mock(monkeypatch):
     monkeypatch.setattr(mobi, "_EXECUTOR", _ExecutorFail())
-    resp = asyncio.run(mobi.call_mobi_action("open_app", '{"app_name": "微信"}'))
+    resp = asyncio.run(mobi.call_mobi_action_task("打开微信"))
     assert resp.metadata.get("mock") is True
+
+
+def test_call_mobi_action_task_uses_natural_language_desc(monkeypatch):
+    captured: dict[str, str] = {}
+
+    class _ExecutorCapture(_ExecutorOK):
+        def run(self, task: str, output_dir: str, provider=None):
+            captured["task"] = task
+            return super().run(task=task, output_dir=output_dir, provider=provider)
+
+    monkeypatch.setattr(mobi, "_EXECUTOR", _ExecutorCapture())
+    resp = asyncio.run(mobi.call_mobi_action_task("通过微信给小赵发送消息：记得注册外卖平台"))
+
+    assert resp.metadata["success"] is True
+    assert captured["task"] == "通过微信给小赵发送消息：记得注册外卖平台"
+    assert resp.metadata["action_type"] == "natural_language_task"
 
 
 def test_call_mobi_collect_verified_retries_when_configured(monkeypatch):

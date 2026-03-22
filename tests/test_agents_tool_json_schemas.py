@@ -3,7 +3,6 @@ from __future__ import annotations
 from jsonschema import Draft202012Validator
 
 from mobiclaw.agents import create_steward_agent, create_worker_agent
-from mobiclaw.config import CREATE_OFFICE_FILE_CONFIG
 
 
 _FUNCTION_TOOL_SCHEMA = {
@@ -45,16 +44,21 @@ _WORKER_CORE_TOOLS = {
     "extract_pdf_text",
     "extract_image_text_ocr",
     "read_docx_text",
-    "read_markdown_file",
+    "create_docx_from_text",
+    "edit_docx",
+    "create_pdf_from_text",
     "read_xlsx_summary",
+    "write_xlsx_from_records",
+    "write_xlsx_from_rows",
     "write_text_file",
     "search_steward_knowledge",
     "fetch_feishu_chat_history",
     "get_feishu_message",
-    "read_feishu_docx_link",
-    "schedule_feishu_meeting",
-    "send_feishu_meeting_card",
     "read_pptx_summary",
+    "create_pptx_from_outline",
+    "edit_pptx",
+    "insert_pptx_image",
+    "set_pptx_text_style",
 }
 
 _WORKER_OFFICE_MUTATION_TOOLS = {
@@ -69,13 +73,10 @@ _WORKER_OFFICE_MUTATION_TOOLS = {
     "set_pptx_text_style",
 }
 
-if bool(CREATE_OFFICE_FILE_CONFIG.get("enabled", False)):
-    _WORKER_CORE_TOOLS |= _WORKER_OFFICE_MUTATION_TOOLS
-
 _STEWARD_CORE_TOOLS = {
     "call_mobi_collect_with_report",
     "delegate_to_worker",
-    "call_mobi_action",
+    "call_mobi_action_task",
     "store_steward_knowledge",
     "search_steward_knowledge",
     "fetch_url_text",
@@ -120,8 +121,14 @@ def test_worker_and_steward_tools_have_parameter_descriptions() -> None:
 def test_worker_office_mutation_tools_follow_config_flag() -> None:
     worker_schema_map = _schema_by_name(create_worker_agent())
     worker_tool_names = set(worker_schema_map.keys())
+    assert _WORKER_OFFICE_MUTATION_TOOLS.issubset(worker_tool_names)
 
-    if bool(CREATE_OFFICE_FILE_CONFIG.get("enabled", False)):
-        assert _WORKER_OFFICE_MUTATION_TOOLS.issubset(worker_tool_names)
-    else:
-        assert worker_tool_names.isdisjoint(_WORKER_OFFICE_MUTATION_TOOLS)
+
+def test_steward_call_mobi_action_task_uses_task_desc_schema() -> None:
+    steward_schema_map = _schema_by_name(create_steward_agent())
+    call_mobi_action_schema = steward_schema_map["call_mobi_action_task"]
+    properties = call_mobi_action_schema["function"]["parameters"].get("properties", {})
+
+    assert "task_desc" in properties
+    assert "payload" not in properties
+    assert "action_type" not in properties

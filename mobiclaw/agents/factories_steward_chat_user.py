@@ -31,7 +31,7 @@ from .common import (
 from .factories_worker import create_worker_agent
 from ..tools import (
     brave_search,
-    call_mobi_action,
+    call_mobi_action_task,
     call_mobi_collect_verified,
     extract_image_text_ocr,
     fetch_url_links,
@@ -73,12 +73,15 @@ def create_steward_agent(
         collect_func.__name__ = "call_mobi_collect_verified"
         collect_func.__doc__ = call_mobi_collect_verified.__doc__
 
-        action_func = functools.partial(call_mobi_action, output_dir=mobi_output_dir)
-        action_func.__name__ = "call_mobi_action"
-        action_func.__doc__ = call_mobi_action.__doc__
     else:
         collect_func = call_mobi_collect_verified
-        action_func = call_mobi_action
+
+    if mobi_output_dir:
+        action_func = functools.partial(call_mobi_action_task, output_dir=mobi_output_dir)
+        action_func.__name__ = "call_mobi_action_task"
+        action_func.__doc__ = call_mobi_action_task.__doc__
+    else:
+        action_func = call_mobi_action_task
 
     tool_timeout_s = TOOL_CONFIG["timeout_s"]
     _reg = functools.partial(register_tool_with_timeout, toolkit, tool_timeout_s)
@@ -318,7 +321,7 @@ def create_steward_agent(
 
 ### 执行 (Execute)
 - 如果分析发现需要执行的操作（如添加日程、设置提醒）
-- 使用 `call_mobi_action` 工具在手机端执行相应操作
+- 使用 `call_mobi_action_task` 工具在手机端执行相应操作
 
 ## 注意事项
 - 每一任务情况都要向用户汇报进展
@@ -340,7 +343,7 @@ def create_steward_agent(
 3. 基于结果继续完成后续分析与执行
 4. 调用 store_steward_knowledge 存储收集到的信息
 5. 调用 search_steward_knowledge 检索已存数据，自行分析待办和账单
-6. 如发现待办事项，询问是否需要添加到日历，然后调用 call_mobi_action
+6. 如发现待办事项，询问是否需要添加到日历，然后调用 call_mobi_action_task
 
 现在，请准备好为用户服务！"""
     sys_prompt += _build_memory_prompt()

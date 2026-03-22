@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -143,26 +142,6 @@ def _build_collect_response(
     )
 
 
-def _build_task_from_action(action_type: str, params: dict[str, Any]) -> str:
-    if action_type == "add_calendar_event":
-        title = params.get("title", "日程")
-        date = params.get("date", "")
-        time_str = params.get("time", "")
-        return f"打开系统日历并创建日程：{title}。日期{date} 时间{time_str}。"
-    if action_type == "send_message":
-        target = params.get("target", params.get("contact", "对方"))
-        content = params.get("content", params.get("text", ""))
-        return f"通过微信给{target}发送消息：{content}"
-    if action_type == "set_reminder":
-        content = params.get("content", params.get("title", "提醒事项"))
-        remind_time = params.get("time", "")
-        date = params.get("date", "")
-        return f"在系统提醒事项中创建提醒：{content}。日期{date} 时间{remind_time}。"
-    if action_type == "open_app":
-        app_name = params.get("app", params.get("app_name", ""))
-        return f"打开应用 {app_name}"
-    return f"完成以下任务：{json.dumps({'action_type': action_type, 'params': params}, ensure_ascii=False)}"
-
 async def call_mobi_collect_verified(
     task_desc: str,
     max_retries: int = 0,
@@ -230,23 +209,23 @@ async def call_mobi_collect_verified(
     )
 
 
-async def call_mobi_action(action_type: str, payload: str, output_dir: str | None = None) -> ToolResponse:
-    """指挥本地移动执行器执行手机 GUI 操作。
+async def call_mobi_action_task(task_desc: str, output_dir: str | None = None) -> ToolResponse:
+    """按自然语言任务描述执行一次手机 GUI 操作。
 
     Args:
-        action_type: 操作类型标识。
-        payload: JSON 字符串或原始文本参数。
+        task_desc: 完整的自然语言手机任务描述。
         output_dir: 可选输出目录，用于保存执行产物。
     """
-    logger.info("mobi.action.request action_type=%s", action_type)
-    try:
-        try:
-            payload_dict = json.loads(payload) if isinstance(payload, str) else payload
-        except json.JSONDecodeError:
-            payload_dict = {"raw_input": payload}
+    clean_task = str(task_desc or "").strip()
+    if not clean_task:
+        return ToolResponse(
+            content=[TextBlock(type="text", text="[MobiAgent 调用失败] 错误: task_desc 不能为空")],
+            metadata={"success": False, "error": "empty_task_desc"},
+        )
 
-        task_desc = _build_task_from_action(action_type, payload_dict if isinstance(payload_dict, dict) else {})
-        result = _EXECUTOR.run(task=task_desc, output_dir=_resolve_output_dir(output_dir), provider=None)
+    logger.info("mobi.action.request task_desc=%s", clean_task)
+    try:
+        result = _EXECUTOR.run(task=clean_task, output_dir=_resolve_output_dir(output_dir), provider=None)
         metadata = _build_execution_metadata(result.execution)
 
         return ToolResponse(
@@ -255,8 +234,8 @@ async def call_mobi_action(action_type: str, payload: str, output_dir: str | Non
                     type="text",
                     text=(
                         "[MobiAgent 操作执行]\n"
-                        f"操作类型: {action_type}\n"
-                        f"参数: {json.dumps(payload_dict, ensure_ascii=False)}\n"
+                        "操作类型: natural_language_task\n"
+                        f"任务: {clean_task}\n"
                         f"结果: {'成功' if result.success else '失败'}\n"
                         f"消息: {result.message}"
                     ),
@@ -264,25 +243,26 @@ async def call_mobi_action(action_type: str, payload: str, output_dir: str | Non
             ],
             metadata={
                 "success": bool(result.success),
-                "action_type": action_type,
+                "action_type": "natural_language_task",
+                "task_desc": clean_task,
                 **metadata,
             },
         )
 
     except Exception as exc:  # noqa: BLE001
-        mock_result = get_mock_action_result(action_type, payload)
+        mock_result = get_mock_action_result("natural_language_task", clean_task)
         return ToolResponse(
             content=[
                 TextBlock(
                     type="text",
                     text=(
                         "[MobiAgent Mock 模式 - 操作执行]\n"
-                        f"操作类型: {action_type}\n"
-                        f"参数: {payload}\n"
+                        "操作类型: natural_language_task\n"
+                        f"任务: {clean_task}\n"
                         f"模拟执行结果: {mock_result}\n"
                         f"(实际错误: {str(exc)[:120]})"
                     ),
                 )
             ],
-            metadata={"mock": True, "result": mock_result},
+            metadata={"mock": True, "result": mock_result, "task_desc": clean_task},
         )
