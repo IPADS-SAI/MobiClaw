@@ -5,6 +5,7 @@ import hmac
 import json
 import logging
 import mimetypes
+import re
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,9 @@ from .files import _feishu_media_download_dir
 from .models import GatewayConfig, TaskResult
 
 logger = logging.getLogger(__name__)
+
+_FEISHU_BOT_OPEN_ID_CACHE: dict[str, str] = {}
+_FEISHU_BOT_OPEN_ID_WARNED_APPS: set[str] = set()
 
 
 def _parse_feishu_text_from_content(content: str) -> str:
@@ -98,7 +102,7 @@ def _extract_open_id_from_mention(mention: Any) -> str:
 
 
 def _extract_mentioned_open_ids(mentions: Any, content: str) -> set[str]:
-    """抽取消息中被 @ 的 open_id，缺失时尝试从内容判定是否存在 at 标签。"""
+    """抽取消息中被 @ 的 open_id。"""
     result: set[str] = set()
     if isinstance(mentions, list):
         for mention in mentions:
@@ -110,9 +114,87 @@ def _extract_mentioned_open_ids(mentions: Any, content: str) -> set[str]:
         return result
 
     raw = (content or "").strip()
-    if "<at " in raw or "@" in raw:
-        return {"__any_mention__"}
-    return set()
+    if not raw:
+        return set()
+    try:
+        payload = json.loads(raw)
+        if isinstance(payload, dict):
+            text = str(payload.get("text") or "")
+        else:
+            text = raw
+    except json.JSONDecodeError:
+        text = raw
+
+    # Fallback for events that carry only rich-text tags in `content.text`.
+    for matched in re.findall(r'<at\\s+[^>]*user_id=["\'](ou_[^"\']+)["\']', text):
+        result.add(matched.strip())
+    return result
+
+
+def _extract_bot_open_id_from_payload(payload: dict[str, Any]) -> str:
+    """从机器人信息接口响应中提取 open_id。"""
+    candidates: list[str] = []
+
+    data = payload.get("data")
+    if isinstance(data, dict):
+        candidates.append(str(data.get("open_id") or "").strip())
+        bot = data.get("bot")
+        if isinstance(bot, dict):
+            candidates.append(str(bot.get("open_id") or "").strip())
+
+    bot_root = payload.get("bot")
+    if isinstance(bot_root, dict):
+        candidates.append(str(bot_root.get("open_id") or "").strip())
+
+    candidates.append(str(payload.get("open_id") or "").strip())
+
+    for oid in candidates:
+        if oid:
+            return oid
+    return ""
+
+
+def _resolve_feishu_bot_open_id(cfg: GatewayConfig) -> str:
+    """优先返回显式配置，否则基于 app 凭据自动查询机器人 open_id。"""
+    configured = (cfg.feishu_bot_open_id or "").strip()
+    if configured:
+        return configured
+
+    app_id = (cfg.feishu_app_id or "").strip()
+    if app_id and app_id in _FEISHU_BOT_OPEN_ID_CACHE:
+        return _FEISHU_BOT_OPEN_ID_CACHE[app_id]
+
+    token = _get_feishu_tenant_token(cfg)
+    if not token:
+        return ""
+
+    try:
+        resp = requests.get(
+            "https://open.feishu.cn/open-apis/bot/v3/info",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=cfg.callback_timeout_s,
+        )
+        resp.raise_for_status()
+        payload = resp.json() if resp.content else {}
+        if payload.get("code") != 0:
+            raise RuntimeError(f"code={payload.get('code')} msg={payload.get('msg')}")
+        oid = _extract_bot_open_id_from_payload(payload)
+        if not oid:
+            raise RuntimeError("open_id not found in bot info payload")
+        if app_id:
+            _FEISHU_BOT_OPEN_ID_CACHE[app_id] = oid
+        logger.info("Feishu bot open_id resolved automatically for app_id=%s", app_id or "(empty)")
+        return oid
+    except Exception as exc:
+        warn_key = app_id or "__unknown_app__"
+        if warn_key not in _FEISHU_BOT_OPEN_ID_WARNED_APPS:
+            _FEISHU_BOT_OPEN_ID_WARNED_APPS.add(warn_key)
+            logger.warning(
+                "Failed to resolve Feishu bot open_id automatically: %s. "
+                "Set FEISHU_BOT_OPEN_ID to avoid mention-filter bypass.",
+                exc,
+            )
+        return ""
 
 
 def _should_accept_feishu_message(
@@ -134,9 +216,9 @@ def _should_accept_feishu_message(
     if not mentioned_ids:
         return False, "group_message_without_mention"
 
-    bot_open_id = (cfg.feishu_bot_open_id or "").strip()
+    bot_open_id = _resolve_feishu_bot_open_id(cfg)
     if not bot_open_id:
-        return True, None
+        return False, "bot_open_id_unavailable"
 
     if bot_open_id in mentioned_ids:
         return True, None

@@ -11,6 +11,8 @@ from fastapi import HTTPException
 from fastapi import UploadFile
 
 from mobiclaw import gateway_server
+from mobiclaw.gateway_server import devices as devices_module
+from mobiclaw.gateway_server import feishu as feishu_module
 from mobiclaw.gateway_server import EnvStructuredRequest, GatewayConfig, JobContext, TaskRequest
 
 
@@ -51,6 +53,16 @@ def test_ensure_auth_all_paths() -> None:
     assert exc_invalid.value.status_code == 401
 
     gateway_server._ensure_auth("Bearer k1", _cfg(api_key="k1"))
+
+
+def test_adb_run_reports_missing_dependency(monkeypatch) -> None:
+    monkeypatch.setattr(devices_module, "adbutils", None)
+    monkeypatch.setattr(devices_module, "adb", None)
+
+    returncode, output = asyncio.run(gateway_server._adb_run("devices"))
+
+    assert returncode == 1
+    assert "adbutils is not installed" in output
 
 
 def test_resolve_context_id_priority_and_fallback() -> None:
@@ -576,3 +588,38 @@ def test_feishu_events_message_accept(monkeypatch) -> None:
     assert accepted_args["chat_id"] == "chat-1"
     assert accepted_args["open_id"] == "ou_1"
     assert accepted_args["message_id"] == "msg-1"
+
+
+def test_should_accept_feishu_message_reject_when_bot_id_unavailable() -> None:
+    cfg = _cfg(api_key="")
+    accepted, reason = gateway_server._should_accept_feishu_message(
+        cfg,
+        chat_type="group",
+        content='{"text":"<at user_id=\\"ou_other\\\">X</at> hi"}',
+        mentions=[{"id": {"open_id": "ou_other"}}],
+    )
+    assert accepted is False
+    assert reason == "bot_open_id_unavailable"
+
+
+def test_should_accept_feishu_message_only_accepts_bot_mention(monkeypatch) -> None:
+    cfg = _cfg(api_key="")
+    monkeypatch.setattr(feishu_module, "_resolve_feishu_bot_open_id", lambda _cfg: "ou_bot")
+
+    accepted_other, reason_other = gateway_server._should_accept_feishu_message(
+        cfg,
+        chat_type="group",
+        content='{"text":"hi"}',
+        mentions=[{"id": {"open_id": "ou_other"}}],
+    )
+    assert accepted_other is False
+    assert reason_other == "mentioned_other_user_not_bot"
+
+    accepted_bot, reason_bot = gateway_server._should_accept_feishu_message(
+        cfg,
+        chat_type="group",
+        content='{"text":"hi"}',
+        mentions=[{"id": {"open_id": "ou_bot"}}],
+    )
+    assert accepted_bot is True
+    assert reason_bot is None

@@ -5,7 +5,7 @@
 </div>
 
 <h3 align="center">
-MobiClaw: 轻量化
+MobiClaw: A Lightweight OpenClaw Alternative with Seamless Mobile Manipulation
 </h3>
 
 ---
@@ -50,20 +50,18 @@ MobiClaw 是轻量化的openClaw替代，能够支持网页搜索，文档生成
 
 ## 当前运行模式概览
 
-`python app.py` 统一从 `mobiclaw/workflows.py` 进入，按参数分为 4 种模式：
+`python app.py` 统一从 `mobiclaw/workflows.py` 进入，按参数分为 3 种模式：
 
-- **无参数**：Demo 模式，执行预置对话 `run_demo_conversation()`
 - **`--interactive`**：交互模式，终端多轮对话
-- **`--daily --daily-trigger <trigger>`**：Daily 任务模式
-- **`--agent-task "..."`**：多智能体任务模式，默认走 orchestrator
+- **`--daily --daily-trigger <trigger>`**：每日任务模式，也可通过--agent-task通过自然语言下发定时任务
+- **`--agent-task "..."(推荐) `**：多智能体任务模式，会选择一个或者多个合适的智能体完成任务
 
-> 注意：当前 `--agent-task` 默认不是 legacy 单 Agent，而是 `router` 模式。
 
 ---
 
 ## 从 0 到运行（推荐路径）
 
-### 0) 自动安装
+### 0) 基于Claude code + MobiClaw Skill 自动安装
 
 如果你希望让Claude Code自动完成项目的环境配置与安装，可以在项目根目录启动 `claude`，然后输入 `/setup`，Claude Code会：
 
@@ -72,7 +70,7 @@ MobiClaw 是轻量化的openClaw替代，能够支持网页搜索，文档生成
 - 交互式完成选项配置（如选择模型，接入飞书，配置可选项等）
 - 在后台启动gateway server
 
-在此过程中，随时与Claude Code聊天来进行任何你想要的个性化定制。
+在此过程中，你可以随时通过自然语言告诉Claude Code你希望它做什么，或让Claude Code解答你的问题。
 
 若你不想使用Claude Code，或者希望自主控制项目的安装过程，你也可以按照下面的步骤手动安装项目：
 
@@ -118,7 +116,6 @@ export BRAVE_API_KEY='...'
 ```bash
 export OPENROUTER_MODEL='google/gemini-3-flash-preview'
 export OPENROUTER_BASE_URL='https://openrouter.ai/api/v1'
-export MOBI_AGENT_BASE_URL='http://localhost:8081'
 ```
 
 `app.py` 与 `mobiclaw/gateway_server/` 启动时都会自动读取根目录 `.env`，仅在环境变量尚未存在时补齐。
@@ -207,73 +204,7 @@ python app.py --agent-task "从 arXiv 搜索今天的 Agent 论文并总结" --m
 
 #### 4.2.3 `--agent-task` 常见示例
 
-```bash
-# 默认多智能体路由
-python app.py --agent-task "帮我查看今天美伊战争的情况总结，并且生成对应的 md 总结"
-```
-
-#### 4.2 手机任务执行器 `mobiclaw/mobile` 的配置和用法
-
-`MobiClaw` 中的手机 GUI 执行统一由 `mobiclaw/mobile/` 提供，既可以被 `app.py` / `mobi` 工具间接调用，也可以单独运行 `mobiclaw/mobile/run.py` 做本地联调。
-
-推荐先在根目录 `.env` 中配置 mobile 相关环境变量；`app.py` 与 `mobiclaw/gateway_server/` 启动时会自动读取它们。
-
-常用配置如下：
-
-```bash
-# 选择执行 provider：mobiagent / uitars / qwen / autoglm
-export MOBILE_PROVIDER=mobiagent
-
-# 设备配置；未设置时默认为 Android
-export MOBILE_DEVICE_TYPE=Android
-export MOBILE_DEVICE_ID=emulator-5554 #为空时默认连接到第一个设备
-
-# 通用执行配置
-export MOBILE_MAX_STEPS=15
-
-# MobiAgent provider 专属配置，其他privider 参考.env-example配置
-export MOBILE_MOBIAGENT_SERVICE_IP=localhost # 具体根据实际部署的MobiAgent服务IP、端口配置
-export MOBILE_MOBIAGENT_DECIDER_PORT=<decider_port>
-export MOBILE_MOBIAGENT_GROUNDER_PORT=<grounder_port>
-export MOBILE_MOBIAGENT_PLANNER_PORT=<planner_port>
-export MOBILE_MOBIAGENT_ENABLE_PLANNING=1
-export MOBILE_MOBIAGENT_USE_E2E=1
-export MOBILE_MOBIAGENT_USE_EXPERIENCE=0
-```
-
-说明：
-
-- `MOBILE_PROVIDER` 决定底层用哪个执行器，默认是 `mobiagent`
-- `MOBILE_DEVICE_TYPE` / `MOBILE_DEVICE_ID` 控制连接的手机或模拟器；
-- `MOBILE_API_BASE` / `MOBILE_MODEL` / `MOBILE_API_KEY` / `MOBILE_TEMPERATURE` 是通用模型参数
-- provider 专属参数通过前缀传入，例如 `MOBILE_MOBIAGENT_*`、`MOBILE_UITARS_*`、`MOBILE_QWEN_*`、`MOBILE_AUTOGLM_*`
-- 模型部署参考：[MobiAgent 模型部署](https://github.com/IPADS-SAI/MobiAgent/blob/main/README_zh.md#3-%E6%A8%A1%E5%9E%8B%E9%83%A8%E7%BD%B2)
-
-如果只想单独验证手机执行链路，可以直接运行：
-
-```bash
-# 单任务执行
-python -m mobiclaw.mobile.run \
-  --provider mobiagent \
-  --task "在淘宝上搜索电动牙刷，选最畅销的那款并加入购物车" \
-  --device-type Android \
-  --device-id emulator-5554 \
-  --service-ip localhost \
-  --decider-port 9002 \
-  --grounder-port 9002 \
-  --planner-port 8080 \
-  --enable-planning \
-  --use-e2e \
-  --max-steps 30 \
-  --output-dir results
-```
-
-也可以切换到其他 provider，运行示例可以参考`mobiclaw/mobile/examples`
-
-执行结果会输出到 `MOBILE_OUTPUT_DIR` 或 `--output-dir` 指定目录，通常包含每一步截图、标注图、UI 树、`actions.json`、`react.json` 以及最终结果索引。对于通过 `app.py` 发起的手机任务，默认输出目录是 `outputs/jobxxx/mobile_exec`。
-
-
-#### 智能路由多智能体模式（Router + Steward + Worker）
+##### 智能路由多智能体模式（Router + Planner + Executor）
 
 当前 `app.py --agent-task` 与 `gateway /api/v1/task` 默认都走统一编排：
 - Router Agent：根据任务语义选择目标 Agent（LLM 语义路由 + 规则兜底）
@@ -283,6 +214,11 @@ python -m mobiclaw.mobile.run \
 
 联网搜索默认采用 Brave Search：先检索候选来源链接与摘要，再按需抓取网页正文。
 实现见 [mobiclaw/workflows.py](mobiclaw/workflows.py) 与 [mobiclaw/orchestrator/](mobiclaw/orchestrator/)。
+
+```bash
+# 默认多智能体路由
+python app.py --agent-task "帮我查看今天美伊战争的情况总结，并且生成对应的 md 总结"
+```
 
 ```bash
 python app.py --agent-task "帮我查看今天美伊战争的情况总结，并且生成对应的md总结"
@@ -333,7 +269,7 @@ python app.py --agent-task "每周一10：00帮我搜索最新计算机科学新
 python app.py --agent-task "帮我取消每周一搜索新闻的定时任务"
 ```
 
-#### 4.3.4 输出文件提示机制
+#### 4.2.4 输出文件提示机制
 
 当前实现会为每次任务创建独立目录：`<项目根>/outputs/job_<时间戳>/`，并在其下创建临时目录：`tmp/`。
 
@@ -345,6 +281,66 @@ python app.py --agent-task "帮我取消每周一搜索新闻的定时任务"
 - 若提供了相对路径（例如 `--output outputs/paper.md`）：会被拼到该 job 目录下，最终路径为
   ` <项目根>/outputs/job_<时间戳>/outputs/paper.md `。
 - 若提供了绝对路径：出于目录隔离，当前实现会仅保留文件名并落到 job 目录下（不会写到外部绝对路径）。
+
+#### 4.2.5 执行手机联动任务
+
+`MobiClaw` 中的手机 GUI 执行统一由 `mobiclaw/mobile/` 提供，既可以被 `app.py` / `mobi` 工具间接调用，也可以单独运行 `mobiclaw/mobile/run.py` 做本地联调。
+
+推荐先在根目录 `.env` 中配置 mobile 相关环境变量；`app.py` 与 `mobiclaw/gateway_server/` 启动时会自动读取它们。
+
+常用配置如下：
+
+```bash
+# 选择执行 手机GUI模型：mobiagent / uitars / qwen / autoglm
+export MOBILE_PROVIDER=mobiagent
+
+# 设备配置；未设置时默认为 Android
+export MOBILE_DEVICE_TYPE=Android
+export MOBILE_DEVICE_ID=emulator-5554 #为空时默认连接到第一个设备
+
+# 通用执行配置
+export MOBILE_MAX_STEPS=15
+
+# MobiAgent 模型专属配置，其他 GUI 模型 参考.env-example配置
+export MOBILE_MOBIAGENT_SERVICE_IP=localhost # 具体根据实际部署的MobiAgent服务IP、端口配置
+export MOBILE_MOBIAGENT_DECIDER_PORT=<decider_port>
+export MOBILE_MOBIAGENT_GROUNDER_PORT=<grounder_port>
+export MOBILE_MOBIAGENT_PLANNER_PORT=<planner_port>
+export MOBILE_MOBIAGENT_ENABLE_PLANNING=1
+export MOBILE_MOBIAGENT_USE_E2E=1
+export MOBILE_MOBIAGENT_USE_EXPERIENCE=0
+```
+
+说明：
+
+- `MOBILE_PROVIDER` 决定底层用哪个执行器，默认是 `mobiagent`
+- `MOBILE_DEVICE_TYPE` / `MOBILE_DEVICE_ID` 控制连接的手机或模拟器；
+- `MOBILE_API_BASE` / `MOBILE_MODEL` / `MOBILE_API_KEY` / `MOBILE_TEMPERATURE` 是通用模型参数
+- GUI 模型的专属参数通过前缀传入，例如 `MOBILE_MOBIAGENT_*`、`MOBILE_UITARS_*`、`MOBILE_QWEN_*`、`MOBILE_AUTOGLM_*`
+- 模型部署参考：[MobiAgent 模型部署](https://github.com/IPADS-SAI/MobiAgent/blob/main/README_zh.md#3-%E6%A8%A1%E5%9E%8B%E9%83%A8%E7%BD%B2)
+
+如果只想单独验证手机执行链路，可以直接运行：
+
+```bash
+# 单任务执行
+python -m mobiclaw.mobile.run \
+  --provider mobiagent \
+  --task "在淘宝上搜索电动牙刷，选最畅销的那款并加入购物车" \
+  --device-type Android \
+  --device-id emulator-5554 \
+  --service-ip localhost \
+  --decider-port 9002 \
+  --grounder-port 9002 \
+  --planner-port 8080 \
+  --enable-planning \
+  --use-e2e \
+  --max-steps 30 \
+  --output-dir results
+```
+
+也可以切换到其他 provider，运行示例可以参考`mobiclaw/mobile/examples`
+
+执行结果会输出到 `MOBILE_OUTPUT_DIR` 或 `--output-dir` 指定目录，通常包含每一步截图、标注图、UI 树、`actions.json`、`react.json` 以及最终结果索引。对于通过 `app.py` 发起的手机任务，默认输出目录是 `outputs/jobxxx/mobile_exec`。
 
 ### 5) Gateway模式（类似OpenClaw Core 入口）
 
@@ -366,7 +362,7 @@ python -m mobiclaw.gateway_server
 - `MOBICLAW_ROUTING_MAX_DEPTH`：委派/路由最大深度（默认 `2`）
 - `MOBICLAW_ROUTER_TIMEOUT_S`：Router 决策超时秒数（默认 `60`，超时默认回退到 `worker`）
 - `MOBICLAW_PLANNER_TIMEOUT_S`：Planner 拆分超时秒数（默认 `60`，超时默认回退到 `worker`）
-- `MOBICLAW_SUBTASK_TIMEOUT_S`：单子任务执行超时秒数（默认 `300`）
+- `MOBICLAW_TOOL_TIMEOUT_S`：工具调用超时秒数（默认 `120`，超时返回 `[Tool Timeout]` 响应，由 Agent 自行决定重试或终止）
 - `MOBICLAW_SKILL_ENABLED`：是否启用 skill 自动选择（默认 `1`）
 - `MOBICLAW_SKILL_ROOT_DIR`：skill 根目录（默认 `mobiclaw/skills`）
 - `MOBICLAW_SKILL_MAX_PER_SUBTASK`：每个子任务最多挂载的 skill 数（默认 `2`）
@@ -409,5 +405,17 @@ python -m mobiclaw.gateway_server
 推荐优先运行根项目自身测试：
 
 ```bash
-python -m pytest tests
+pytest tests -s -q
 ```
+
+### 7) 安卓客户端
+
+MobiClaw提供了一个安卓客户端，可以快速连接 MobiClaw Gateway Server 和需要由 MobiClaw Agent 操控的安卓手机，不需要二者在同一个局域网内。详见[Android App README](apps/android/README.md)。
+
+---
+
+## 致谢
+
+本项目的设计与实现受益于以下开源项目，特此致谢：[openClaw](https://github.com/openclaw/openclaw) 和 [AgentScope](https://github.com/agentscope-ai/agentscope)
+为本项目提供了工具调用范式与会话/编排能力的参考，感谢两者的维护者与社区贡献者。
+

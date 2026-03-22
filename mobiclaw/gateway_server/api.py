@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import mimetypes
 import shutil
 import uuid
@@ -16,6 +17,10 @@ from fastapi import File, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from .api_env import register_env_routes
+from ..mcp import get_mcp_manager
+from .models import DeviceHeartbeat, TaskRequest
+
+logger = logging.getLogger(__name__)
 
 
 def _gateway_override(name: str, default: Any) -> Any:
@@ -107,7 +112,7 @@ def register_routes(app) -> None:
 
     @app.post("/api/v1/task", response_model=_gateway_override("TaskResult", None))
     async def submit_task(
-        request: Any,
+        body: TaskRequest,
         raw_request: Request,
         authorization: str | None = Header(default=None),
     ):
@@ -128,31 +133,31 @@ def register_routes(app) -> None:
         cfg = load_config()
         ensure_auth(authorization, cfg)
 
-        if not request.task.strip():
+        if not body.task.strip():
             raise HTTPException(status_code=400, detail="Task must not be empty")
 
-        if request.schedule and get_active_manager() is not None:
+        if body.schedule and get_active_manager() is not None:
             detection = schedule_detection_cls(
                 is_scheduled=True,
-                core_task=request.task,
-                schedule_type=request.schedule.schedule_type,
-                cron_expr=request.schedule.cron_expr,
-                run_at=request.schedule.run_at,
-                human_description=request.schedule.description or "",
+                core_task=body.task,
+                schedule_type=body.schedule.schedule_type,
+                cron_expr=body.schedule.cron_expr,
+                run_at=body.schedule.run_at,
+                human_description=body.schedule.description or "",
             )
             scheduled_task = await get_active_manager().add_scheduled_task(
                 detection=detection,
-                original_task=request.task,
+                original_task=body.task,
                 source="api",
                 mode="router",
-                agent_hint=request.agent_hint,
-                skill_hint=request.skill_hint,
-                routing_strategy=request.routing_strategy,
-                web_search_enabled=request.web_search_enabled,
+                agent_hint=body.agent_hint,
+                skill_hint=body.skill_hint,
+                routing_strategy=body.routing_strategy,
+                web_search_enabled=body.web_search_enabled,
                 job_context={
-                    "webhook_url": request.webhook_url,
-                    "webhook_token": request.webhook_token,
-                    "callback_headers": request.callback_headers,
+                    "webhook_url": body.webhook_url,
+                    "webhook_token": body.webhook_token,
+                    "callback_headers": body.callback_headers,
                 },
             )
             return task_result_cls(
@@ -167,29 +172,29 @@ def register_routes(app) -> None:
                 },
             )
 
-        effective_task, normalized_input_files = inject_input_files_into_task(request.task, request.input_files)
+        effective_task, normalized_input_files = inject_input_files_into_task(body.task, body.input_files)
 
-        if request.async_mode:
+        if body.async_mode:
             job_id = uuid.uuid4().hex
             async with job_lock:
                 job_store[job_id] = task_result_cls(job_id=job_id, status="queued")
                 job_ctx_map[job_id] = job_context_cls(
-                    webhook_url=request.webhook_url,
-                    webhook_token=request.webhook_token,
-                    callback_headers=request.callback_headers,
+                    webhook_url=body.webhook_url,
+                    webhook_token=body.webhook_token,
+                    callback_headers=body.callback_headers,
                 )
             asyncio.create_task(
                 run_job(
                     job_id,
                     effective_task,
-                    request.output_path,
-                    request.mode,
-                    request.agent_hint,
-                    request.skill_hint,
-                    request.routing_strategy,
-                    request.context_id,
+                    body.output_path,
+                    body.mode,
+                    body.agent_hint,
+                    body.skill_hint,
+                    body.routing_strategy,
+                    body.context_id,
                     None,
-                    request.web_search_enabled,
+                    body.web_search_enabled,
                     normalized_input_files,
                 )
             )
@@ -198,15 +203,15 @@ def register_routes(app) -> None:
         job_id = uuid.uuid4().hex
         result = await run_gateway_task(
             task=effective_task,
-            output_path=request.output_path,
-            mode=request.mode,
-            agent_hint=request.agent_hint,
-            skill_hint=request.skill_hint,
-            routing_strategy=request.routing_strategy,
-            context_id=request.context_id,
-            web_search_enabled=request.web_search_enabled,
+            output_path=body.output_path,
+            mode=body.mode,
+            agent_hint=body.agent_hint,
+            skill_hint=body.skill_hint,
+            routing_strategy=body.routing_strategy,
+            context_id=body.context_id,
+            web_search_enabled=body.web_search_enabled,
         )
-        resolved_context_id = resolve_context_id(request.context_id, result)
+        resolved_context_id = resolve_context_id(body.context_id, result)
         if resolved_context_id:
             result = dict(result or {})
             result.setdefault("context_id", resolved_context_id)
@@ -215,7 +220,24 @@ def register_routes(app) -> None:
             result = dict(result or {})
             result["input_files"] = normalized_input_files
         result = decorate_result_with_files(job_id, result, request=raw_request, cfg=cfg)
-        return task_result_cls(job_id=job_id, status="completed", result=result)
+        try:
+            from ..config import RAG_CONFIG
+
+            if RAG_CONFIG["task_history_enabled"]:
+                from ..tools import store_task_result
+
+                await store_task_result(
+                    job_id=job_id,
+                    task=effective_task,
+                    reply=str((result or {}).get("reply", "")),
+                    files=(result or {}).get("files", []),
+                )
+        except Exception as exc:
+            logger.warning("Failed to store task result in RAG: %s", exc)
+        completed = task_result_cls(job_id=job_id, status="completed", result=result)
+        async with job_lock:
+            job_store[job_id] = completed
+        return completed
     exported["submit_task"] = submit_task
 
     @app.get("/api/v1/chat/sessions")
@@ -447,5 +469,195 @@ def register_routes(app) -> None:
     exported["feishu_events"] = feishu_events
 
     register_env_routes(app, exported)
+
+    # -- MCP server management endpoints ------------------------------------
+
+    @app.get("/api/v1/mcp/servers")
+    async def list_mcp_servers(
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        manager = get_mcp_manager()
+        if manager is None:
+            return {"servers": [], "enabled": False}
+        return {"servers": manager.list_servers(), "enabled": True}
+
+    exported["list_mcp_servers"] = list_mcp_servers
+
+    @app.post("/api/v1/mcp/servers")
+    async def add_mcp_server(
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+        manager = get_mcp_manager()
+        if manager is None:
+            raise HTTPException(
+                status_code=503,
+                detail="MCP support unavailable (mcp package not installed)",
+            )
+
+        try:
+            result = await manager.add_server(body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        return {"ok": True, **result}
+
+    exported["add_mcp_server"] = add_mcp_server
+
+    @app.delete("/api/v1/mcp/servers/{name}")
+    async def remove_mcp_server(
+        name: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        manager = get_mcp_manager()
+        if manager is None:
+            raise HTTPException(
+                status_code=503,
+                detail="MCP support unavailable (mcp package not installed)",
+            )
+
+        removed = await manager.remove_server(name)
+        if not removed:
+            raise HTTPException(status_code=404, detail=f"MCP server '{name}' not found")
+
+        return {"ok": True, "name": name, "status": "removed"}
+
+    exported["remove_mcp_server"] = remove_mcp_server
+
+    # -- Device management endpoints ----------------------------------------
+
+    @app.post("/api/v1/devices/heartbeat")
+    async def device_heartbeat(
+        heartbeat: DeviceHeartbeat,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        utc_now_iso = _gateway_override("_utc_now_iso", None)
+        device_store = _gateway_override("_DEVICE_STORE", {})
+        device_lock = _gateway_override("_DEVICE_LOCK", None)
+        save_device_store = _gateway_override("_save_device_store", None)
+        ensure_adb_connected = _gateway_override("_ensure_adb_connected", None)
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        now = utc_now_iso()
+        record: dict[str, Any] = {
+            "device_id": heartbeat.device_id,
+            "tailscale_ip": heartbeat.tailscale_ip,
+            "adb_port": heartbeat.adb_port,
+            "device_name": heartbeat.device_name,
+            "last_heartbeat": now,
+        }
+
+        async with device_lock:
+            existing = device_store.get(heartbeat.device_id)
+            if existing:
+                record["first_seen"] = existing.get("first_seen", now)
+            else:
+                record["first_seen"] = now
+            device_store[heartbeat.device_id] = record
+            save_device_store()
+
+        logger.info("Device heartbeat: %s (adb_port=%s)", heartbeat.device_id, heartbeat.adb_port)
+
+        if heartbeat.tailscale_ip and heartbeat.adb_port:
+            try:
+                await ensure_adb_connected(heartbeat.tailscale_ip, heartbeat.adb_port)
+            except Exception:
+                logger.exception("Failed to ensure ADB connection for %s:%s", heartbeat.tailscale_ip, heartbeat.adb_port)
+
+        return {"status": "ok", "device_id": heartbeat.device_id, "timestamp": now}
+    exported["device_heartbeat"] = device_heartbeat
+
+    @app.get("/api/v1/devices")
+    async def list_devices(
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        device_store = _gateway_override("_DEVICE_STORE", {})
+        device_lock = _gateway_override("_DEVICE_LOCK", None)
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        async with device_lock:
+            devices = list(device_store.values())
+        return {"devices": devices, "count": len(devices)}
+    exported["list_devices"] = list_devices
+
+    @app.get("/api/v1/devices/{device_id}")
+    async def get_device(
+        device_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        device_store = _gateway_override("_DEVICE_STORE", {})
+        device_lock = _gateway_override("_DEVICE_LOCK", None)
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        async with device_lock:
+            device = device_store.get(device_id)
+        if not device:
+            raise HTTPException(status_code=404, detail="Device not found")
+        return device
+    exported["get_device"] = get_device
+
+    @app.delete("/api/v1/devices/{device_id}")
+    async def delete_device(
+        device_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        device_store = _gateway_override("_DEVICE_STORE", {})
+        device_lock = _gateway_override("_DEVICE_LOCK", None)
+        save_device_store = _gateway_override("_save_device_store", None)
+        adb_run = _gateway_override("_adb_run", None)
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        async with device_lock:
+            device = device_store.pop(device_id, None)
+            if device:
+                save_device_store()
+        if not device:
+            raise HTTPException(status_code=404, detail="Device not found")
+
+        ip = device.get("tailscale_ip")
+        port = device.get("adb_port")
+        if ip and port:
+            target = f"{ip}:{port}"
+            try:
+                logger.info("ADB disconnecting %s on device unregister", target)
+                await adb_run("disconnect", target)
+            except Exception:
+                logger.warning("Failed to disconnect %s on device unregister", target)
+
+        logger.info("Device unregistered: %s", device_id)
+        return {"status": "ok", "device_id": device_id}
+    exported["delete_device"] = delete_device
 
     return exported

@@ -6,6 +6,24 @@ from pathlib import Path
 from mobiclaw.agents import create_steward_agent
 
 
+def _find_partial_in_wrapped_closures(func):
+    """Find first functools.partial captured in function closure chain.
+
+    Tools may be wrapped (for timeout/error handling). This helper traverses
+    ``__wrapped__`` links and inspects each closure layer.
+    """
+    seen: set[int] = set()
+    current = func
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        for cell in list(current.__closure__ or []):
+            value = cell.cell_contents
+            if isinstance(value, functools.partial):
+                return value
+        current = getattr(current, "__wrapped__", None)
+    return None
+
+
 def test_steward_mobi_tools_bind_job_mobile_exec(tmp_path):
     job_output_dir = tmp_path / "job_x"
     expected_mobile_dir = str((job_output_dir / "mobile_exec").resolve())
@@ -28,11 +46,8 @@ def test_steward_collect_report_uses_bound_collect_output_dir(tmp_path):
     agent = create_steward_agent(job_context={"job_output_dir": str(job_output_dir)})
     report_func = agent.toolkit.tools["call_mobi_collect_with_report"].original_func
 
-    closures = list(report_func.__closure__ or [])
-    partial_cells = [cell.cell_contents for cell in closures if isinstance(cell.cell_contents, functools.partial)]
-
-    assert partial_cells, "collect report wrapper should capture bound collect function"
-    bound_collect = partial_cells[0]
+    bound_collect = _find_partial_in_wrapped_closures(report_func)
+    assert bound_collect is not None, "collect report wrapper should capture bound collect function"
     assert bound_collect.keywords.get("output_dir") == expected_mobile_dir
 
 

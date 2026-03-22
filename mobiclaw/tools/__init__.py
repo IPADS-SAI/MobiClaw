@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+
 from .mobi import call_mobi_action_task, call_mobi_collect_verified
 from .file import write_text_file
+
 from .papers import arxiv_search, dblp_conference_search, download_file, extract_pdf_text
 from .office import (
     create_docx_from_text,
@@ -26,7 +28,13 @@ from .skill_runner import run_skill_script
 from .ocr import extract_image_text_ocr
 from .shell import run_shell_command
 from .web import brave_search, fetch_url_links, fetch_url_readable_text, fetch_url_text
-from .feishu import fetch_feishu_chat_history, get_feishu_message
+from .feishu import (
+    fetch_feishu_chat_history,
+    get_feishu_message,
+    read_feishu_docx_link,
+    schedule_feishu_meeting,
+    send_feishu_meeting_card,
+)
 from .memory import (
     read_memory,
     update_long_term_memory,
@@ -45,6 +53,7 @@ __all__ = [
     "fetch_url_links",
     "brave_search",
     "write_text_file",
+    "read_markdown_file",
     "arxiv_search",
     "dblp_conference_search",
     "download_file",
@@ -64,4 +73,7 @@ __all__ = [
     "search_steward_knowledge",
     "fetch_feishu_chat_history",
     "get_feishu_message",
+    "read_feishu_docx_link",
+    "schedule_feishu_meeting",
+    "send_feishu_meeting_card",
 ]

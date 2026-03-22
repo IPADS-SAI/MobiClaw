@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..config import MEMORY_CONFIG, RAG_CONFIG, SCHEDULE_CONFIG
+from ..config import CREATE_OFFICE_FILE_CONFIG, MEMORY_CONFIG, RAG_CONFIG, SCHEDULE_CONFIG
 from ..tools import (
     arxiv_search,
     brave_search,
@@ -24,13 +24,17 @@ from ..tools import (
     fetch_url_text,
     get_feishu_message,
     insert_pptx_image,
+    read_feishu_docx_link,
     read_docx_text,
+    read_markdown_file,
     read_pptx_summary,
     read_xlsx_summary,
     run_shell_command,
     run_skill_script,
+    schedule_feishu_meeting,
     search_steward_knowledge,
     search_task_history,
+    send_feishu_meeting_card,
     set_pptx_text_style,
     store_steward_knowledge,
     update_long_term_memory,
@@ -40,10 +44,12 @@ from ..tools import (
 )
 from .types import AgentCapability
 
+from ..mcp import get_mcp_manager
+
 
 def _tool_catalog() -> dict[str, tuple[Any, str]]:
     """返回可供自定义 Agent 复用的工具目录。"""
-    return {
+    catalog = {
         "run_shell_command": (run_shell_command, "运行受限的本地命令行工具（白名单约束）。"),
         "run_skill_script": (run_skill_script, "在指定 execution_dir 中执行 skill 脚本。"),
         "brave_search": (brave_search, "通过 Brave Search API 联网检索新闻与网页来源链接。"),
@@ -56,25 +62,42 @@ def _tool_catalog() -> dict[str, tuple[Any, str]]:
         "extract_pdf_text": (extract_pdf_text, "从本地 PDF 文件中提取文本内容。"),
         "extract_image_text_ocr": (extract_image_text_ocr, "从本地图片文件中执行 OCR 识别。"),
         "read_docx_text": (read_docx_text, "读取 DOCX 文档文本内容。"),
-        "create_docx_from_text": (create_docx_from_text, "从纯文本生成 DOCX 文档。"),
-        "edit_docx": (edit_docx, "对 DOCX 文档进行查找替换、追加段落或插入表格。"),
-        "create_pdf_from_text": (create_pdf_from_text, "从纯文本生成 PDF 文档。"),
+        "read_markdown_file": (read_markdown_file, "读取本地 Markdown(.md) 文件内容。"),
         "read_xlsx_summary": (read_xlsx_summary, "读取 XLSX 工作簿摘要与预览。"),
-        "write_xlsx_from_records": (write_xlsx_from_records, "从记录列表生成 XLSX 文件。"),
-        "write_xlsx_from_rows": (write_xlsx_from_rows, "从行数据生成 XLSX 文件。"),
         "write_text_file": (write_text_file, "写入本地文本文件。"),
         "search_task_history": (search_task_history, "检索历史任务执行记录和相关文档。"),
         "search_steward_knowledge": (search_steward_knowledge, "检索本地知识库中已存储的信息。"),
         "store_steward_knowledge": (store_steward_knowledge, "将收集到的信息存入本地知识库。"),
         "fetch_feishu_chat_history": (fetch_feishu_chat_history, "读取飞书会话历史消息列表。"),
         "get_feishu_message": (get_feishu_message, "按消息 ID 获取飞书消息详情。"),
+        "read_feishu_docx_link": (read_feishu_docx_link, "读取飞书 Docx/Wiki 云文档链接并返回正文文本。"),
+        "schedule_feishu_meeting": (schedule_feishu_meeting, "按显式时间参数预约飞书会议并返回会议链接信息。"),
+        "send_feishu_meeting_card": (send_feishu_meeting_card, "将会议信息以卡片形式发送到飞书会话。"),
         "update_long_term_memory": (update_long_term_memory, "更新长期记忆文件（MEMORY.md）。"),
         "read_pptx_summary": (read_pptx_summary, "读取 PPTX/PPT 文件并返回结构化摘要。"),
-        "create_pptx_from_outline": (create_pptx_from_outline, "从幻灯片大纲列表创建新 PPTX 文件。"),
-        "edit_pptx": (edit_pptx, "综合编辑已有 PPTX。"),
-        "insert_pptx_image": (insert_pptx_image, "向指定幻灯片插入本地图片。"),
-        "set_pptx_text_style": (set_pptx_text_style, "对匹配文本应用 PPTX 字体样式。"),
     }
+
+    if bool(CREATE_OFFICE_FILE_CONFIG.get("enabled", False)):
+        catalog.update(
+            {
+                "create_docx_from_text": (create_docx_from_text, "从纯文本生成 DOCX 文档。"),
+                "edit_docx": (edit_docx, "对 DOCX 文档进行查找替换、追加段落或插入表格。"),
+                "create_pdf_from_text": (create_pdf_from_text, "从纯文本生成 PDF 文档。"),
+                "write_xlsx_from_records": (write_xlsx_from_records, "从记录列表生成 XLSX 文件。"),
+                "write_xlsx_from_rows": (write_xlsx_from_rows, "从行数据生成 XLSX 文件。"),
+                "create_pptx_from_outline": (create_pptx_from_outline, "从幻灯片大纲列表创建新 PPTX 文件。"),
+                "edit_pptx": (edit_pptx, "综合编辑已有 PPTX。"),
+                "insert_pptx_image": (insert_pptx_image, "向指定幻灯片插入本地图片。"),
+                "set_pptx_text_style": (set_pptx_text_style, "对匹配文本应用 PPTX 字体样式。"),
+            }
+        )
+
+    manager = get_mcp_manager()
+    if manager is not None:
+        for tool_func, description in manager.get_tool_functions():
+            catalog[tool_func.name] = (tool_func, description)
+
+    return catalog
 
 
 def _builtin_agent_capabilities() -> list[AgentCapability]:
@@ -86,7 +109,7 @@ def _builtin_agent_capabilities() -> list[AgentCapability]:
         worker_role += "、长期记忆管理"
     if SCHEDULE_CONFIG["enabled"]:
         worker_role += "、定时任务管理"
-    worker_role += "，飞书相关的聊天历史检索（使用飞书连接时）"
+    worker_role += "，飞书相关的聊天历史检索与会议预约卡片发送（使用飞书连接时）"
 
     worker_strengths = [
         "Brave/网页/arXiv/DBLP 检索",
@@ -101,6 +124,12 @@ def _builtin_agent_capabilities() -> list[AgentCapability]:
         worker_strengths.append("长期记忆读写（记录用户偏好、事实信息等跨会话信息）")
     if SCHEDULE_CONFIG["enabled"]:
         worker_strengths.append("定时任务管理（创建、查看、取消）")
+
+    manager = get_mcp_manager()
+    if manager is not None:
+        mcp_tool_names = manager.get_tool_names()
+        if mcp_tool_names:
+            worker_strengths.append(f"MCP 外部工具（{', '.join(mcp_tool_names[:5])}{'…' if len(mcp_tool_names) > 5 else ''}）")
 
     worker_typical_tasks = [
         "检索最新论文并总结",
@@ -118,9 +147,9 @@ def _builtin_agent_capabilities() -> list[AgentCapability]:
     return [
         AgentCapability(
             name="steward",
-            role="负责手机端数据收集-存储-分析这一类特殊任务（Collect/Store/Analyze/Execute）",
-            strengths=["手机端数据采集与执行动作"],
-            typical_tasks=["整理今日待办并决定是否执行手机操作", "采集微信信息后入库并生成建议"],
+            role="完成手机端APP任务，负责手机端APP控制，手机端数据收集-存储-分析等任务（Collect/Store/Analyze/Execute）",
+            strengths=["手机端数据采集与执行动作，手机端APP控制，手机端APP任务执行"],
+            typical_tasks=["整理今日待办并决定是否执行手机操作", "采集微信信息后入库并生成建议", "帮我用淘宝购买某个商品", "帮我饿了么点一杯蜜雪冰城的奶茶"],
             boundaries=["不擅长大规模网页/论文检索,不擅长直接生成总结内容", "通用检索类子任务建议委派给 worker"],
         ),
         AgentCapability(

@@ -80,3 +80,82 @@ def write_text_file(
         content=[TextBlock(type="text", text=f"[File] Wrote: {target}")],
         metadata={"path": str(target), "mode": normalized_mode},
     )
+
+
+def read_markdown_file(
+    path: str,
+    encoding: str = "utf-8",
+    max_chars: int = 20000,
+) -> ToolResponse:
+    """Read a local Markdown file.
+
+    If MOBICLAW_FILE_READ_ROOT is set, reads are constrained to that root.
+
+    Args:
+        path: Target markdown file path.
+        encoding: Text encoding used when reading.
+        max_chars: Maximum number of characters to return.
+    """
+    resolved_path = (path or "").strip()
+    if not resolved_path:
+        return ToolResponse(
+            content=[TextBlock(type="text", text="[File] Empty path.")],
+            metadata={"error": "empty_path"},
+        )
+
+    if max_chars <= 0:
+        return ToolResponse(
+            content=[TextBlock(type="text", text="[File] max_chars must be greater than 0.")],
+            metadata={"error": "invalid_max_chars", "max_chars": max_chars},
+        )
+
+    target = Path(resolved_path).expanduser()
+    root = (os.environ.get("MOBICLAW_FILE_READ_ROOT") or "").strip()
+    if root:
+        root_path = Path(root).expanduser().resolve()
+        target = target if target.is_absolute() else root_path / target
+        try:
+            target = target.resolve()
+        except FileNotFoundError:
+            target = target.absolute()
+        if target != root_path and root_path not in target.parents:
+            return ToolResponse(
+                content=[TextBlock(type="text", text="[File] Path is outside MOBICLAW_FILE_READ_ROOT.")],
+                metadata={"error": "path_outside_root", "root": str(root_path)},
+            )
+    else:
+        target = target.resolve()
+
+    if not target.exists() or not target.is_file():
+        return ToolResponse(
+            content=[TextBlock(type="text", text=f"[File] File not found: {target}")],
+            metadata={"error": "file_not_found", "path": str(target)},
+        )
+
+    if target.suffix.lower() != ".md":
+        return ToolResponse(
+            content=[TextBlock(type="text", text="[File] Only .md files are supported.")],
+            metadata={"error": "invalid_extension", "path": str(target), "suffix": target.suffix.lower()},
+        )
+
+    try:
+        content = target.read_text(encoding=encoding)
+    except Exception as exc:
+        return ToolResponse(
+            content=[TextBlock(type="text", text=f"[File] Read failed: {exc}")],
+            metadata={"error": "read_failed", "path": str(target)},
+        )
+
+    is_truncated = len(content) > max_chars
+    output = content[:max_chars] if is_truncated else content
+    logger.info("file.read_markdown path=%s chars=%d truncated=%s", target, len(output), is_truncated)
+    return ToolResponse(
+        content=[TextBlock(type="text", text=output)],
+        metadata={
+            "path": str(target),
+            "encoding": encoding,
+            "truncated": is_truncated,
+            "returned_chars": len(output),
+            "total_chars": len(content),
+        },
+    )

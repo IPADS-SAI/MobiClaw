@@ -63,7 +63,6 @@ async def run_orchestrated_task(
     strategy = (routing_strategy or ROUTING_CONFIG["strategy"]).strip().lower()
     router_timeout_s = float(ROUTING_CONFIG["router_timeout_s"])
     planner_timeout_s = float(ROUTING_CONFIG["planner_timeout_s"])
-    subtask_timeout_s = float(ROUTING_CONFIG["subtask_timeout_s"])
 
     create_job_output_paths = _orchestrator_override("_create_job_output_paths", None)
     resolved_output_path, job_output_dir, job_tmp_dir = create_job_output_paths(output_path)
@@ -260,31 +259,27 @@ async def run_orchestrated_task(
             )
 
             try:
-                result = await asyncio.wait_for(
-                    run_one_agent(
-                        item["agent"],
-                        item["task"],
-                        output_path=hint_path,
-                        output_dir=job_output_dir,
-                        temp_dir=job_tmp_dir,
-                        selected_skills=skill_decision.selected_skills,
-                        prior_context=prior_context,
-                        session_manager=_GENERIC_SESSION_MANAGER,
-                        session_handle=session_handle,
-                        session_mode=normalized_mode,
-                        external_context=external_context,
-                    ),
-                    timeout=subtask_timeout_s,
+                result = await run_one_agent(
+                    item["agent"],
+                    item["task"],
+                    output_path=hint_path,
+                    output_dir=job_output_dir,
+                    temp_dir=job_tmp_dir,
+                    selected_skills=skill_decision.selected_skills,
+                    prior_context=prior_context,
+                    session_manager=_GENERIC_SESSION_MANAGER,
+                    session_handle=session_handle,
+                    session_mode=normalized_mode,
+                    external_context=external_context,
                 )
             except Exception as exc:
-                error_text = f"subtask timeout>{subtask_timeout_s:.2f}s" if isinstance(exc, asyncio.TimeoutError) else str(exc)
                 result = {
                     "agent": item["agent"],
                     "task": item["task"],
                     "skills": skill_decision.selected_skills,
-                    "reply": f"subtask failed: {error_text}",
+                    "reply": f"subtask failed: {exc}",
                     "elapsed_ms": 0,
-                    "error": error_text,
+                    "error": str(exc),
                 }
             _GENERIC_SESSION_MANAGER.append_history_message(
                 handle=session_handle,
@@ -375,7 +370,6 @@ async def run_orchestrated_task(
             "timeouts": {
                 "router_timeout_s": router_timeout_s,
                 "planner_timeout_s": planner_timeout_s,
-                "subtask_timeout_s": subtask_timeout_s,
             },
             "timing": {"total_elapsed_ms": total_elapsed_ms},
             "external_context": external_context or {},

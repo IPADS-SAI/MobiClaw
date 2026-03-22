@@ -18,6 +18,16 @@ from ..env import load_project_env
 from ..scheduler import ScheduleDetectionResult, get_active_manager, shutdown_scheduler, start_scheduler
 from ..workflows import run_gateway_task
 from .api import register_routes
+from .devices import (
+    _DEVICE_LOCK,
+    _DEVICE_STORE,
+    _DEVICE_STORE_FILE,
+    _adb_run,
+    _disconnect_all_devices,
+    _ensure_adb_connected,
+    _load_device_store,
+    _save_device_store,
+)
 from .env import (
     _ENV_SETTINGS_SCHEMA,
     _env_file_path,
@@ -63,6 +73,7 @@ from .files import (
     _resolve_file_root,
 )
 from .models import (
+    DeviceHeartbeat,
     EnvContentRequest,
     EnvStructuredRequest,
     GatewayConfig,
@@ -115,6 +126,8 @@ async def _lifespan(_: FastAPI):
     _MAIN_LOOP = asyncio.get_running_loop()
     cfg = load_config()
 
+    await _load_device_store()
+
     if SCHEDULE_CONFIG["enabled"]:
         await start_scheduler(job_executor=_execute_scheduled_job)
     else:
@@ -126,9 +139,20 @@ async def _lifespan(_: FastAPI):
     else:
         logger.info("Feishu long connection disabled by FEISHU_EVENT_TRANSPORT")
 
+    # Load saved MCP servers (non-blocking: failures are logged and skipped)
+    from ..mcp import get_mcp_manager
+
+    mcp_mgr = get_mcp_manager()
+    if mcp_mgr is not None:
+        await mcp_mgr.load_saved_servers()
+
     yield
 
+    if mcp_mgr is not None:
+        await mcp_mgr.shutdown()
     await shutdown_scheduler()
+    _save_device_store()
+    await _disconnect_all_devices()
 
 
 app = FastAPI(title="MobiClaw Gateway", version="0.1.0", lifespan=_lifespan)
@@ -148,11 +172,3 @@ def _ensure_auth(authorization: str | None, cfg: GatewayConfig) -> None:
 
 
 globals().update(register_routes(app))
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    host = os.environ.get("MOBICLAW_GATEWAY_HOST", "0.0.0.0")
-    port = int(os.environ.get("MOBICLAW_GATEWAY_PORT", "8090"))
-    uvicorn.run("mobiclaw.gateway_server:app", host=host, port=port, reload=False)
