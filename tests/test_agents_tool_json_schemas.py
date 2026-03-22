@@ -3,6 +3,7 @@ from __future__ import annotations
 from jsonschema import Draft202012Validator
 
 from mobiclaw.agents import create_steward_agent, create_worker_agent
+from mobiclaw.config import CREATE_OFFICE_FILE_CONFIG
 
 
 _FUNCTION_TOOL_SCHEMA = {
@@ -44,21 +45,12 @@ _WORKER_CORE_TOOLS = {
     "extract_pdf_text",
     "extract_image_text_ocr",
     "read_docx_text",
-    "create_docx_from_text",
-    "edit_docx",
-    "create_pdf_from_text",
     "read_xlsx_summary",
-    "write_xlsx_from_records",
-    "write_xlsx_from_rows",
     "write_text_file",
     "search_steward_knowledge",
     "fetch_feishu_chat_history",
     "get_feishu_message",
     "read_pptx_summary",
-    "create_pptx_from_outline",
-    "edit_pptx",
-    "insert_pptx_image",
-    "set_pptx_text_style",
 }
 
 _WORKER_OFFICE_MUTATION_TOOLS = {
@@ -114,14 +106,21 @@ def test_worker_and_steward_tools_have_parameter_descriptions() -> None:
     assert _WORKER_CORE_TOOLS.issubset(worker_schema_map.keys())
     assert _STEWARD_CORE_TOOLS.issubset(steward_schema_map.keys())
 
-    _assert_param_descriptions(worker_schema_map, _WORKER_CORE_TOOLS)
+    worker_tools_for_description = set(_WORKER_CORE_TOOLS)
+    if bool(CREATE_OFFICE_FILE_CONFIG.get("enabled", False)):
+        worker_tools_for_description.update(_WORKER_OFFICE_MUTATION_TOOLS)
+
+    _assert_param_descriptions(worker_schema_map, worker_tools_for_description)
     _assert_param_descriptions(steward_schema_map, _STEWARD_CORE_TOOLS)
 
 
 def test_worker_office_mutation_tools_follow_config_flag() -> None:
     worker_schema_map = _schema_by_name(create_worker_agent())
     worker_tool_names = set(worker_schema_map.keys())
-    assert _WORKER_OFFICE_MUTATION_TOOLS.issubset(worker_tool_names)
+    if bool(CREATE_OFFICE_FILE_CONFIG.get("enabled", False)):
+        assert _WORKER_OFFICE_MUTATION_TOOLS.issubset(worker_tool_names)
+    else:
+        assert _WORKER_OFFICE_MUTATION_TOOLS.isdisjoint(worker_tool_names)
 
 
 def test_steward_call_mobi_action_task_uses_task_desc_schema() -> None:
