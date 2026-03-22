@@ -13,7 +13,7 @@ def test_steward_mobi_tools_bind_job_mobile_exec(tmp_path):
     agent = create_steward_agent(job_context={"job_output_dir": str(job_output_dir)})
     tools = agent.toolkit.tools
 
-    action_tool = tools["call_mobi_action"]
+    action_tool = tools["call_mobi_action_task"]
 
     assert "call_mobi_collect_verified" not in tools
     assert "call_mobi_collect_with_report" in tools

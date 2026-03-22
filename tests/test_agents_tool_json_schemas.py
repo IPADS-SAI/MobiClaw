@@ -61,10 +61,22 @@ _WORKER_CORE_TOOLS = {
     "set_pptx_text_style",
 }
 
+_WORKER_OFFICE_MUTATION_TOOLS = {
+    "create_docx_from_text",
+    "edit_docx",
+    "create_pdf_from_text",
+    "write_xlsx_from_records",
+    "write_xlsx_from_rows",
+    "create_pptx_from_outline",
+    "edit_pptx",
+    "insert_pptx_image",
+    "set_pptx_text_style",
+}
+
 _STEWARD_CORE_TOOLS = {
     "call_mobi_collect_with_report",
     "delegate_to_worker",
-    "call_mobi_action",
+    "call_mobi_action_task",
     "store_steward_knowledge",
     "search_steward_knowledge",
     "fetch_url_text",
@@ -104,3 +116,19 @@ def test_worker_and_steward_tools_have_parameter_descriptions() -> None:
 
     _assert_param_descriptions(worker_schema_map, _WORKER_CORE_TOOLS)
     _assert_param_descriptions(steward_schema_map, _STEWARD_CORE_TOOLS)
+
+
+def test_worker_office_mutation_tools_follow_config_flag() -> None:
+    worker_schema_map = _schema_by_name(create_worker_agent())
+    worker_tool_names = set(worker_schema_map.keys())
+    assert _WORKER_OFFICE_MUTATION_TOOLS.issubset(worker_tool_names)
+
+
+def test_steward_call_mobi_action_task_uses_task_desc_schema() -> None:
+    steward_schema_map = _schema_by_name(create_steward_agent())
+    call_mobi_action_schema = steward_schema_map["call_mobi_action_task"]
+    properties = call_mobi_action_schema["function"]["parameters"].get("properties", {})
+
+    assert "task_desc" in properties
+    assert "payload" not in properties
+    assert "action_type" not in properties
