@@ -85,7 +85,10 @@ async def run_shell_command(command: str) -> ToolResponse:
     """Run a safe local shell command with allowlist enforcement.
 
     Args:
-        command: Command line string to execute, without quotation marks. Operators like "|", ";", "||" are also not allowed for safety reasons.
+        command: Command line string to execute (no surrounding quotes).
+        For safety and compatibility, do not use shell-only syntax such as
+        here-docs (e.g. `python <<'PY' ... PY`) or operators like `|`, `;`, `||`.
+        
     """
     command = (command or "").strip()
     if not command:
