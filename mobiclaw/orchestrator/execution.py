@@ -78,8 +78,8 @@ async def _run_one_agent(
 ) -> dict[str, Any]:
     skill_list = selected_skills or []
     skill_prompt_context = _orchestrator_override("_skill_prompt_context", None)
-    extract_text = _orchestrator_override("_extract_response_text", None)
-    build_external_context = _orchestrator_override("_build_external_context_text", None)
+    extract_text = _orchestrator_override("_extract_response_text", None) # function to extract text from agent response
+    build_external_context = _orchestrator_override("_build_external_context_text", None) #current, only used by feishu context
     build_agent = _orchestrator_override("_build_agent", _build_agent)
     skill_context = skill_prompt_context(skill_list)
 
@@ -111,23 +111,19 @@ async def _run_one_agent(
     if external_context:
         msg_content = build_external_context(external_context) + "\n\n" + msg_content
 
-    if output_path:
+    if output_path: # only for last sub-task
         msg_content += (
             "\n\n重要回复要求：必须在最终回复正文中直接给出完整答案或完整总结；"
             "禁止只回复‘已落盘/见文件路径’。若同时生成了文件，可在正文后附文件路径。"
             "\n\n全部任务完成后，最终输出文件路径或文件名(绝对路径): "
             + str(output_path or "")
-            + "\n任务执行过程的临时目录，例如下载或者生成文件的目录(绝对路径): "
+            + "\n任务执行过程的临时目录，例如下载、生成的文件或者代码的存放目录(绝对路径): "
             + str(temp_dir or "")
-            + "\n如需落盘，请自行选择合适工具完成。"
         )
-    else:
+    else: # other sub-tasks without final output file, just for intermediate processing
         msg_content += (
-            "\n\n重要回复要求：必须在最终回复正文中直接给出完整答案或完整总结；"
-            "禁止只回复‘已落盘/见文件路径’。"
-            "\n\n任务执行过程的临时目录，例如下载或者生成文件的目录(绝对路径): "
+            "\n\n任务执行过程的临时目录，例如下载、生成的文件或者代码的存放目录(绝对路径): "
             + str(temp_dir or "")
-            + "\n如需落盘，请自行选择合适工具完成。"
         )
 
     logger.info(_highlight_log("orchestrator.executor.paths agent=" + str(agent_name) + " output_path=" + str(output_path or "") + " temp_dir=" + str(temp_dir or ""), ANSI_CYAN))

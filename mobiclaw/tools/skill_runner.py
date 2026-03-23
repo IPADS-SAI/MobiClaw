@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 _SKILL_ROOT = Path(__file__).resolve().parents[1] / "skills"
 _RUNTIME_NAMES = {"python", "python3", "bash", "sh", "zsh", "node", "npm", "npx", "uv", "pip", "pip3"}
 _MAX_ALLOWED_COMMANDS_IN_TEXT = 20
+_GLOBAL_HARMLESS_COMMANDS = ["cat", "ls", "pwd", "echo", "head", "tail", "wc"]
 _ANSI_BOLD = "\033[1m"
 _ANSI_YELLOW = "\033[93m"
 _ANSI_RESET = "\033[0m"
@@ -184,6 +185,18 @@ def _format_allowed_commands_for_text(allowed_commands: list[str], limit: int = 
     return text
 
 
+def _merge_allowed_commands(*groups: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in group:
+            if item in seen:
+                continue
+            merged.append(item)
+            seen.add(item)
+    return merged
+
+
 def _build_command_signature(command: str) -> tuple[str, ...] | None:
     try:
         tokens = shlex.split(command)
@@ -295,26 +308,35 @@ async def run_skill_script(
 
     skill_md_path = cwd / "SKILL.md"
     allowed_commands, allowed_docs = _extract_commands_from_skill_dir(cwd)
+    effective_allowed_commands = _merge_allowed_commands(allowed_commands, _GLOBAL_HARMLESS_COMMANDS)
     if not allowed_commands:
-        return ToolResponse(
-            content=[
-                TextBlock(
-                    type="text",
-                    text=(
-                        f"[SkillRunner] No command whitelist found in: {skill_md_path}. "
-                        "No command-like entries could be extracted from SKILL.md or sibling .md files, "
-                        "so there are currently no allowed commands for this skill."
+        if _is_command_allowed(command, _GLOBAL_HARMLESS_COMMANDS):
+            logger.info(
+                "skill_runner.global_whitelist_match command=%s execution_dir=%s",
+                command,
+                cwd,
+            )
+        else:
+            return ToolResponse(
+                content=[
+                    TextBlock(
+                        type="text",
+                        text=(
+                            f"[SkillRunner] No command whitelist found in: {skill_md_path}. "
+                            "No command-like entries could be extracted from SKILL.md or sibling .md files, "
+                            "so there are currently no allowed commands for this skill."
+                        ),
                     ),
-                ),
-            ],
-            metadata={
-                "error": "skill_whitelist_not_found",
-                "execution_dir": str(cwd),
-                "skill_md": str(skill_md_path),
-                "skill_docs": allowed_docs,
-                "allowed_commands": [],
-            },
-        )
+                ],
+                metadata={
+                    "error": "skill_whitelist_not_found",
+                    "execution_dir": str(cwd),
+                    "skill_md": str(skill_md_path),
+                    "skill_docs": allowed_docs,
+                    "allowed_commands": [],
+                    "global_harmless_commands": _GLOBAL_HARMLESS_COMMANDS,
+                },
+            )
 
     timeout_value = timeout_s
     if timeout_value is None:
@@ -334,14 +356,14 @@ async def run_skill_script(
             metadata={"error": "empty_command_tokens", "command": command},
         )
 
-    if not _is_command_allowed(command, allowed_commands):
+    if not _is_command_allowed(command, effective_allowed_commands):
         return ToolResponse(
             content=[
                 TextBlock(
                     type="text",
                     text=(
                         f"[SkillRunner] Command is not allowed by SKILL.md whitelist: {command}. "
-                        f"Allowed commands from SKILL.md: {_format_allowed_commands_for_text(allowed_commands)} "
+                        f"Allowed commands from SKILL.md + global harmless set: {_format_allowed_commands_for_text(effective_allowed_commands)} "
                         "(includes sibling .md files in this skill directory)."
                     ),
                 )
@@ -353,7 +375,8 @@ async def run_skill_script(
                 "skill_md": str(skill_md_path),
                 "skill_docs": allowed_docs,
                 "allowed_commands": allowed_commands,
-                "allowed_command_hints": allowed_commands[:_MAX_ALLOWED_COMMANDS_IN_TEXT],
+                "global_harmless_commands": _GLOBAL_HARMLESS_COMMANDS,
+                "allowed_command_hints": effective_allowed_commands[:_MAX_ALLOWED_COMMANDS_IN_TEXT],
             },
         )
 

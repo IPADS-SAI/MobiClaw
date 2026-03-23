@@ -352,7 +352,7 @@ def _skill_prompt_context(selected_skills: list[str]) -> str:
             "\n".join(
                 [
                     f"[Skill: {skill_name}]",
-                    f"execution_dir (just for skill scripts): {skill_dir}",
+                    f"execution_dir (just used in run_skill_script function): {skill_dir}",
                     merged_content,
                 ]
             )
