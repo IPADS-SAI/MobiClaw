@@ -236,6 +236,83 @@ def test_build_callback_headers() -> None:
     assert "X-Empty" not in headers
 
 
+def test_deliver_result_prefers_markdown_message(monkeypatch) -> None:
+    gateway_server._JOB_CONTEXT.clear()
+    job_id = "job-md"
+    gateway_server._JOB_CONTEXT[job_id] = JobContext(
+        feishu_chat_id="oc_test_chat",
+        feishu_receive_id_type="chat_id",
+    )
+
+    sent: list[tuple[str, str]] = []
+
+    def fake_markdown(cfg, receive_id, receive_id_type, text):  # noqa: ANN001, ANN201
+        del cfg
+        sent.append(("markdown", f"{receive_id}|{receive_id_type}|{text}"))
+
+    def fake_text(cfg, receive_id, receive_id_type, text):  # noqa: ANN001, ANN201
+        del cfg
+        sent.append(("text", f"{receive_id}|{receive_id_type}|{text}"))
+
+    monkeypatch.setattr(gateway_server, "_build_feishu_text", lambda result: "# 标题\n\n- item")
+    monkeypatch.setattr(gateway_server, "_send_feishu_markdown", fake_markdown)
+    monkeypatch.setattr(gateway_server, "_send_feishu_text", fake_text)
+    monkeypatch.setattr(gateway_server, "_is_text_like_file", lambda path, mime_type=None: True)
+    monkeypatch.setattr(gateway_server, "_is_image_file", lambda path: False)
+    monkeypatch.setattr(gateway_server, "_send_feishu_image", lambda *args, **kwargs: True)
+    monkeypatch.setattr(gateway_server, "_send_feishu_file", lambda *args, **kwargs: True)
+
+    result = SimpleNamespace(
+        status="completed",
+        result={"reply": "ok", "files": []},
+        model_dump=lambda: {"status": "completed", "result": {"reply": "ok", "files": []}},
+    )
+
+    asyncio.run(gateway_server._deliver_result(job_id, result, _cfg()))
+
+    assert len(sent) == 1
+    assert sent[0][0] == "markdown"
+    assert "oc_test_chat|chat_id" in sent[0][1]
+
+
+def test_deliver_result_falls_back_to_text_when_markdown_fails(monkeypatch) -> None:
+    gateway_server._JOB_CONTEXT.clear()
+    job_id = "job-md-fallback"
+    gateway_server._JOB_CONTEXT[job_id] = JobContext(
+        feishu_chat_id="oc_test_chat",
+        feishu_receive_id_type="chat_id",
+    )
+
+    sent: list[str] = []
+
+    def fake_markdown(cfg, receive_id, receive_id_type, text):  # noqa: ANN001, ANN201
+        del cfg, receive_id, receive_id_type, text
+        raise RuntimeError("card failed")
+
+    def fake_text(cfg, receive_id, receive_id_type, text):  # noqa: ANN001, ANN201
+        del cfg
+        sent.append(f"{receive_id}|{receive_id_type}|{text}")
+
+    monkeypatch.setattr(gateway_server, "_build_feishu_text", lambda result: "# 标题\n\n- item")
+    monkeypatch.setattr(gateway_server, "_send_feishu_markdown", fake_markdown)
+    monkeypatch.setattr(gateway_server, "_send_feishu_text", fake_text)
+    monkeypatch.setattr(gateway_server, "_is_text_like_file", lambda path, mime_type=None: True)
+    monkeypatch.setattr(gateway_server, "_is_image_file", lambda path: False)
+    monkeypatch.setattr(gateway_server, "_send_feishu_image", lambda *args, **kwargs: True)
+    monkeypatch.setattr(gateway_server, "_send_feishu_file", lambda *args, **kwargs: True)
+
+    result = SimpleNamespace(
+        status="completed",
+        result={"reply": "ok", "files": []},
+        model_dump=lambda: {"status": "completed", "result": {"reply": "ok", "files": []}},
+    )
+
+    asyncio.run(gateway_server._deliver_result(job_id, result, _cfg()))
+
+    assert len(sent) == 1
+    assert sent[0].startswith("oc_test_chat|chat_id|")
+
+
 def test_run_job_success_non_chat(monkeypatch) -> None:
     job_id = "job-ok"
     gateway_server._JOB_STORE.clear()

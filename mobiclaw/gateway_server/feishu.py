@@ -320,6 +320,31 @@ def _send_feishu_text(cfg: GatewayConfig, receive_id: str, receive_id_type: str,
     _send_feishu_message(cfg, receive_id, receive_id_type, "text", {"text": text})
 
 
+def _send_feishu_markdown(cfg: GatewayConfig, receive_id: str, receive_id_type: str, markdown_text: str) -> None:
+    """发送飞书 Markdown 卡片消息（interactive）。
+
+    说明：网关历史上使用 text 消息，飞书不会按 Markdown 语法渲染；
+    这里改为 interactive 卡片中的 markdown 元素，提升渲染一致性。
+    """
+    content = (markdown_text or "").strip() or "任务执行完成。"
+    card_payload = {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "title": {
+                "tag": "plain_text",
+                "content": "MobiClaw 执行结果",
+            }
+        },
+        "elements": [
+            {
+                "tag": "markdown",
+                "content": content,
+            }
+        ],
+    }
+    _send_feishu_message(cfg, receive_id, receive_id_type, "interactive", card_payload)
+
+
 def _feishu_response_debug_body(resp: requests.Response, max_len: int = 1200) -> str:
     """提取飞书响应体调试文本（优先 JSON，降级 text）。"""
     body = ""

@@ -56,6 +56,7 @@ from .feishu import (
     _send_feishu_ack,
     _send_feishu_file,
     _send_feishu_image,
+    _send_feishu_markdown,
     _send_feishu_message,
     _send_feishu_text,
     _should_accept_feishu_message,
