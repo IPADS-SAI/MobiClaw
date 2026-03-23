@@ -19,10 +19,12 @@ logger = logging.getLogger(__name__)
 _SKILL_ROOT = Path(__file__).resolve().parents[1] / "skills"
 _RUNTIME_NAMES = {"python", "python3", "bash", "sh", "zsh", "node", "npm", "npx", "uv", "pip", "pip3"}
 _MAX_ALLOWED_COMMANDS_IN_TEXT = 20
+_MAX_CHAIN_SEGMENTS = 2
 _GLOBAL_HARMLESS_COMMANDS = ["cat", "ls", "pwd", "echo", "head", "tail", "wc"]
 _ANSI_BOLD = "\033[1m"
 _ANSI_YELLOW = "\033[93m"
 _ANSI_RESET = "\033[0m"
+_CHAIN_DISALLOWED_TOKENS = ("||", "|", ";")
 _FENCE_LANG_TO_RUNTIMES = {
     "python": ["python", "python3"],
     "py": ["python", "python3"],
@@ -197,6 +199,33 @@ def _merge_allowed_commands(*groups: list[str]) -> list[str]:
     return merged
 
 
+def _split_command_chain(command: str, *, max_segments: int = _MAX_CHAIN_SEGMENTS) -> tuple[list[str] | None, str | None]:
+    raw = (command or "").strip()
+    if not raw:
+        return None, "empty_command"
+
+    if _find_unsupported_operator_token(raw):
+        return None, "unsupported_operator"
+
+    segments = [part.strip() for part in raw.split("&&")]
+    if any(not segment for segment in segments):
+        return None, "invalid_chain_syntax"
+    if len(segments) > max_segments:
+        return None, "invalid_chain_length"
+    return segments, None
+
+
+def _find_unsupported_operator_token(command: str) -> str | None:
+    raw = (command or "").strip()
+    if not raw:
+        return None
+
+    for token in _CHAIN_DISALLOWED_TOKENS:
+        if token in raw:
+            return token
+    return None
+
+
 def _build_command_signature(command: str) -> tuple[str, ...] | None:
     try:
         tokens = shlex.split(command)
@@ -269,7 +298,7 @@ async def run_skill_script(
     """Run a command in the SKILL.md with a given execution directory.
 
     Args:
-        command: Executable command string.
+        command: Executable command string. Don't include "cd" operators here; just the command to run. Other operators like "|", ";", "||" are also not allowed for safety reasons.
         execution_dir: Directory to run command in.
         timeout_s: Optional timeout in seconds.
     """
@@ -278,6 +307,25 @@ async def run_skill_script(
         return ToolResponse(
             content=[TextBlock(type="text", text="[SkillRunner] Empty command")],
             metadata={"error": "empty_command"},
+        )
+
+    command_segments, chain_error = _split_command_chain(command)
+    if chain_error or not command_segments:
+        unsupported_token = _find_unsupported_operator_token(command) if chain_error == "unsupported_operator" else None
+        detail = ""
+        if unsupported_token:
+            detail = (
+                f" (unsupported token: {unsupported_token}; only '&&' is allowed, max {_MAX_CHAIN_SEGMENTS} segments)"
+            )
+        return ToolResponse(
+            content=[TextBlock(type="text", text=f"[SkillRunner] Invalid command chain: {chain_error}{detail}")],
+            metadata={
+                "error": chain_error or "invalid_command_chain",
+                "command": command,
+                "max_chain_segments": _MAX_CHAIN_SEGMENTS,
+                "disallowed_operators": list(_CHAIN_DISALLOWED_TOKENS),
+                "unsupported_operator_token": unsupported_token or "",
+            },
         )
 
     cwd, cwd_error = _resolve_execution_dir(execution_dir)
@@ -310,7 +358,8 @@ async def run_skill_script(
     allowed_commands, allowed_docs = _extract_commands_from_skill_dir(cwd)
     effective_allowed_commands = _merge_allowed_commands(allowed_commands, _GLOBAL_HARMLESS_COMMANDS)
     if not allowed_commands:
-        if _is_command_allowed(command, _GLOBAL_HARMLESS_COMMANDS):
+        all_segments_harmless = all(_is_command_allowed(segment, _GLOBAL_HARMLESS_COMMANDS) for segment in command_segments)
+        if all_segments_harmless:
             logger.info(
                 "skill_runner.global_whitelist_match command=%s execution_dir=%s",
                 command,
@@ -335,6 +384,7 @@ async def run_skill_script(
                     "skill_docs": allowed_docs,
                     "allowed_commands": [],
                     "global_harmless_commands": _GLOBAL_HARMLESS_COMMANDS,
+                    "segment_count": len(command_segments),
                 },
             )
 
@@ -342,98 +392,148 @@ async def run_skill_script(
     if timeout_value is None:
         timeout_value = float(os.environ.get("MOBICLAW_SKILL_SCRIPT_TIMEOUT_S", "120"))
 
-    try:
-        cmd_args = shlex.split(command)
-    except ValueError as exc:
-        return ToolResponse(
-            content=[TextBlock(type="text", text=f"[SkillRunner] Command parse error: {exc}")],
-            metadata={"error": "command_parse_error", "command": command},
-        )
+    parsed_segments: list[list[str]] = []
+    for idx, segment in enumerate(command_segments, start=1):
+        try:
+            cmd_args = shlex.split(segment)
+        except ValueError as exc:
+            return ToolResponse(
+                content=[TextBlock(type="text", text=f"[SkillRunner] Command parse error in segment {idx}: {exc}")],
+                metadata={
+                    "error": "command_parse_error",
+                    "command": command,
+                    "segment_index": idx,
+                    "segment_command": segment,
+                },
+            )
 
-    if not cmd_args:
-        return ToolResponse(
-            content=[TextBlock(type="text", text="[SkillRunner] Empty command tokens")],
-            metadata={"error": "empty_command_tokens", "command": command},
-        )
+        if not cmd_args:
+            return ToolResponse(
+                content=[TextBlock(type="text", text=f"[SkillRunner] Empty command tokens in segment {idx}")],
+                metadata={
+                    "error": "empty_command_tokens",
+                    "command": command,
+                    "segment_index": idx,
+                    "segment_command": segment,
+                },
+            )
 
-    if not _is_command_allowed(command, effective_allowed_commands):
-        return ToolResponse(
-            content=[
-                TextBlock(
-                    type="text",
-                    text=(
-                        f"[SkillRunner] Command is not allowed by SKILL.md whitelist: {command}. "
-                        f"Allowed commands from SKILL.md + global harmless set: {_format_allowed_commands_for_text(effective_allowed_commands)} "
-                        "(includes sibling .md files in this skill directory)."
-                    ),
-                )
-            ],
-            metadata={
-                "error": "script_not_allowed",
-                "command": command,
-                "execution_dir": str(cwd),
-                "skill_md": str(skill_md_path),
-                "skill_docs": allowed_docs,
-                "allowed_commands": allowed_commands,
-                "global_harmless_commands": _GLOBAL_HARMLESS_COMMANDS,
-                "allowed_command_hints": effective_allowed_commands[:_MAX_ALLOWED_COMMANDS_IN_TEXT],
-            },
-        )
+        if not _is_command_allowed(segment, effective_allowed_commands):
+            return ToolResponse(
+                content=[
+                    TextBlock(
+                        type="text",
+                        text=(
+                            f"[SkillRunner] Segment {idx} is not allowed by SKILL.md whitelist: {segment}. "
+                            f"Allowed commands from SKILL.md + global harmless set: {_format_allowed_commands_for_text(effective_allowed_commands)} "
+                            "(includes sibling .md files in this skill directory)."
+                        ),
+                    )
+                ],
+                metadata={
+                    "error": "script_not_allowed",
+                    "command": command,
+                    "segment_index": idx,
+                    "segment_command": segment,
+                    "execution_dir": str(cwd),
+                    "skill_md": str(skill_md_path),
+                    "skill_docs": allowed_docs,
+                    "allowed_commands": allowed_commands,
+                    "global_harmless_commands": _GLOBAL_HARMLESS_COMMANDS,
+                    "allowed_command_hints": effective_allowed_commands[:_MAX_ALLOWED_COMMANDS_IN_TEXT],
+                },
+            )
+        parsed_segments.append(cmd_args)
 
     previous_cwd = Path.cwd()
     os.chdir(cwd)
 
+    segment_results: list[dict[str, object]] = []
+    overall_returncode = 0
     try:
-        proc = subprocess.run(
-            cmd_args,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout_value,
-        )
-    except FileNotFoundError:
-        return ToolResponse(
-            content=[TextBlock(type="text", text=f"[SkillRunner] Runtime executable not found: {cmd_args[0]}")],
-            metadata={"error": "runtime_not_found", "runtime": cmd_args[0], "command": command},
-        )
-    except subprocess.TimeoutExpired:
-        return ToolResponse(
-            content=[TextBlock(type="text", text=f"[SkillRunner] Script timeout after {timeout_value:.1f}s")],
-            metadata={
-                "error": "timeout",
-                "timeout_s": timeout_value,
-                "command": command,
-                "execution_dir": str(cwd),
-            },
-        )
+        for idx, cmd_args in enumerate(parsed_segments, start=1):
+            segment_command = command_segments[idx - 1]
+            try:
+                proc = subprocess.run(
+                    cmd_args,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_value,
+                )
+            except FileNotFoundError:
+                return ToolResponse(
+                    content=[TextBlock(type="text", text=f"[SkillRunner] Runtime executable not found: {cmd_args[0]}")],
+                    metadata={
+                        "error": "runtime_not_found",
+                        "runtime": cmd_args[0],
+                        "command": command,
+                        "segment_index": idx,
+                        "segment_command": segment_command,
+                    },
+                )
+            except subprocess.TimeoutExpired:
+                return ToolResponse(
+                    content=[TextBlock(type="text", text=f"[SkillRunner] Script timeout after {timeout_value:.1f}s")],
+                    metadata={
+                        "error": "timeout",
+                        "timeout_s": timeout_value,
+                        "command": command,
+                        "segment_index": idx,
+                        "segment_command": segment_command,
+                        "execution_dir": str(cwd),
+                    },
+                )
+
+            stdout = (proc.stdout or "").strip()
+            stderr = (proc.stderr or "").strip()
+            stdout_tail = stdout[-4000:]
+            stderr_tail = stderr[-2000:]
+            segment_results.append(
+                {
+                    "index": idx,
+                    "command": segment_command,
+                    "command_args": cmd_args,
+                    "returncode": int(proc.returncode),
+                    "stdout_tail": stdout_tail,
+                    "stderr_tail": stderr_tail,
+                }
+            )
+            overall_returncode = int(proc.returncode)
+            if overall_returncode != 0:
+                break
     finally:
         os.chdir(previous_cwd)
 
-    stdout = (proc.stdout or "").strip()
-    stderr = (proc.stderr or "").strip()
-    stdout_tail = stdout[-4000:]
-    stderr_tail = stderr[-2000:]
-
-    message = f"[SkillRunner] Exit code: {proc.returncode}"
+    message = f"[SkillRunner] Exit code: {overall_returncode}"
     message += f"\n[execution_dir] {cwd}"
     message += f"\n[command] {command}"
-    if stdout_tail:
-        message += f"\n[stdout]\n{stdout_tail}"
-    if stderr_tail:
-        message += f"\n[stderr]\n{stderr_tail}"
+    for item in segment_results:
+        idx = int(item.get("index") or 0)
+        message += f"\n[segment:{idx}] {str(item.get('command') or '')}"
+        message += f"\n[segment:{idx}:exit_code] {int(item.get('returncode') or 0)}"
+        stdout_tail = str(item.get("stdout_tail") or "")
+        stderr_tail = str(item.get("stderr_tail") or "")
+        if stdout_tail:
+            message += f"\n[segment:{idx}:stdout]\n{stdout_tail}"
+        if stderr_tail:
+            message += f"\n[segment:{idx}:stderr]\n{stderr_tail}"
 
+    last_segment = segment_results[-1] if segment_results else {}
     metadata: dict[str, object] = {
-        "returncode": proc.returncode,
+        "returncode": overall_returncode,
         "command": command,
-        "command_args": cmd_args,
+        "command_args": parsed_segments[0] if parsed_segments else [],
         "execution_dir": str(cwd),
         "previous_dir": str(previous_cwd),
         "restored_dir": str(Path.cwd()),
-        "stdout_tail": stdout_tail,
-        "stderr_tail": stderr_tail,
+        "stdout_tail": str(last_segment.get("stdout_tail") or ""),
+        "stderr_tail": str(last_segment.get("stderr_tail") or ""),
+        "segment_count": len(command_segments),
+        "segments": segment_results,
     }
 
-    if proc.returncode != 0:
+    if overall_returncode != 0:
         metadata["error"] = "script_failed"
 
     return ToolResponse(
