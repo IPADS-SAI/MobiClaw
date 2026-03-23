@@ -441,7 +441,20 @@ async def create_pptx_from_outline(
 
     Args:
         output_path: 输出文件路径，须以 .pptx 或 .ppt 结尾。
-        slides: 幻灯片列表，每项为 slide dict（见模块文档）。
+        slides: 幻灯片列表，每项为 slide dict，包括
+        {
+            "title":      str,               # 幻灯片标题
+            "content":    str | list[str],   # 正文/要点，列表时每项为一行
+            "notes":      str,               # 演讲者备注
+            "layout":     int,               # 布局索引（0=标题页，1=标题+内容，默认 1）
+            "images": [
+                {"path": str, "left": float, "top": float, "width": float, "height": float}
+            ],                               # 英寸单位，width/height 可省略（保持原始比例）
+            "font_size":  float,             # 正文字号 pt，覆盖全局默认
+            "font_color": str,               # "#RRGGBB" 十六进制颜色，覆盖全局默认
+            "bold":       bool,
+            "italic":     bool,
+        }。
         template_path: 可选，PPTX 模板文件路径；不提供时使用库内置空白演示文稿。
         default_font_size: 全局默认正文字号（pt），各幻灯片可通过 "font_size" 字段覆盖。
         default_font_color: 全局默认正文颜色（"#RRGGBB"），各幻灯片可通过 "font_color" 字段覆盖。
