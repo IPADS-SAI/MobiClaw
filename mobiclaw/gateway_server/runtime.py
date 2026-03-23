@@ -122,12 +122,20 @@ async def _deliver_result(job_id: str, result, cfg) -> None:
     if receive_id:
         build_feishu_text = _gateway_override("_build_feishu_text", None)
         send_feishu_text = _gateway_override("_send_feishu_text", None)
+        send_feishu_markdown = _gateway_override("_send_feishu_markdown", None)
         is_text_like_file = _gateway_override("_is_text_like_file", None)
         is_image_file = _gateway_override("_is_image_file", None)
         send_feishu_image = _gateway_override("_send_feishu_image", None)
         send_feishu_file = _gateway_override("_send_feishu_file", None)
         text = build_feishu_text(result)
-        await asyncio.to_thread(send_feishu_text, cfg, receive_id, ctx.feishu_receive_id_type, text)
+        try:
+            if callable(send_feishu_markdown):
+                await asyncio.to_thread(send_feishu_markdown, cfg, receive_id, ctx.feishu_receive_id_type, text)
+            else:
+                await asyncio.to_thread(send_feishu_text, cfg, receive_id, ctx.feishu_receive_id_type, text)
+        except Exception as exc:
+            logger.warning("Failed to send Feishu markdown card, fallback to text: %s", exc)
+            await asyncio.to_thread(send_feishu_text, cfg, receive_id, ctx.feishu_receive_id_type, text)
         files = result.result.get("files") if isinstance(result.result, dict) else []
         for item in files if isinstance(files, list) else []:
             if not isinstance(item, dict):

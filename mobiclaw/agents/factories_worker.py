@@ -193,7 +193,8 @@ def create_worker_agent(
 - 只聚焦当前任务（如果当前是一个子任务，只聚焦于子任务），给出简明直接的结果。
 - 必要时使用工具检索或执行本地命令。
 - 如果提供了skill，请优先使用skill中定义的脚本或者方法来处理相关任务，例如生成PPT，docx，excel等等。
-- 如果需要运行skill中的脚本，请务必使用 "run_skill_script"，而非"run_shell_command"。使用 "run_skill_script" 时，必须提供 command 和 execution_dir；优先使用 Activated Skills 中给出的 execution_dir。
+- 工具选择决策：当命令依赖 skill 中指定的相对路径（例如 scripts/xxx.py），必须使用 "run_skill_script"，同时设置运行 skill 中指令对应的 execution_dir 目录。
+- 工具选择决策：当命令是通用系统命令（如日期、目录、文本查看、基础检索、脚本运行等），同时指令中不涉及 skill 中的相对路径时，使用 "run_shell_command"。
 - 如果需要联网搜索新闻或网页来源，优先使用 "brave_search" 获取新闻/web内容。
 - 如果检索学术论文，优先使用 "arxiv_search" 获取元数据与 PDF 链接。
 - 如果检索的已经发表在会议上的论文，优先使用 "dblp_conference_search" 获取论文清单与链接，然后去arxiv上搜索对应的论文。

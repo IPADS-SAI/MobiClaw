@@ -13,6 +13,29 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+_TMP_ARTIFACT_ALLOWED_SUFFIXES = {
+    ".md",
+    ".markdown",
+    ".txt",
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".ppt",
+    ".pptx",
+    ".xls",
+    ".xlsx",
+    ".csv",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".bmp",
+    ".webp",
+    ".tif",
+    ".tiff",
+    ".svg",
+}
+
 
 def _extract_response_text(response: Any) -> str:
     """从 Agent 响应对象中提取可读文本。"""
@@ -120,8 +143,16 @@ def _merge_file_paths(existing: list[Path], incoming: list[Path]) -> list[Path]:
     return merged
 
 
+def _is_allowed_tmp_artifact_file(path: Path) -> bool:
+    suffix = path.suffix.lower()
+    if suffix in _TMP_ARTIFACT_ALLOWED_SUFFIXES:
+        return True
+    mime_type = (mimetypes.guess_type(str(path))[0] or "").lower()
+    return mime_type.startswith("image/")
+
+
 def _collect_tmp_dir_file_paths(temp_dir: str | None, *, max_files: int = 200) -> list[Path]:
-    """从任务临时目录递归收集文件路径，作为工具输出兜底。"""
+    """从任务临时目录递归收集与文档相关的文件路径，作为工具输出兜底。"""
     if not temp_dir:
         return []
 
@@ -132,7 +163,7 @@ def _collect_tmp_dir_file_paths(temp_dir: str | None, *, max_files: int = 200) -
     files: list[Path] = []
     try:
         for item in root.rglob("*"):
-            if item.is_file():
+            if item.is_file() and _is_allowed_tmp_artifact_file(item):
                 files.append(item)
     except OSError:
         return []
