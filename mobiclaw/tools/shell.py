@@ -86,6 +86,8 @@ async def run_shell_command(command: str) -> ToolResponse:
 
     Args:
         command: Command line string to execute, without quotation marks. Operators like "|", ";", "||" are also not allowed for safety reasons.
+        Don't use "python << PY ... PY" style command substitution。
+        
     """
     command = (command or "").strip()
     if not command:
