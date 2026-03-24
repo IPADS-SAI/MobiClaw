@@ -83,7 +83,7 @@ def create_steward_agent(
     else:
         action_func = call_mobi_action_task
 
-    tool_timeout_s = TOOL_CONFIG["timeout_s"]
+    tool_timeout_s = TOOL_CONFIG.get("steward_timeout_s", 300)
     _reg = functools.partial(register_tool_with_timeout, toolkit, tool_timeout_s)
 
     _reg(
@@ -369,7 +369,7 @@ def create_user_agent() -> UserAgent:
 def create_chat_agent(*, web_search_enabled: bool = True) -> ReActAgent:
     """创建网关 chat 模式使用的基础对话 Agent。"""
     toolkit = Toolkit()
-    tool_timeout_s = TOOL_CONFIG["timeout_s"]
+    tool_timeout_s = TOOL_CONFIG.get("chat_timeout_s", 120)
     _chat_reg = functools.partial(register_tool_with_timeout, toolkit, tool_timeout_s)
 
     toolkit.create_tool_group(

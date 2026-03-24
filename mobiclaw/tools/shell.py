@@ -86,9 +86,8 @@ async def run_shell_command(command: str) -> ToolResponse:
 
     Args:
         command: Command line string to execute (no surrounding quotes).
-        For safety and compatibility, do not use shell-only syntax such as
-        here-docs (e.g. `python <<'PY' ... PY`) or operators like `|`, `;`, `||`.
-        
+            For safety and compatibility, do not use shell-only syntax such as
+            here-docs (e.g. ``python <<'PY' ... PY``) or operators like ``|``, ``;``, ``||``.
     """
     command = (command or "").strip()
     if not command:

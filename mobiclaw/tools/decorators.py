@@ -14,8 +14,8 @@ from agentscope.tool import ToolResponse
 
 logger = logging.getLogger(__name__)
 
-# Default timeout in seconds; override via env var MOBICLAW_TOOL_TIMEOUT_S.
-DEFAULT_TOOL_TIMEOUT_S = float(os.environ.get("MOBICLAW_TOOL_TIMEOUT_S", "120"))
+
+DEFAULT_TOOL_TIMEOUT_S = 120
 
 
 def tool_timeout(seconds: float | None = None):
