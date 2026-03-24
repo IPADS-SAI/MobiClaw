@@ -85,6 +85,12 @@ MOBILE_EXECUTOR_CONFIG = {
     "extras": dict(_mobile_provider_cfg.extras),
 }
 
+MOBILE_TASK_BACKEND_CONFIG = {
+    "mode": (os.environ.get("MOBILE_EXECUTION_MODE", "local").strip().lower() or "local"),
+    "poll_interval_s": max(0.2, float(os.environ.get("MOBILE_REMOTE_POLL_INTERVAL_S", "2.0"))),
+    "timeout_s": max(5.0, float(os.environ.get("MOBILE_REMOTE_TIMEOUT_S", "900"))),
+}
+
 # RAG 配置 (本地向量知识库)
 RAG_CONFIG = {
     "store_path": os.environ.get("MOBICLAW_RAG_STORE_PATH", "~/.mobiclaw/rag_store"),

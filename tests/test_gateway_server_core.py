@@ -236,6 +236,38 @@ def test_build_callback_headers() -> None:
     assert "X-Empty" not in headers
 
 
+def test_build_feishu_text_strips_inline_data_urls() -> None:
+    result = SimpleNamespace(
+        status="completed",
+        result={
+            "reply": (
+                "任务完成。\n"
+                "截图证据: data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/AAAA\n"
+                "请查看。"
+            ),
+            "files": [],
+        },
+    )
+
+    text = feishu_module._build_feishu_text(result)
+
+    assert "data:image/jpeg;base64" not in text
+    assert "[inline-image-omitted]" in text
+
+
+def test_build_feishu_text_truncates_oversized_payload() -> None:
+    long_reply = "A" * (feishu_module._FEISHU_MAX_TEXT_CHARS + 200)
+    result = SimpleNamespace(
+        status="completed",
+        result={"reply": long_reply, "files": []},
+    )
+
+    text = feishu_module._build_feishu_text(result)
+
+    assert len(text) <= feishu_module._FEISHU_MAX_TEXT_CHARS + 120
+    assert "消息已截断" in text
+
+
 def test_deliver_result_prefers_markdown_message(monkeypatch) -> None:
     gateway_server._JOB_CONTEXT.clear()
     job_id = "job-md"

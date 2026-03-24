@@ -198,6 +198,11 @@ def create_steward_agent(
             "vlm_summary_relevant_information": vlm_summary.get("relevant_information", []),
             "vlm_summary_extracted_text": vlm_summary.get("extracted_text", []),
             "vlm_error": vlm_error,
+            "ocr_full_text": (
+                metadata.get("execution", {}).get("ocr", {}).get("full_text", "")
+                if isinstance(metadata.get("execution"), dict)
+                else ""
+            ),
         }
         logger.info(f"[MobiAgent] 收集结果包：{_trim_for_log(json.dumps(pack, ensure_ascii=False))}")
 
@@ -213,6 +218,7 @@ def create_steward_agent(
             isinstance(pack.get("vlm_summary_extracted_text"), list)
             and len(pack.get("vlm_summary_extracted_text", [])) > 0
         )
+        ocr_text = str(pack.get("ocr_full_text", "") or "").strip()
         has_image = bool(final_image_url)
         content: list[TextBlock | ImageBlock] = [
             TextBlock(
@@ -231,6 +237,7 @@ def create_steward_agent(
                     f"VLM最后步骤摘要: {_lines_to_block(pack.get('vlm_summary_last_steps', []))}\n"
                     f"VLM目标相关信息:\n{relevant_info_block}\n"
                     f"VLM截图提取文本:\n{extracted_text_block}\n"
+                    f"本地OCR提取文本:\n{ocr_text[:1200] if ocr_text else '[empty]'}\n"
                     "说明：该结果已包含执行后的 VLM 摘要、任务相关信息提取和截图文本提取。"
                 ),
             )
@@ -240,15 +247,6 @@ def create_steward_agent(
         if final_image_url:
             logger.info(f"[MobiAgent] 最后截图路径: {final_image_url}")
             image_block = {"type": "image", "source": {"type": "url", "url": final_image_url}}
-            # 读取路径中的图片内容，转换为 base64 内嵌格式，避免后续使用时的文件访问问题。
-            # try:
-            #     with open(final_image_url, "rb") as f:
-            #         image_data = f.read()
-            #         image_block = ImageBlock(type="image", source={"type": "base64", "data": image_data})
-            # except Exception:
-            #     logger.warning("[MobiAgent] 读取最后截图失败", exc_info=True)
-            #     # fallback: 如果读取失败，仍然返回路径信息供后续排查；但不提供图片内容。
-            #     image_block = None
         else:
             logger.warning("[MobiAgent] 未获取到最后截图")
         if image_block is not None:

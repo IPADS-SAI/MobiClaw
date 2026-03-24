@@ -9,7 +9,7 @@ import mimetypes
 import shutil
 import uuid
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -21,12 +21,34 @@ from ..mcp import get_mcp_manager
 from .models import DeviceHeartbeat, TaskRequest
 
 logger = logging.getLogger(__name__)
+_MOBILE_BACKEND_TTL = timedelta(seconds=45)
 
 
 def _gateway_override(name: str, default: Any) -> Any:
     from .. import gateway_server as gateway_module
 
     return getattr(gateway_module, name, default)
+
+
+def _prune_stale_mobile_backends(backend_store: dict[str, Any]) -> None:
+    cutoff = datetime.now(timezone.utc) - _MOBILE_BACKEND_TTL
+    stale_ids: list[str] = []
+    for backend_id, record in backend_store.items():
+        if not isinstance(record, dict):
+            stale_ids.append(str(backend_id))
+            continue
+        last_seen_raw = str(record.get("last_seen") or "").strip()
+        try:
+            last_seen = datetime.fromisoformat(last_seen_raw)
+        except ValueError:
+            stale_ids.append(str(backend_id))
+            continue
+        if last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+        if last_seen < cutoff:
+            stale_ids.append(str(backend_id))
+    for backend_id in stale_ids:
+        backend_store.pop(backend_id, None)
 
 
 def register_routes(app) -> None:
@@ -350,6 +372,237 @@ def register_routes(app) -> None:
             job.result = decorate_result_with_files(job_id, job.result, request=None, cfg=cfg)
         return job
     exported["get_job"] = get_job
+
+    @app.get("/api/v1/mobile/health")
+    async def mobile_health(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        mobile_store = _gateway_override("_MOBILE_TASK_STORE", {})
+        mobile_lock = _gateway_override("_MOBILE_TASK_LOCK", asyncio.Lock())
+        backend_store = _gateway_override("_MOBILE_BACKEND_STORE", {})
+        backend_lock = _gateway_override("_MOBILE_BACKEND_LOCK", asyncio.Lock())
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        counts = {"queued": 0, "running": 0, "completed": 0, "failed": 0}
+        async with mobile_lock:
+            for item in mobile_store.values():
+                status = str(item.get("status") or "").lower()
+                if status in counts:
+                    counts[status] += 1
+        async with backend_lock:
+            _prune_stale_mobile_backends(backend_store)
+            backends = list(backend_store.values())
+        return {"status": "ok", "queue": counts, "connected_backends": len(backends), "backends": backends}
+    exported["mobile_health"] = mobile_health
+
+    @app.post("/api/v1/mobile/backend/heartbeat")
+    async def mobile_backend_heartbeat(
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        backend_store = _gateway_override("_MOBILE_BACKEND_STORE", {})
+        backend_lock = _gateway_override("_MOBILE_BACKEND_LOCK", asyncio.Lock())
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+        backend_id = str(body.get("backend_id") or body.get("device_id") or "").strip()
+        if not backend_id:
+            raise HTTPException(status_code=400, detail="backend_id is required")
+        now = datetime.now(timezone.utc).isoformat()
+        record = {
+            "backend_id": backend_id,
+            "device_name": str(body.get("device_name") or "").strip(),
+            "status": str(body.get("status") or "online").strip() or "online",
+            "last_seen": now,
+            "capabilities": body.get("capabilities") if isinstance(body.get("capabilities"), dict) else {},
+        }
+        async with backend_lock:
+            _prune_stale_mobile_backends(backend_store)
+            backend_store[backend_id] = record
+            count = len(backend_store)
+        return {"status": "ok", "backend_id": backend_id, "connected_backends": count, "timestamp": now}
+    exported["mobile_backend_heartbeat"] = mobile_backend_heartbeat
+
+    @app.post("/api/v1/mobile/tasks")
+    async def submit_mobile_task(
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        mobile_store = _gateway_override("_MOBILE_TASK_STORE", {})
+        mobile_lock = _gateway_override("_MOBILE_TASK_LOCK", asyncio.Lock())
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+        task_desc = str(body.get("task_desc") or body.get("task") or "").strip()
+        if not task_desc:
+            raise HTTPException(status_code=400, detail="task_desc is required")
+
+        task_id = str(body.get("task_id") or uuid.uuid4().hex).strip()
+        now = datetime.now(timezone.utc).isoformat()
+        record = {
+            "task_id": task_id,
+            "task_desc": task_desc,
+            "provider": str(body.get("provider") or "mobiagent"),
+            "max_steps": max(1, int(body.get("max_steps") or 40)),
+            "timeout_s": max(1, int(body.get("timeout_s") or 600)),
+            "output_schema": body.get("output_schema"),
+            "context": body.get("context"),
+            "output_path": body.get("output_path"),
+            "status": "queued",
+            "created_at": now,
+            "updated_at": now,
+            "progress": None,
+            "result": None,
+            "message": "",
+        }
+        async with mobile_lock:
+            mobile_store[task_id] = record
+        return {
+            "task_id": task_id,
+            "status": "queued",
+            "task_desc": task_desc,
+            "max_steps": record["max_steps"],
+        }
+    exported["submit_mobile_task"] = submit_mobile_task
+
+    @app.get("/api/v1/mobile/tasks/{task_id}")
+    async def get_mobile_task(
+        task_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        mobile_store = _gateway_override("_MOBILE_TASK_STORE", {})
+        mobile_lock = _gateway_override("_MOBILE_TASK_LOCK", asyncio.Lock())
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+        async with mobile_lock:
+            item = mobile_store.get(task_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="Mobile task not found")
+        return item
+    exported["get_mobile_task"] = get_mobile_task
+
+    @app.get("/mobile/tasks/next", response_model=None)
+    async def claim_next_mobile_task(authorization: str | None = Header(default=None)) -> Response | dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        mobile_store = _gateway_override("_MOBILE_TASK_STORE", {})
+        mobile_lock = _gateway_override("_MOBILE_TASK_LOCK", asyncio.Lock())
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        async with mobile_lock:
+            queued = sorted(
+                (item for item in mobile_store.values() if str(item.get("status")) == "queued"),
+                key=lambda item: str(item.get("created_at") or ""),
+            )
+            if not queued:
+                return Response(status_code=204)
+            item = queued[0]
+            now = datetime.now(timezone.utc).isoformat()
+            item["status"] = "running"
+            item["claimed_at"] = now
+            item["updated_at"] = now
+            item["progress"] = {
+                "task_id": item["task_id"],
+                "status": "running",
+                "step_count": 0,
+                "action_count": 0,
+                "status_hint": "claimed",
+            }
+            return {
+                "task_id": item["task_id"],
+                "task_desc": item["task_desc"],
+                "provider": item["provider"],
+                "max_steps": item["max_steps"],
+                "timeout_s": item["timeout_s"],
+                "output_schema": item.get("output_schema"),
+                "context": item.get("context"),
+            }
+    exported["claim_next_mobile_task"] = claim_next_mobile_task
+
+    @app.post("/mobile/tasks/{task_id}/progress")
+    async def report_mobile_task_progress(
+        task_id: str,
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        mobile_store = _gateway_override("_MOBILE_TASK_STORE", {})
+        mobile_lock = _gateway_override("_MOBILE_TASK_LOCK", asyncio.Lock())
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+        async with mobile_lock:
+            item = mobile_store.get(task_id)
+            if not item:
+                raise HTTPException(status_code=404, detail="Mobile task not found")
+            now = datetime.now(timezone.utc).isoformat()
+            item["progress"] = {
+                "task_id": task_id,
+                "status": str(body.get("status") or item.get("status") or "running"),
+                "step_count": int(body.get("step_count") or 0),
+                "action_count": int(body.get("action_count") or 0),
+                "status_hint": str(body.get("status_hint") or ""),
+            }
+            item["status"] = str(body.get("status") or item.get("status") or "running")
+            item["updated_at"] = now
+        return {"ok": True, "task_id": task_id}
+    exported["report_mobile_task_progress"] = report_mobile_task_progress
+
+    @app.post("/mobile/tasks/{task_id}/result")
+    async def report_mobile_task_result(
+        task_id: str,
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        load_config = _gateway_override("load_config", None)
+        ensure_auth = _gateway_override("_ensure_auth", None)
+        mobile_store = _gateway_override("_MOBILE_TASK_STORE", {})
+        mobile_lock = _gateway_override("_MOBILE_TASK_LOCK", asyncio.Lock())
+        cfg = load_config()
+        ensure_auth(authorization, cfg)
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+        async with mobile_lock:
+            item = mobile_store.get(task_id)
+            if not item:
+                raise HTTPException(status_code=404, detail="Mobile task not found")
+            now = datetime.now(timezone.utc).isoformat()
+            success = bool(body.get("success"))
+            item["status"] = "completed" if success else "failed"
+            item["message"] = str(body.get("message") or "")
+            item["result"] = body
+            item["updated_at"] = now
+            item["completed_at"] = now
+        return {"ok": True, "task_id": task_id, "status": item["status"]}
+    exported["report_mobile_task_result"] = report_mobile_task_result
 
     @app.get("/api/v1/schedules")
     async def list_schedules(authorization: str | None = Header(default=None)) -> dict[str, Any]:

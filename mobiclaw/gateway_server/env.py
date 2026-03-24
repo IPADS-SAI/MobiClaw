@@ -57,6 +57,9 @@ _ENV_SETTINGS_SCHEMA: list[dict[str, Any]] = [
         "items": [
             {"key": "MOBILE_PROVIDER", "label": "Provider", "type": "select", "options": ["mobiagent", "uitars", "qwen", "autoglm"]},
             {"key": "MOBILE_OUTPUT_DIR", "label": "输出目录", "type": "text"},
+            {"key": "MOBILE_EXECUTION_MODE", "label": "执行模式", "type": "select", "options": ["local", "remote"]},
+            {"key": "MOBILE_REMOTE_POLL_INTERVAL_S", "label": "远端轮询间隔(s)", "type": "number"},
+            {"key": "MOBILE_REMOTE_TIMEOUT_S", "label": "远端等待超时(s)", "type": "number"},
             {"key": "MOBILE_DEVICE_TYPE", "label": "设备平台", "type": "select", "options": ["mock", "Android", "Harmony"]},
             {"key": "MOBILE_DEVICE_ID", "label": "设备 ID/地址", "type": "text"},
             {"key": "MOBILE_API_BASE", "label": "通用 API Base", "type": "text"},

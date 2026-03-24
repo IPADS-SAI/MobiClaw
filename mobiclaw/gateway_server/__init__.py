@@ -114,6 +114,10 @@ _configure_logging()
 _JOB_STORE: dict[str, TaskResult] = {}
 _JOB_CONTEXT: dict[str, JobContext] = {}
 _JOB_LOCK = asyncio.Lock()
+_MOBILE_TASK_STORE: dict[str, dict[str, Any]] = {}
+_MOBILE_TASK_LOCK = asyncio.Lock()
+_MOBILE_BACKEND_STORE: dict[str, dict[str, Any]] = {}
+_MOBILE_BACKEND_LOCK = asyncio.Lock()
 _MAIN_LOOP: asyncio.AbstractEventLoop | None = None
 _FEISHU_WS_THREAD: threading.Thread | None = None
 _WEBUI_CHAT = Path(__file__).resolve().parents[1] / "webui" / "gateway_chat.html"

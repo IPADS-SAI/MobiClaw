@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from mobiclaw.mobile.types import MobileExecutionResult
 from mobiclaw.tools import mobi
@@ -60,6 +61,7 @@ class _ExecutorFlaky:
 
 def test_call_mobi_collect_verified_success(monkeypatch):
     monkeypatch.setattr(mobi, "_EXECUTOR", _ExecutorOK())
+    monkeypatch.setattr(mobi, "_mobile_execution_mode", lambda: "local")
     resp = asyncio.run(mobi.call_mobi_collect_verified("task"))
     assert resp.metadata["success"] is True
     assert resp.metadata["status_hint"] == "completed"
@@ -67,12 +69,15 @@ def test_call_mobi_collect_verified_success(monkeypatch):
     assert "execution" in resp.metadata
     assert "ocr_text" not in resp.metadata
     assert "screenshot_path" not in resp.metadata
-    assert len(resp.content) == 1
+    assert len(resp.content) == 2
     assert resp.content[0]["type"] == "text"
+    assert resp.content[1]["type"] == "image"
+    assert resp.content[1]["source"]["url"] == "tmp/run/2.jpg"
 
 
 def test_call_mobi_action_task_fallback_mock(monkeypatch):
     monkeypatch.setattr(mobi, "_EXECUTOR", _ExecutorFail())
+    monkeypatch.setattr(mobi, "_mobile_execution_mode", lambda: "local")
     resp = asyncio.run(mobi.call_mobi_action_task("打开微信"))
     assert resp.metadata.get("mock") is True
 
@@ -86,6 +91,7 @@ def test_call_mobi_action_task_uses_natural_language_desc(monkeypatch):
             return super().run(task=task, output_dir=output_dir, provider=provider)
 
     monkeypatch.setattr(mobi, "_EXECUTOR", _ExecutorCapture())
+    monkeypatch.setattr(mobi, "_mobile_execution_mode", lambda: "local")
     resp = asyncio.run(mobi.call_mobi_action_task("通过微信给小赵发送消息：记得注册外卖平台"))
 
     assert resp.metadata["success"] is True
@@ -96,6 +102,7 @@ def test_call_mobi_action_task_uses_natural_language_desc(monkeypatch):
 def test_call_mobi_collect_verified_retries_when_configured(monkeypatch):
     executor = _ExecutorFlaky()
     monkeypatch.setattr(mobi, "_EXECUTOR", executor)
+    monkeypatch.setattr(mobi, "_mobile_execution_mode", lambda: "local")
     resp = asyncio.run(mobi.call_mobi_collect_verified("task", max_retries=1))
     assert resp.metadata["success"] is True
     assert resp.metadata["attempt"] == 2
@@ -124,3 +131,22 @@ def test_build_execution_metadata_keeps_current_contract():
     assert metadata["last_reasoning"] == "r2"
     assert metadata["run_dir"] == "tmp/run"
     assert "execution" in metadata
+
+
+def test_build_collect_content_appends_image_block_for_local_file(tmp_path: Path):
+    image_path = tmp_path / "final.jpg"
+    image_path.write_bytes(b"\xff\xd8\xff\xd9")
+
+    content = mobi._build_collect_content(
+        task_desc="task",
+        metadata={"status_hint": "completed", "last_reasoning": "done", "final_image_path": str(image_path)},
+        success=True,
+        message="ok",
+        attempt=1,
+        total_attempts=1,
+    )
+
+    assert len(content) == 2
+    assert content[0]["type"] == "text"
+    assert content[1]["type"] == "image"
+    assert content[1]["source"]["url"] == str(image_path)
