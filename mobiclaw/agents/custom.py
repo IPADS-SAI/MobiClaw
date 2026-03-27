@@ -130,7 +130,7 @@ def create_configured_agent_by_name(agent_name: str, *, skill_context: str | Non
         return None
 
     toolkit = Toolkit()
-    tool_timeout_s = TOOL_CONFIG["timeout_s"]
+    tool_timeout_s = TOOL_CONFIG.get("custom_timeout_s", 120)
     catalog = _tool_catalog()
     for tool_name in target.tools:
         func, desc = catalog[tool_name]

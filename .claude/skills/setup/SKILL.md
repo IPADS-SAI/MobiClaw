@@ -254,6 +254,6 @@ kill $(cat tmp/gateway-server.pid 2>/dev/null) 2>/dev/null; rm -f tmp/gateway-se
 
 **Feishu bot not responding:** Verify `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are correct. Check `logs/gateway-server.log` for connection errors. For long connection mode, no public IP is needed. For webhook mode, ensure the public URL is reachable.
 
-**Task execution fails with timeout:** Increase `MOBICLAW_TOOL_TIMEOUT_S` (default 120s) for individual tool call timeouts, or `MOBICLAW_ROUTER_TIMEOUT_S` (default 120s) for routing decisions, in `.env`. Restart the gateway after changes.
+**Task execution fails with timeout:** Increase `MOBICLAW_<AGENT>_TOOL_TIMEOUT_S` for individual tool call timeouts for each agent (worker, steward, custom), or `MOBICLAW_ROUTER_TIMEOUT_S` (default 120s) for routing decisions, in `.env`. Restart the gateway after changes.
 
 **Out of memory or slow responses:** Try a lighter model (e.g. `google/gemini-3-flash-preview`). Reduce `MOBICLAW_ROUTING_MAX_SUBTASKS` to limit parallel work.

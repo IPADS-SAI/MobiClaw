@@ -118,6 +118,7 @@ ROUTING_CONFIG = {
     "max_routing_depth": max(1, int(os.environ.get("MOBICLAW_ROUTING_MAX_DEPTH", "2"))),
     "router_timeout_s": max(1.0, float(os.environ.get("MOBICLAW_ROUTER_TIMEOUT_S", "60"))),
     "planner_timeout_s": max(1.0, float(os.environ.get("MOBICLAW_PLANNER_TIMEOUT_S", "60"))),
+    "subtask_timeout_s": max(1.0, float(os.environ.get("MOBICLAW_SUBTASK_TIMEOUT_S", "600"))),
     "upstream_context_max_chars": max(200, int(os.environ.get("MOBICLAW_UPSTREAM_CONTEXT_MAX_CHARS", "4000"))),
     "upstream_context_max_steps": max(1, int(os.environ.get("MOBICLAW_UPSTREAM_CONTEXT_MAX_STEPS", "20"))),
     "skill_enabled": os.environ.get("MOBICLAW_SKILL_ENABLED", "1").strip() not in {"0", "false", "False"},
@@ -143,7 +144,10 @@ MEMORY_CONFIG = {
 
 # 工具超时配置 (所有 Agent 工具的默认超时秒数)
 TOOL_CONFIG = {
-    "timeout_s": max(5.0, float(os.environ.get("MOBICLAW_TOOL_TIMEOUT_S", "120"))),
+    "worker_timeout_s": max(5.0, float(os.environ.get("MOBICLAW_WORKER_TOOL_TIMEOUT_S", "120"))),
+    "steward_timeout_s": max(5.0, float(os.environ.get("MOBICLAW_STEWARD_TOOL_TIMEOUT_S", "300"))),
+    "custom_timeout_s": max(5.0, float(os.environ.get("MOBICLAW_CUSTOM_TOOL_TIMEOUT_S", "120"))),
+    "chat_timeout_s": max(5.0, float(os.environ.get("MOBICLAW_CHAT_TOOL_TIMEOUT_S", "120"))),
 }
 
 # Office 文件生成/修改工具开关（默认关闭）

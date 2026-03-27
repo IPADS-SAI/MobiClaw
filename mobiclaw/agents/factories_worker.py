@@ -69,7 +69,7 @@ def create_worker_agent(
 ) -> ReActAgent:
     """创建 Worker Agent，用于子任务委派。"""
     toolkit = Toolkit()
-    tool_timeout_s = TOOL_CONFIG["timeout_s"]
+    tool_timeout_s = TOOL_CONFIG.get("worker_timeout_s", 120)
     _reg = functools.partial(register_tool_with_timeout, toolkit, tool_timeout_s)
 
     _reg(run_shell_command, func_description="运行受限的本地命令行工具（白名单约束），请勿使用`python <<'PY' ... PY`这样的here-doc语法")

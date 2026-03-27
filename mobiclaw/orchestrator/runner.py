@@ -63,6 +63,7 @@ async def run_orchestrated_task(
     strategy = (routing_strategy or ROUTING_CONFIG["strategy"]).strip().lower()
     router_timeout_s = float(ROUTING_CONFIG["router_timeout_s"])
     planner_timeout_s = float(ROUTING_CONFIG["planner_timeout_s"])
+    subtask_timeout_s = float(ROUTING_CONFIG["subtask_timeout_s"])
 
     create_job_output_paths = _orchestrator_override("_create_job_output_paths", None)
     resolved_output_path, job_output_dir, job_tmp_dir = create_job_output_paths(output_path)
@@ -259,7 +260,12 @@ async def run_orchestrated_task(
             )
 
             try:
-                result = await run_one_agent(
+                # shield prevents wait_for from cancelling the inner task
+                # directly, so wait_for properly raises TimeoutError.
+                # Without shield, AgentBase.__call__ catches CancelledError
+                # internally (for its realtime-steering feature) and returns
+                # a normal Msg, causing wait_for to return instead of raising.
+                agent_task = asyncio.ensure_future(run_one_agent(
                     item["agent"],
                     item["task"],
                     output_path=hint_path,
@@ -271,7 +277,23 @@ async def run_orchestrated_task(
                     session_handle=session_handle,
                     session_mode=normalized_mode,
                     external_context=external_context,
-                )
+                ))
+                result = await asyncio.wait_for(asyncio.shield(agent_task), timeout=subtask_timeout_s)
+            except asyncio.TimeoutError:
+                agent_task.cancel()
+                try:
+                    await agent_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                result = {
+                    "agent": item["agent"],
+                    "task": item["task"],
+                    "skills": skill_decision.selected_skills,
+                    "reply": f"subtask \"{item['task'][:80]}\" timeout after {subtask_timeout_s}s",
+                    "elapsed_ms": int(subtask_timeout_s * 1000),
+                    "error": f"subtask \"{item['task'][:80]}\" timeout after {subtask_timeout_s}s",
+                }
+                logger.warning("orchestrator.executor.timeout agent=%s timeout_s=%.1f", item["agent"], subtask_timeout_s)
             except Exception as exc:
                 result = {
                     "agent": item["agent"],
